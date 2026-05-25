@@ -6,7 +6,7 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-23
+last_updated: 2026-05-25
 ---
 
 # L2-DES-TUI-CMD-005 — Slash Command: /new
@@ -19,33 +19,41 @@ Define the TUI behavior for `/new`, which starts a new chat session.
 
 - Command: `/new`
 - Description: `start a new chat`
-- Parameters: none in the first milestone.
-- Mutability: creates a new session and switches the client to it.
-- Active-turn availability: requires explicit confirmation if the current session has active work.
+- Parameters: none.
+- Mutability: prepares a fresh session slot for the next user message.
+- Confirmation: no confirmation prompt is shown.
+- Active-turn availability: unavailable while the current session has active work; the command is gated by normal busy-state slash-command handling rather than a confirmation flow.
 
 ## UI Flow
 
-`/new` creates a fresh session using the current workspace and effective default model configuration.
+`/new` immediately prepares a new chat using the current workspace and effective default model configuration. The command does not ask the user to confirm.
 
 ```text
 ┃ /new
 
-  Start a new chat?
-  Current session remains saved.
-  [New Chat] [Cancel]
+<HEADER box>
+
+┃
+
+New session ready; send a prompt to start it
 ```
 
 Rules:
 
 - The current session remains durable and resumable.
-- The new session starts with an empty transcript and current workspace metadata.
+- The visible transcript is reset to a new session HEADER box.
+- The TUI then waits for the user to send the first message before entering the new session's first turn.
+- The new session starts with current workspace metadata and the current effective model, thinking, and reasoning configuration.
+- Token counters, active streaming cells, active tool state, and pending tool state reset to the fresh-session baseline.
 - If onboarding or model configuration is incomplete, the command should route to `/onboard`.
 
 ## State And Error Behavior
 
-- The TUI should use `session.create`.
-- The command must not clear, delete, or overwrite the previous session.
-- If creation fails, the TUI remains in the current session and shows a concise error.
+- The TUI should request a new session preparation from the background worker.
+- The server may defer durable session creation until the first user message is submitted.
+- When preparation succeeds, the widget appends or refreshes the HEADER box, clears active turn state, clears pending input cells, resets token counters, and shows `New session ready; send a prompt to start it`.
+- The command must not delete or overwrite the previous persisted session. It may clear the local visible transcript because the UI is now showing the prepared fresh session.
+- If preparation fails, the TUI remains in the current session and shows a concise error.
 
 ## Traceability
 
@@ -62,3 +70,5 @@ Rules:
 | Revision | Date | Author | Change Type | Notes |
 |---:|---|---|---|---|
 | 1 | 2026-05-23 | Assistant | Initial | Initial `/new` command design. |
+| 1 | 2026-05-25 | Human | Refinement | Removed confirmation and specified that `/new` adds a HEADER box, then waits for the next user message to enter the new session. |
+| 1 | 2026-05-25 | Assistant | Refinement | Updated the flow from immediate session creation with confirmation to no-confirmation new-session preparation. |

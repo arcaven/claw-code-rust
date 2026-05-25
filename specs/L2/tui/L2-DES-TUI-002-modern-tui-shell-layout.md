@@ -6,7 +6,7 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-23
+last_updated: 2026-05-25
 ---
 
 # L2-DES-TUI-002 — Modern TUI Shell Layout
@@ -33,6 +33,7 @@ This document defines the high-level visual structure and responsive behavior. S
 - `L2-DES-TUI-003` defines composer and input-mode behavior.
 - `L2-DES-TUI-004` defines streaming transcript and state rendering.
 - `L2-DES-TUI-005` defines terminal lifecycle safety.
+- `L2-DES-TUI-006` defines the full transcript alternate-screen overlay entered by `Ctrl+T`.
 
 ## Design Requirement
 
@@ -214,6 +215,7 @@ Clients may optimistically render local input, but canonical state comes from th
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Composer and input mode behavior fills the shell's bottom regions. |
 | related-to | L2-DES-TUI-004 | 1 | specs/L2/tui/L2-DES-TUI-004-streaming-transcript-and-state.md | Streaming transcript cells and state indicators populate the shell. |
 | related-to | L2-DES-TUI-005 | 1 | specs/L2/tui/L2-DES-TUI-005-terminal-lifecycle-safety.md | Terminal lifecycle behavior constrains inline and alternate-screen shell modes. |
+| related-to | L2-DES-TUI-006 | 1 | specs/L2/tui/L2-DES-TUI-006-full-transcript-alternate-screen.md | Defines the alternate-screen transcript review surface entered from the inline shell. |
 | specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
 
 ## Revision Notes
@@ -225,3 +227,4 @@ Clients may optimistically render local input, but canonical state comes from th
 | 1 | 2026-05-23 | Human | Refinement | Clarified that `┃` is a single leading marker, not a rail repeated through the full cell. |
 | 1 | 2026-05-23 | Human | Refinement | Updated working indicator examples to use the spinner frame style and kept consecutive read calls on separate Explore lines. |
 | 1 | 2026-05-23 | Human | Refinement | Clarified that multi-line composer and user-message background bands may repeat `┃` on content lines, but not on padding rows. |
+| 1 | 2026-05-25 | Assistant | Refinement | Linked the shell layout to the `Ctrl+T` full transcript alternate-screen design. |

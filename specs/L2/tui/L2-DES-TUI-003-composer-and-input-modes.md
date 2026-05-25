@@ -6,7 +6,7 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-23
+last_updated: 2026-05-25
 ---
 
 # L2-DES-TUI-003 — Composer And Input Modes
@@ -261,6 +261,7 @@ Slash-command inline rendering:
 - Parameters or placeholder text following the matched slash command use muted foreground color.
 - If the typed slash command does not match an existing command, the composer should not apply matched-command coloring.
 - Inline command coloring is presentational only. Command parsing and validation still happen when the user confirms or submits the command.
+- For `/goal`, free-form text after the command is the objective. Pressing Enter submits that objective directly to the goal command instead of opening a budget prompt or create wizard.
 
 Example matched slash command with parameter hint:
 
@@ -346,3 +347,5 @@ Rules:
 | 1 | 2026-05-23 | Human | Refinement | Removed `/diff` from the slash-command catalog. |
 | 1 | 2026-05-23 | Human | Refinement | Changed `/btw` from active-turn injection to a side conversation in an ephemeral fork. |
 | 1 | 2026-05-23 | Human | Refinement | Added `/goal` as the TUI entry point for Ralph Loop goals. |
+| 1 | 2026-05-25 | Human | Refinement | Clarified that `/goal <objective>` submits the following text as the objective without a default budget prompt. |
+| 1 | 2026-05-25 | Assistant | Refinement | Added composer-level handling guidance for direct `/goal` objective submission. |

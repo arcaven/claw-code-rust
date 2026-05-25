@@ -6,7 +6,7 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-23
+last_updated: 2026-05-25
 ---
 
 # L2-DES-TUI-CMD-010 — Slash Command: /goal
@@ -19,13 +19,14 @@ Define the TUI behavior for `/goal`, which lets the user create, view, pause, re
 
 - Command: `/goal`
 - Description: `set or view the goal for a long-running task`
-- Parameters: optional free-form objective text in the first milestone.
+- Parameters: optional free-form objective text. When present, the text following `/goal` is the objective.
 - Mutability: goal/session state.
 - Active-turn availability: viewing is allowed during active work; mutating actions must be server-serialized and must not rewrite an already-running turn.
+- Default budget: none. The first milestone does not prompt for a token, time, or turn budget during goal creation.
 
 ## UI Flow
 
-Typing `/goal` opens the goal panel.
+Typing `/goal` without objective text opens the current-goal panel. If no goal exists, it shows an empty state that tells the user to submit `/goal <objective>`.
 
 ```text
 ┃ /goal
@@ -34,36 +35,32 @@ Typing `/goal` opens the goal panel.
     status    pursuing
     objective Eliminate the failing parser tests and verify the full parser suite.
     progress  quoted values fixed; escape regression still failing
-    budget    ↑12.5k / 50k  25%  ·  4 turns
+    budget    none
 
     [Pause] [Complete] [Cancel] [Clear]
 
   Build · deepseek-v4-pro high  ↑420[cached 300 71%]  ↓12  ▰▰▱▱▱▱▱▱▱▱  20%  190k/950k
 ```
 
-When no goal exists, the panel enters create mode.
+Typing `/goal <objective>` creates and activates a goal directly. The prompt following `/goal` is the objective; pressing Enter begins execution.
 
 ```text
-┃ /goal <objective>
+┃ /goal Eliminate the failing parser tests and verify the full parser suite.
 
   Goal
-    Create a Ralph Loop goal for this session.
-
-    objective
-    Eliminate the failing parser tests and verify the full parser suite.
-
-    token budget
-    50000
-
-    [Create] [Cancel]
+    objective Eliminate the failing parser tests and verify the full parser suite.
+    budget    none
+    status    starting
 ```
 
 Rules:
 
-- `/goal` without parameters opens the current-goal panel or create flow.
-- `/goal <text>` may prefill the objective field in create mode.
+- `/goal` without parameters opens the current-goal panel or a no-goal empty state.
+- `/goal <text>` treats `<text>` as the objective and submits goal creation when the user presses Enter.
+- The create path does not open a separate objective editor and does not ask for a budget.
+- The first milestone creates goals with no default budget. Optional budget configuration may be added later as an explicit edit/control, not as part of the default create prompt.
 - If a non-terminal goal already exists, replacing it requires explicit confirmation.
-- The panel must show objective, status, progress, blocker, verification, and budget fields where available.
+- The panel must show objective, status, progress, blocker, verification, and budget fields where available. If no budget is configured, the budget field renders as `none` or is omitted in narrow layouts.
 - User-owned actions include pause, resume, complete, cancel, clear, create, and replace.
 - The model cannot trigger `/goal`; model-originated goal status changes are shown as server events.
 - Successful mutations should close the popup or update it in place according to L3 interaction rules.
@@ -82,6 +79,8 @@ When the composer recognizes `/goal`, the command token uses the theme primary c
 
 - The command uses server-owned goal APIs; the TUI does not mutate local goal state independently.
 - Read-only viewing should return the current server-confirmed projection.
+- Direct creation with `/goal <objective>` sends only the objective and omitted budget fields unless the user explicitly supplied budget configuration through a later design.
+- After successful direct creation, the goal becomes active and the server may begin execution when continuation preconditions permit.
 - Mutating actions should pass `expected_goal_id` where the TUI has one, so stale panels do not overwrite newer goal state.
 - If the server rejects a stale action, the TUI should refresh the panel and show a concise message.
 - If the goal is active and a turn is running, pause/cancel/clear may take effect immediately for future continuation but must not rewrite the current turn's already-built model context.
@@ -103,3 +102,5 @@ When the composer recognizes `/goal`, the command token uses the theme primary c
 | Revision | Date | Author | Change Type | Notes |
 |---:|---|---|---|---|
 | 1 | 2026-05-23 | Assistant | Initial | Initial `/goal` command design. |
+| 1 | 2026-05-25 | Human | Refinement | Set default goal creation to no budget and made `/goal <objective>` submit the objective directly on Enter. |
+| 1 | 2026-05-25 | Assistant | Refinement | Removed the default create panel budget prompt and documented direct objective submission. |

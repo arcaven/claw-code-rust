@@ -6,18 +6,18 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-23
+last_updated: 2026-05-25
 ---
 
 # L2-DES-GOAL-001 — Ralph Loop Goals
 
 ## Purpose
 
-Refine the Ralph Loop goal requirement into a durable, bounded, autonomous goal loop that can be controlled by the user, observed by clients, resumed after restart, and executed by the server without polluting the visible transcript with hidden continuation prompts.
+Refine the Ralph Loop goal requirement into a durable, optionally bounded, autonomous goal loop that can be controlled by the user, observed by clients, resumed after restart, and executed by the server without polluting the visible transcript with hidden continuation prompts.
 
 ## Background / Context
 
-A normal chat turn is request-response: the user submits input, the program works, and the turn stops. A Ralph Loop goal changes that interaction model. The user sets a durable objective once, and the program continues across turns while the goal is active, verified incomplete, unpaused, and within budget.
+A normal chat turn is request-response: the user submits input, the program works, and the turn stops. A Ralph Loop goal changes that interaction model. The user sets a durable objective once, and the program continues across turns while the goal is active, verified incomplete, unpaused, and within any configured budget or stop policy.
 
 The goal feature must remain user-owned. The model may work toward the objective and report completion or blockers, but it must not silently rewrite the objective, expand the budget, or hide why the loop is continuing.
 
@@ -48,11 +48,11 @@ Historical goal records remain auditable. A new goal may replace a prior non-ter
 
 The goal loop should:
 
-- Persist the objective, status, budget, usage, progress, and blocker state.
+- Persist the objective, status, optional budget, usage, progress, and blocker state.
 - Inject hidden goal context into model invocations while the goal is active.
 - Start autonomous continuation turns only when the session is idle and policy permits.
 - Account token and time usage incrementally.
-- Stop automatically when complete, blocked, paused, canceled, or budget-limited.
+- Stop automatically when complete, blocked, paused, canceled, or limited by a configured budget or stop policy.
 - Explain to the user why work continues or why it stopped.
 
 ## State Model
@@ -103,7 +103,7 @@ canceled
 
 ## User Sovereignty
 
-The user owns objective text, explicit budget, pause/resume, cancellation, clear, and replacement.
+The user owns objective text, explicit optional budget, pause/resume, cancellation, clear, and replacement.
 
 Model-facing goal tools should be narrower than client or slash-command controls. The model may report:
 
@@ -209,6 +209,8 @@ Runtime state may be lost on restart. Recovery reconstructs durable goal state f
 
 Budget accounting should happen incrementally rather than only at turn end.
 
+The first milestone does not assign a default token, time, or turn budget when the user creates a goal through `/goal <objective>`. When no explicit budget is configured, accounting still records usage for display, recovery, and future limits, but absence of a budget must not by itself transition the goal to `budget_limited`.
+
 Accounting points:
 
 - Turn start: capture baselines.
@@ -226,7 +228,7 @@ goal_token_delta = non_cached_input_tokens + output_tokens
 
 Cached input tokens are excluded because they represent reused context rather than newly consumed context cost for the current goal. If a provider reports reasoning tokens separately, the model usage normalization layer must state whether they are already included in `output_tokens`. Goal accounting must not double-count reasoning tokens.
 
-Budget transitions should be atomic at the projection layer. A successful accounting operation should increment usage and switch `active` to `budget_limited` in one logical operation when the limit is reached.
+Budget transitions should be atomic at the projection layer. A successful accounting operation should increment usage and switch `active` to `budget_limited` in one logical operation when a configured limit is reached.
 
 ## Continuation Loop
 
@@ -277,7 +279,8 @@ Conceptual hidden context:
 <goal_context>
   <status>active</status>
   <untrusted_objective>...</untrusted_objective>
-  <budget tokens_used="12500" token_budget="50000" tokens_remaining="37500" />
+  <usage tokens_used="12500" turns_used="4" />
+  <budget configured="false" />
   <progress>...</progress>
   <instructions>
     Continue working toward the active session goal.
@@ -291,6 +294,7 @@ Rules:
 
 - User-provided objective text must be XML-escaped.
 - User-provided objective text should be placed inside an explicitly untrusted tag such as `untrusted_objective`.
+- If no budget is configured, hidden goal context should state that no explicit budget is configured or omit limit fields; it must not fabricate a default budget.
 - Hidden goal context must not render as an ordinary transcript turn.
 - The context snapshot must be auditable through JSONL records or context snapshot references.
 - The hidden context may be serialized with provider-specific roles during request construction, but that serialization does not make it a transcript item.
@@ -361,8 +365,8 @@ The `/goal` slash command is the primary TUI entry point for goal control.
 
 The TUI should support:
 
-- Opening a current-goal panel with objective, status, progress, blockers, verification, and budget.
-- Creating a goal when none exists.
+- Opening a current-goal panel with objective, status, progress, blockers, verification, and budget where available.
+- Creating a goal directly from `/goal <objective>` when none exists, with no default budget prompt.
 - Explicitly replacing an existing non-terminal goal after confirmation.
 - Pausing and resuming goal continuation.
 - Canceling, clearing, or user-marking completion.
@@ -393,6 +397,7 @@ After restart, the server must not blindly continue just because the last durabl
 - Autonomous continuation uses the normal execution engine and produces normal turn records.
 - Hidden goal context is auditable but not rendered as a user transcript turn.
 - Budget accounting must not double-count cached input or separately reported reasoning tokens.
+- A goal created without an explicit budget has no default token, time, or turn budget.
 - Every subscribed client receives canonical goal updates when any client or model-facing tool changes the goal.
 
 ## Traceability
@@ -419,3 +424,5 @@ After restart, the server must not blindly continue just because the last durabl
 | Revision | Date | Author | Change Type | Notes |
 |---:|---|---|---|---|
 | 1 | 2026-05-23 | Assistant | Initial | Initial Ralph Loop goal architecture with JSONL source of truth, optional SQLite projection, bounded continuation loop, budget accounting, model-tool limits, and `/goal` integration. |
+| 1 | 2026-05-25 | Human | Refinement | Set first-milestone `/goal <objective>` creation to default to no explicit budget. |
+| 1 | 2026-05-25 | Assistant | Refinement | Clarified that budget fields are optional, usage accounting still occurs without a configured budget, and hidden context must not fabricate a default budget. |

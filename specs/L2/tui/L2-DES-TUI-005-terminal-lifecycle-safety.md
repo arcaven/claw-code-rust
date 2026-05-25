@@ -6,7 +6,7 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-23
+last_updated: 2026-05-25
 ---
 
 # L2-DES-TUI-005 — Terminal Lifecycle Safety
@@ -25,6 +25,7 @@ The TUI runs inside a user's terminal. It may change terminal modes, render live
 - `L1-REQ-APP-007` requires inline mode and alternate full-screen mode where appropriate.
 - `L1-REQ-TUI-007` requires stable layout across resize events.
 - `L2-DES-TUI-002` defines the TUI shell used by inline and alternate-screen modes.
+- `L2-DES-TUI-006` defines one concrete alternate-screen overlay entered by `Ctrl+T`.
 
 ## Design Requirement
 
@@ -84,6 +85,7 @@ Rules:
 - Exiting alternate-screen mode must restore the normal screen and terminal modes.
 - The same logical shell layout should be used inside alternate-screen mode.
 - If alternate-screen entry fails, the TUI should fall back to inline mode or fail with an understandable message.
+- Overlay-style alternate-screen surfaces, including full transcript review and the resume session browser, should return control to inline rendering through a single cleanup path that leaves alternate screen and schedules a fresh inline frame.
 
 ## Startup Rules
 
@@ -167,6 +169,7 @@ The message should be emitted only when useful and should not expose internal de
 | related-to | L1-REQ-APP-007 | 1 | specs/L1/L1-REQ-APP-007-tui.md | Inline and alternate-screen modes are high-level TUI requirements. |
 | related-to | L1-REQ-TUI-007 | 1 | specs/L1/L1-REQ-TUI-007-responsive-layout-readability.md | Resize handling must preserve layout and safe exit behavior. |
 | related-to | L2-DES-TUI-002 | 1 | specs/L2/tui/L2-DES-TUI-002-modern-tui-shell-layout.md | Defines the shell layout whose live region must be cleaned up safely. |
+| related-to | L2-DES-TUI-006 | 1 | specs/L2/tui/L2-DES-TUI-006-full-transcript-alternate-screen.md | Defines a concrete alternate-screen overlay and its return-to-inline lifecycle. |
 | specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
 
 ## Revision Notes
@@ -174,3 +177,4 @@ The message should be emitted only when useful and should not expose internal de
 | Revision | Date | Author | Change Type | Notes |
 |---:|---|---|---|---|
 | 1 | 2026-05-23 | Assistant | Initial | Initial terminal lifecycle safety design. |
+| 1 | 2026-05-25 | Assistant | Refinement | Linked terminal lifecycle safety to the current full transcript overlay and resume-browser alternate-screen cleanup path. |

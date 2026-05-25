@@ -299,7 +299,7 @@ Rules:
 - The `Run` cell replaces or follows the `Running` cell when the command completes.
 - `Run` output is compressed by default.
 - The `┗` relationship marker connects the command title to its output summary.
-- Pressing `Ctrl+T` enters full-screen alternate mode for reviewing the full transcript and full output.
+- Pressing `Ctrl+T` enters the full-screen alternate transcript mode defined by `L2-DES-TUI-006` for reviewing the full transcript and full output.
 - The compressed output should show enough lines to explain the result and must indicate hidden line counts.
 
 ### Context And Compaction Cells
@@ -310,14 +310,14 @@ Compaction lifecycle cells must use these exact visible labels:
 
 ```text
 ┃ Manual Compaction Started
-┃ Automatically Compaction Started
+┃ Automatic Compaction Started
 ┃ Compaction Done
 ```
 
 Rules:
 
 - `Manual Compaction Started` appears when compaction starts because the user requested it, such as through `/compact`.
-- `Automatically Compaction Started` appears when compaction starts because context pressure crossed the configured threshold.
+- `Automatic Compaction Started` appears when compaction starts because context pressure crossed the configured threshold.
 - `Compaction Done` appears when a compaction event completes successfully and the active context snapshot has been updated.
 - These cells are transcript-area status cells, not assistant messages, user messages, or model-visible context content.
 - Inline rendering should preserve the exact label text. Counts, token estimates, or summary inspection affordances may be available in an expanded detail view, but must not change the inline label.
@@ -414,7 +414,7 @@ The TUI should map canonical server events into visible state.
 | `question.requested` | Question prompt appears and bottom status shows waiting for answer. |
 | `background_process_updated` | Background process strip and transcript state update. |
 | `usage_updated` | Header/context or turn usage display updates. |
-| `context_updated` with compaction start | Transcript area shows `Manual Compaction Started` or `Automatically Compaction Started` based on compaction trigger source. |
+| `context_updated` with compaction start | Transcript area shows `Manual Compaction Started` or `Automatic Compaction Started` based on compaction trigger source. |
 | `context_updated` with compaction completion | Transcript area shows `Compaction Done` and context pressure display updates. |
 | `context_updated` without lifecycle change | Context pressure display updates. |
 | `error_reported` | Error cell appears with phase and recovery action. |
@@ -519,6 +519,7 @@ Rules:
 | related-to | L2-DES-TOOL-001 | 1 | specs/L2/tool/L2-DES-TOOL-001-built-in-tool-system.md | Tool lifecycle, command descriptions, and result summaries feed tool cells. |
 | related-to | L2-DES-APP-004 | 1 | specs/L2/app/L2-DES-APP-004-observability-architecture.md | Diagnostic fields provide recovery and phase display. |
 | related-to | L2-DES-CONTEXT-002 | 1 | specs/L2/context/L2-DES-CONTEXT-002-context-compaction.md | Compaction lifecycle records render as transcript-area status cells. |
+| related-to | L2-DES-TUI-006 | 1 | specs/L2/tui/L2-DES-TUI-006-full-transcript-alternate-screen.md | Defines full transcript alternate-screen projection, live-tail sync, and pager controls. |
 | specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
 
 ## Revision Notes
@@ -534,3 +535,4 @@ Rules:
 | 1 | 2026-05-23 | Human | Refinement | Clarified that multi-line user-message background bands may repeat `┃` on content lines while padding rows remain background-only. |
 | 1 | 2026-05-23 | Human | Refinement | Reconciled active work and interruption examples with the current transcript and working-indicator visual grammar. |
 | 1 | 2026-05-25 | Human | Refinement | Added exact transcript-area labels for manual compaction start, automatic compaction start, and compaction completion. |
+| 1 | 2026-05-25 | Assistant | Refinement | Linked `Ctrl+T` full transcript review to `L2-DES-TUI-006`. |
