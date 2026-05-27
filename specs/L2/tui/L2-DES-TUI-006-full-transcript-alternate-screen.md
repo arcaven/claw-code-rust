@@ -166,7 +166,7 @@ Lifecycle rules:
 | related-to | L2-DES-TUI-002 | 1 | specs/L2/tui/L2-DES-TUI-002-modern-tui-shell-layout.md | Complements the inline transcript viewport with an alternate-screen review surface. |
 | related-to | L2-DES-TUI-004 | 1 | specs/L2/tui/L2-DES-TUI-004-streaming-transcript-and-state.md | Reuses transcript cell projection, live overlay state, and full-output review semantics. |
 | related-to | L2-DES-TUI-005 | 1 | specs/L2/tui/L2-DES-TUI-005-terminal-lifecycle-safety.md | Depends on alternate-screen lifecycle safety and restore behavior. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-008 | 1 | specs/L3/tui/L3-BEH-TUI-008-full-transcript-overlay.md | L3 defines Ctrl+T alternate-screen entry, layout, scrolling, live-tail sync, previous-message selection, and cleanup. |
 
 ## Revision Notes
 

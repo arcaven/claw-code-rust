@@ -241,7 +241,7 @@ Clients may optimistically render local input, but canonical state comes from th
 | related-to | L2-DES-TUI-006 | 1 | specs/L2/tui/L2-DES-TUI-006-full-transcript-alternate-screen.md | Defines the alternate-screen transcript review surface entered from the inline shell. |
 | related-to | L2-DES-TUI-007 | 1 | specs/L2/tui/L2-DES-TUI-007-session-rendering-consistency.md | Defines the shared live/replay projection that the shell places in the transcript viewport. |
 | related-to | L2-DES-TUI-008 | 1 | specs/L2/tui/L2-DES-TUI-008-style.md | Defines the shell's shared color, symbol, spacing, and animation style rules. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-001 | 2 | specs/L3/tui/L3-BEH-TUI-001-layout-composer-input.md | L3 defines the shell regions, responsive resize behavior, composer band, working indicator, and status line. |
 
 ## Revision Notes
 

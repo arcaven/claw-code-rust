@@ -57,7 +57,7 @@ Rules:
 | related-to | L1-REQ-TUI-004 | 1 | specs/L1/L1-REQ-TUI-004-state-visibility.md | Status exposes current session and runtime state. |
 | related-to | L2-DES-LLM-003 | 1 | specs/L2/llm/L2-DES-LLM-003-model-usage-observability.md | Defines usage fields and uncertainty handling. |
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Defines bottom status-line fields reused by this command. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-004 | 2 | specs/L3/tui/L3-BEH-TUI-004-slash-commands.md | L3 defines consolidated slash command parsing, routing, and status command behavior. |
 
 ## Revision Notes
 

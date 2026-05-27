@@ -85,7 +85,7 @@ before
 ┃ @sea
 
 after confirming crates/file-search/src/lib.rs
-┃ @lib.rs 
+┃ @lib.rs
 ```
 
 The rendered mention may be a chip, styled token, or plain inline text depending on client capabilities. The underlying composer state should retain a structured mention reference.
@@ -209,7 +209,7 @@ Search events are live UI projections. They are not transcript records.
 | related-to | L1-REQ-TUI-008 | 1 | specs/L1/L1-REQ-TUI-008-terminal-command-prefix.md | TUI terminal-command prefix behavior remains separate from `@`. |
 | related-to | L2-DES-APP-006 | 1 | specs/L2/app/L2-DES-APP-006-fuzzy-search-architecture.md | Defines fuzzy-search provider and project file search behavior. |
 | related-to | L2-DES-CLIENT-001 | 1 | specs/L2/client/L2-DES-CLIENT-001-localization-readiness.md | Defines Unicode and IME constraints used by prefix recognition. |
-| specified-by | TBD | TBD | specs/L3/client/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-001 | 2 | specs/L3/tui/L3-BEH-TUI-001-layout-composer-input.md | L3 defines composer prefix handling for slash commands, shell mode, and fuzzy search. |
 
 ## Revision Notes
 

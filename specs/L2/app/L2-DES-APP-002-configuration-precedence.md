@@ -157,7 +157,7 @@ Rules:
 | related-to | L1-REQ-TUI-006 | 1 | specs/L1/L1-REQ-TUI-006-command-discovery-control.md | Slash commands can trigger session selection or configuration writes. |
 | related-to | L1-REQ-APP-012 | 1 | specs/L1/L1-REQ-APP-012-privacy-data-ownership.md | Credential persistence and projection behavior must follow privacy expectations. |
 | related-to | L2-DES-APP-005 | 1 | specs/L2/app/L2-DES-APP-005-config-toml-schema.md | Defines the concrete `config.toml` and `auth.json` schemas resolved by this precedence design. |
-| specified-by | TBD | TBD | specs/L3/app/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-APP-001 | 1 | specs/L3/app/L3-BEH-APP-001-configuration-resolution.md | Defines configuration path resolution, validation, effective merge behavior, inspection projections, and safe persistence mechanics. |
 
 ## Revision Notes
 

@@ -63,7 +63,7 @@ Rules:
 | related-to | L2-DES-APP-003 | 1 | specs/L2/app/L2-DES-APP-003-client-server-protocol.md | Defines session creation behavior. |
 | related-to | L2-DES-APP-007 | 1 | specs/L2/app/L2-DES-APP-007-cli-onboarding-entry.md | Defines the onboarding entry path used when required model setup is incomplete. |
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Uses shared slash-command discovery and invocation behavior. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-004 | 2 | specs/L3/tui/L3-BEH-TUI-004-slash-commands.md | L3 defines consolidated slash command parsing, routing, and new-session command behavior. |
 
 ## Revision Notes
 

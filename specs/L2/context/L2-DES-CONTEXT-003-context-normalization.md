@@ -255,11 +255,10 @@ External factors such as provider-reported token counts from prior invocations m
 | related-to | L2-DES-CONTEXT-002 | 1 | specs/L2/context/L2-DES-CONTEXT-002-context-compaction.md | Normalization runs after compaction and handles items that survive compaction. |
 | related-to | L2-DES-MODEL-001 | 1 | specs/L2/model/L2-DES-MODEL-001-model-provider-binding.md | The resolved model profile provides modality capabilities and context-window limits. |
 | related-to | L2-DES-AGENT-001 | 1 | specs/L2/agent/L2-DES-AGENT-001-execution-engine.md | Normalization runs as a phase of the execution engine between compaction and provider serialization. |
-| specified-by | TBD | TBD | specs/L3/context/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-CORE-005 | 1 | specs/L3/core/L3-BEH-CORE-005-context-pipeline.md | L3 defines modality filtering, item size bounding, and token-budget enforcement. |
 
 ## Revision Notes
 
 | Revision | Date | Author | Change Type | Notes |
 |---:|---|---|---|---|
 | 1 | 2026-05-22 | Assistant | Initial | Initial context normalization design covering three-pass pipeline, per-item-type policies, modality filtering, tool pairing integrity, token-budget bound, and determinism. |
-

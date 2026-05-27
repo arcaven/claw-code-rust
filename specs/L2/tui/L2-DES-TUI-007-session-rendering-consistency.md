@@ -268,7 +268,7 @@ The TUI should include projection and rendering tests that compare live and repl
 | related-to | L2-DES-TUI-002 | 1 | specs/L2/tui/L2-DES-TUI-002-modern-tui-shell-layout.md | The shell places transcript projection output in the viewport. |
 | related-to | L2-DES-TUI-004 | 1 | specs/L2/tui/L2-DES-TUI-004-streaming-transcript-and-state.md | Transcript cell grammar and live overlay behavior are rendered through the shared projection. |
 | related-to | L2-DES-TUI-006 | 1 | specs/L2/tui/L2-DES-TUI-006-full-transcript-alternate-screen.md | The full transcript overlay should reuse the same projection and cell renderers. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-006 | 1 | specs/L3/tui/L3-BEH-TUI-006-session-rendering-projection.md | L3 defines shared transcript projection, live/replay normalizers, renderer contract, and equivalence tests. |
 
 ## Revision Notes
 

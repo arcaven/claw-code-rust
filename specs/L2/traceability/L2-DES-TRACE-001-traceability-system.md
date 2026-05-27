@@ -331,6 +331,12 @@ Tests for the traceability system itself:
 - `specs/templates/spec-l1-requirement.md` defines the L1 frontmatter that gap scripts parse.
 - Individual L1/L2/L3 specs are the source artifacts that matrices reference.
 
+## Traceability
+
+| Relationship | Target ID | Target Revision | Target Path | Rationale |
+|---|---:|---|---|---|
+| specified-by | L3-BEH-APP-003 | 1 | specs/L3/app/L3-BEH-APP-003-traceability-maintenance.md | L3 defines matrix parsing, L2-L3 gap detection, stale link detection, embedded trace drift checks, and validation exit semantics. |
+
 ## Open Questions
 
 - Whether `l3_to_impl.md` should be auto-generated from test trace comments instead of manually maintained.

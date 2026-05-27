@@ -196,7 +196,7 @@ Routine client projections must not include plaintext API keys by default.
 | related-to | L1-REQ-APP-012 | 1 | specs/L1/L1-REQ-APP-012-privacy-data-ownership.md | Credential references and client projections follow privacy requirements. |
 | related-to | L2-DES-APP-002 | 1 | specs/L2/app/L2-DES-APP-002-configuration-precedence.md | Configuration precedence resolves durable provider and binding records. |
 | related-to | L2-DES-APP-005 | 1 | specs/L2/app/L2-DES-APP-005-config-toml-schema.md | Defines concrete TOML fields for persisted providers, bindings, and defaults plus `auth.json` credential storage. |
-| specified-by | TBD | TBD | specs/L3/model/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-PROVIDER-001 | 2 | specs/L3/provider/L3-BEH-PROVIDER-001-model-resolution.md | L3 defines model catalog loading, provider validation, binding resolution, session model selection, and provider request construction. |
 
 ## Revision Notes
 

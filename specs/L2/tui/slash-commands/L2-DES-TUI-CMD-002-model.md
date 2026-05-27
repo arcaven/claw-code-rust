@@ -221,7 +221,7 @@ That stacked rail view belongs to onboarding. `/model` uses one active step at a
 | related-to | L2-DES-APP-002 | 1 | specs/L2/app/L2-DES-APP-002-configuration-precedence.md | Defines configuration write scope, persistence target behavior, and distinction between session selection and durable records. |
 | related-to | L2-DES-TUI-001 | 1 | specs/L2/tui/L2-DES-TUI-001-onboarding-ui-flow.md | Reuses the onboarding model setup sequence while using a transient below-composer command surface instead of an inline history stack. |
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Uses shared slash-command discovery, popup, and invocation behavior. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-004 | 2 | specs/L3/tui/L3-BEH-TUI-004-slash-commands.md | L3 defines consolidated slash command parsing, routing, and model command behavior. |
 
 ## Revision Notes
 

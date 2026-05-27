@@ -473,10 +473,14 @@ If a client disconnects, the server continues owning active work subject to user
 | related-to | L2-DES-TOOL-002 | 1 | specs/L2/tool/L2-DES-TOOL-002-parallel-tool-orchestration.md | Parallel tool groups require parent and child event identifiers for client rendering and replay. |
 | related-to | L2-DES-GOAL-001 | 1 | specs/L2/goal/L2-DES-GOAL-001-ralph-loop-goals.md | The protocol exposes user-owned goal controls and canonical goal notifications. |
 | related-to | L2-DES-APP-006 | 1 | specs/L2/app/L2-DES-APP-006-fuzzy-search-architecture.md | The protocol exposes fuzzy-search sessions and live result snapshots. |
+| specified-by | L3-BEH-CORE-011 | 1 | specs/L3/core/L3-BEH-CORE-011-session-forking-retention.md | L3 defines concrete behavior behind `session.fork`, `session.delete` fork-retention preflight, inherited segment actions, and parent-unavailable fork projection. |
+| specified-by | L3-BEH-CORE-012 | 1 | specs/L3/core/L3-BEH-CORE-012-message-edit-workspace-restore.md | L3 defines concrete behavior behind `message.editPrevious`, restore policy, workspace restore events, superseded turns, and replacement turn sequencing. |
 | related-to | L2-DES-CLIENT-002 | 1 | specs/L2/client/L2-DES-CLIENT-002-prefixed-input-actions.md | The protocol supports server-owned search providers used by prefixed input. |
 | related-to | L2-DES-CONV-001 | 1 | specs/L2/conv/L2-DES-CONV-001-session-jsonl-data-model.md | Durable session events are distinct from live server-client protocol events. |
 | related-to | L2-DES-APP-005 | 1 | specs/L2/app/L2-DES-APP-005-config-toml-schema.md | `config.inspect` and `config.update` operate on safe projections and updates derived from the `config.toml` and `auth.json` schemas. |
-| specified-by | TBD | TBD | specs/L3/app/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-PROTOCOL-001 | 2 | specs/L3/protocol/L3-BEH-PROTOCOL-001-jsonrpc-protocol.md | L3 defines JSON-RPC envelope validation, session subscription, sequencing, broadcasting, turn submission, idempotency, approval races, fork/delete, and message edit requests. |
+| specified-by | L3-BEH-SERVER-001 | 1 | specs/L3/server/L3-BEH-SERVER-001-server-runtime-transport.md | L3 defines server runtime transport ownership and event broadcast behavior. |
+| specified-by | L3-BEH-CLIENT-001 | 1 | specs/L3/client/L3-BEH-CLIENT-001-connection-subscription.md | L3 defines client connection, subscription, reconnection, and catch-up behavior. |
 
 ## References
 

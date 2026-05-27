@@ -224,7 +224,7 @@ Rules:
 | related-to | L1-REQ-CLIENT-004 | 1 | specs/L1/L1-REQ-CLIENT-004-prefixed-input-actions.md | The `@` prefix uses fuzzy-search providers for live selection. |
 | related-to | L1-REQ-CLIENT-001 | 1 | specs/L1/L1-REQ-CLIENT-001-localization-readiness.md | Search queries and paths must preserve Unicode text. |
 | related-to | L2-DES-CLIENT-001 | 1 | specs/L2/client/L2-DES-CLIENT-001-localization-readiness.md | Defines Unicode, IME, and display constraints for client search input. |
-| specified-by | TBD | TBD | specs/L3/app/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-CORE-010 | 1 | specs/L3/core/L3-BEH-CORE-010-fuzzy-search.md | L3 defines incremental file search workers, matcher behavior, session lifecycle, and provider model. |
 
 ## Revision Notes
 

@@ -345,7 +345,7 @@ Rules:
 | related-to | L2-DES-TUI-002 | 1 | specs/L2/tui/L2-DES-TUI-002-modern-tui-shell-layout.md | Defines the shell regions used by composer and status line. |
 | related-to | L2-DES-TUI-008 | 1 | specs/L2/tui/L2-DES-TUI-008-style.md | Defines composer band, popup list, slash-command, and status-line style rules. |
 | related-to | L2-DES-CLIENT-001 | 1 | specs/L2/client/L2-DES-CLIENT-001-localization-readiness.md | Defines shared Unicode and localization design constraints. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-001 | 2 | specs/L3/tui/L3-BEH-TUI-001-layout-composer-input.md | L3 defines composer layout, input mode handling, prefix handling, and bottom status line behavior. |
 
 ## Revision Notes
 

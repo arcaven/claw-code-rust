@@ -218,7 +218,7 @@ Onboarding selection popups use the shared navigable-list markers from `L2-DES-T
 | related-to | L2-DES-APP-007 | 1 | specs/L2/app/L2-DES-APP-007-cli-onboarding-entry.md | Defines the CLI entry point that starts this onboarding UI. |
 | related-to | L2-DES-MODEL-001 | 1 | specs/L2/model/L2-DES-MODEL-001-model-provider-binding.md | The flow creates user provider and model-provider binding records. |
 | related-to | L2-DES-APP-002 | 1 | specs/L2/app/L2-DES-APP-002-configuration-precedence.md | Defines where successful onboarding results are persisted and how they are resolved. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-005 | 2 | specs/L3/tui/L3-BEH-TUI-005-onboarding-ui.md | L3 defines onboarding UI steps, validation, persistence targets, and credential safety. |
 
 ## Revision Notes
 

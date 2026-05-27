@@ -312,7 +312,7 @@ Errors should be actionable. For example, a missing explicitly requested skill s
 | related-to | L2-DES-CONTEXT-001 | 1 | specs/L2/context/L2-DES-CONTEXT-001-context-assembly.md | Activated skills are task-scoped metadata-derived context. |
 | related-to | L2-DES-TOOL-001 | 1 | specs/L2/tool/L2-DES-TOOL-001-built-in-tool-system.md | Skill activation and supporting file/script use flow through controlled tools. |
 | related-to | L2-DES-WORKSPACE-001 | 1 | specs/L2/workspace/L2-DES-WORKSPACE-001-project-instruction-discovery.md | Project instruction files and workspace skills are separate context sources. |
-| specified-by | TBD | TBD | specs/L3/skills/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-SERVER-005 | 1 | specs/L3/server/L3-BEH-SERVER-005-skills-discovery-activation.md | L3 defines skill discovery, catalog construction, activation, instruction injection, supporting file access, and refresh. |
 
 ## References
 

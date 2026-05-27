@@ -574,7 +574,7 @@ When a setup flow writes both `config.toml` and `auth.json`, the program should 
 | related-to | L2-DES-MODEL-001 | 1 | specs/L2/model/L2-DES-MODEL-001-model-provider-binding.md | Provides concrete persistence fields for providers and model bindings. |
 | related-to | L2-DES-MCP-001 | 1 | specs/L2/mcp/L2-DES-MCP-001-mcp-integration-architecture.md | Provides concrete persistence fields for MCP servers. |
 | related-to | L2-DES-SKILLS-001 | 1 | specs/L2/skills/L2-DES-SKILLS-001-agent-skills-architecture.md | Provides concrete persistence fields for skill roots and enablement. |
-| specified-by | TBD | TBD | specs/L3/app/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-APP-001 | 1 | specs/L3/app/L3-BEH-APP-001-configuration-resolution.md | Defines schema validation, merge behavior, safe inspection, and atomic per-file write behavior for `config.toml` and `auth.json`. |
 
 ## Revision Notes
 

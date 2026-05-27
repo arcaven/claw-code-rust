@@ -90,7 +90,7 @@ If the user is already inside an active TUI session and needs to repair or add m
 | related-to | L2-DES-TUI-001 | 1 | specs/L2/tui/L2-DES-TUI-001-onboarding-ui-flow.md | The CLI entry starts the TUI onboarding flow defined there. |
 | related-to | L2-DES-APP-002 | 1 | specs/L2/app/L2-DES-APP-002-configuration-precedence.md | Defines persistence target and source precedence for onboarding output. |
 | related-to | L2-DES-APP-005 | 1 | specs/L2/app/L2-DES-APP-005-config-toml-schema.md | Defines persisted config and credential schema written by onboarding. |
-| specified-by | TBD | TBD | specs/L3/app/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-CLI-001 | 2 | specs/L3/cli/L3-BEH-CLI-001-entry-onboarding.md | L3 defines CLI argument parsing, onboarding entry, server lifecycle, signal handling, and exit behavior. |
 
 ## Revision Notes
 

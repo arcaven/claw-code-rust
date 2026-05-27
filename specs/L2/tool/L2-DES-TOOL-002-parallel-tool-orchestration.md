@@ -283,7 +283,7 @@ Regression coverage should specifically prevent late UI flush behavior where a p
 | related-to | L2-DES-APP-003 | 1 | specs/L2/app/L2-DES-APP-003-client-server-protocol.md | Client events expose parent and child tool state. |
 | related-to | L2-DES-CONV-001 | 1 | specs/L2/conv/L2-DES-CONV-001-session-jsonl-data-model.md | Durable records preserve parent-child relationships and replay state. |
 | related-to | L2-DES-TUI-004 | 1 | specs/L2/tui/L2-DES-TUI-004-streaming-transcript-and-state.md | TUI rendering must show child progress and partial failures. |
-| specified-by | TBD | TBD | specs/L3/tool/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TOOLS-003 | 1 | specs/L3/tools/L3-BEH-TOOLS-003-parallel-orchestration.md | L3 defines parent envelope validation, concurrent child scheduling, result aggregation, client events, and interruption. |
 
 ## Revision Notes
 

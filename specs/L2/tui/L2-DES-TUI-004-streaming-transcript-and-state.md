@@ -700,7 +700,7 @@ Rules:
 | related-to | L2-DES-TUI-006 | 1 | specs/L2/tui/L2-DES-TUI-006-full-transcript-alternate-screen.md | Defines full transcript alternate-screen projection, live-tail sync, and pager controls. |
 | related-to | L2-DES-TUI-007 | 1 | specs/L2/tui/L2-DES-TUI-007-session-rendering-consistency.md | Defines the shared live/replay projection and renderer boundary for transcript cells. |
 | related-to | L2-DES-TUI-008 | 1 | specs/L2/tui/L2-DES-TUI-008-style.md | Defines shared transcript, tool, diff, approval, spinner, and state styling. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-002 | 2 | specs/L3/tui/L3-BEH-TUI-002-streaming-transcript.md | L3 defines live streaming cells, tool call rendering, approval overlays, state indicators, plan/goal rendering, and compaction notices. |
 
 ## Revision Notes
 

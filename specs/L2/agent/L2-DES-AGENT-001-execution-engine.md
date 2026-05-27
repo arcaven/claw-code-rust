@@ -289,7 +289,8 @@ The final user-facing response should summarize the outcome, changed files where
 | related-to | L2-DES-MODEL-001 | 1 | specs/L2/model/L2-DES-MODEL-001-model-provider-binding.md | Model resolution provides runtime invocation profiles. |
 | related-to | L2-DES-TOOL-001 | 1 | specs/L2/tool/L2-DES-TOOL-001-built-in-tool-system.md | Defines tool registry, lifecycle, and plan tool behavior used by dispatch. |
 | related-to | L2-DES-GOAL-001 | 1 | specs/L2/goal/L2-DES-GOAL-001-ralph-loop-goals.md | Defines autonomous goal continuation and model-facing goal update behavior layered on the engine. |
-| specified-by | TBD | TBD | specs/L3/agent/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-CORE-002 | 1 | specs/L3/core/L3-BEH-CORE-002-turn-execution-engine.md | L3 defines the core turn execution state machine and decision boundaries. |
+| specified-by | L3-BEH-SERVER-001 | 1 | specs/L3/server/L3-BEH-SERVER-001-server-runtime-transport.md | L3 defines server orchestration around core turn execution. |
 
 ## Revision Notes
 
