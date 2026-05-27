@@ -1,4 +1,5 @@
 mod config;
+mod config_resolution;
 mod context;
 mod conversation;
 mod durable_record;
