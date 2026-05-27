@@ -242,7 +242,8 @@ Clients should:
 | related-to | L2-DES-AGENT-001 | 1 | specs/L2/agent/L2-DES-AGENT-001-execution-engine.md | Defines the execution runtime being interrupted and resumed. |
 | related-to | L2-DES-APP-003 | 1 | specs/L2/app/L2-DES-APP-003-client-server-protocol.md | Protocol methods and events expose interrupt and resume control to clients. |
 | related-to | L2-DES-CONV-001 | 1 | specs/L2/conv/L2-DES-CONV-001-session-jsonl-data-model.md | Durable records preserve interrupted and resumed state. |
-| specified-by | TBD | TBD | specs/L3/agent/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-SERVER-001 | 1 | specs/L3/server/L3-BEH-SERVER-001-server-runtime-transport.md | L3 defines server cancellation token wiring and active work ownership. |
+| specified-by | L3-BEH-SERVER-002 | 2 | specs/L3/server/L3-BEH-SERVER-002-interrupt-resume.md | L3 defines interruption targets, resume turns, active work inspection, and crash recovery. |
 
 ## Revision Notes
 

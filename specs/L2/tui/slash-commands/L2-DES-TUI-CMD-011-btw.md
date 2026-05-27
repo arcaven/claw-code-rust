@@ -28,7 +28,7 @@ Define the TUI behavior for `/btw`, which starts a side conversation inside an e
 Inline command rendering shows the command token in primary color and the parameter hint in muted color.
 
 ```text
-┃ /btw <your side conversation message>
+┃ /btw <side conversation message>
 
   Build · deepseek-v4-pro high  ↑0[cached 0 0%]  ↓0  ▱▱▱▱▱▱▱▱▱▱  0%  0/950k
 ```
@@ -38,8 +38,7 @@ Submission example:
 ```text
 ┃ /btw what if we solve this with a smaller parser-only change?
 
-⠋ Working · 18s
-  side      ephemeral fork running
+⠋ Working · ⏱ 18s
 ```
 
 ## State And Error Behavior
@@ -60,7 +59,7 @@ Submission example:
 | related-to | L1-REQ-CONV-004 | 1 | specs/L1/L1-REQ-CONV-004-session-forking.md | `/btw` uses the fork concept for temporary side exploration, while explicitly avoiding durable fork persistence. |
 | related-to | L2-DES-CONV-001 | 1 | specs/L2/conv/L2-DES-CONV-001-session-jsonl-data-model.md | Defines the durable session model that `/btw` must not write to while running as an ephemeral fork. |
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Defines inline slash-command coloring and command submission. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-004 | 2 | specs/L3/tui/L3-BEH-TUI-004-slash-commands.md | L3 defines consolidated slash command parsing, routing, and ephemeral `/btw` behavior. |
 
 ## Revision Notes
 

@@ -36,7 +36,7 @@ During compaction:
 ```text
 ┃ Manual Compaction Started
 
-⠋ Working · 4s
+⠋ Working · ⏱ 4s
 ```
 
 After successful compaction:
@@ -62,7 +62,7 @@ After successful compaction:
 | related-to | L2-DES-CONTEXT-002 | 1 | specs/L2/context/L2-DES-CONTEXT-002-context-compaction.md | Defines compaction triggers, summaries, and context updates. |
 | related-to | L2-DES-TUI-004 | 1 | specs/L2/tui/L2-DES-TUI-004-streaming-transcript-and-state.md | Defines working indicator and context update display. |
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Uses shared slash-command discovery and invocation behavior. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-004 | 2 | specs/L3/tui/L3-BEH-TUI-004-slash-commands.md | L3 defines consolidated slash command parsing, routing, and compact command behavior. |
 
 ## Revision Notes
 

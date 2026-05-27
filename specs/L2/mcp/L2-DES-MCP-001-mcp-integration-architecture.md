@@ -344,7 +344,7 @@ Security rules:
 | related-to | L2-DES-AGENT-001 | 1 | specs/L2/agent/L2-DES-AGENT-001-execution-engine.md | The execution engine dispatches normalized MCP tool calls. |
 | related-to | L2-DES-CONTEXT-001 | 1 | specs/L2/context/L2-DES-CONTEXT-001-context-assembly.md | MCP tool schemas and selected resources participate in context assembly. |
 | related-to | L2-DES-TOOL-001 | 1 | specs/L2/tool/L2-DES-TOOL-001-built-in-tool-system.md | MCP tools are external tool definitions governed by the built-in tool lifecycle. |
-| specified-by | TBD | TBD | specs/L3/mcp/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-MCP-001 | 1 | specs/L3/mcp/L3-BEH-MCP-001-server-lifecycle-tool-normalization.md | L3 defines MCP lifecycle, capability discovery, tool normalization, resources, and error handling. |
 
 ## References
 

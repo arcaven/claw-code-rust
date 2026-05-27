@@ -224,7 +224,7 @@ The user should not be required to approve compaction for it to proceed during n
 | related-to | L2-DES-CONV-001 | 1 | specs/L2/conv/L2-DES-CONV-001-session-jsonl-data-model.md | Defines durable compaction records, summary records, and context snapshot structure. |
 | related-to | L2-DES-AGENT-001 | 1 | specs/L2/agent/L2-DES-AGENT-001-execution-engine.md | Compaction runs before model invocation within the execution engine's context assembly phase. |
 | related-to | L2-DES-CONTEXT-001 | 1 | specs/L2/context/L2-DES-CONTEXT-001-context-assembly.md | Compaction updates active context snapshots while preserving the immutable prefix and metadata-derived content structure. |
-| specified-by | TBD | TBD | specs/L3/context/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-CORE-005 | 1 | specs/L3/core/L3-BEH-CORE-005-context-pipeline.md | L3 defines compaction trigger evaluation, eligibility, summary extraction, durable recording, and skip conditions. |
 
 ## Revision Notes
 
@@ -232,4 +232,3 @@ The user should not be required to approve compaction for it to proceed during n
 |---:|---|---|---|---|
 | 1 | 2026-05-22 | Assistant | Initial | Initial context compaction design covering triggers, eligibility, summary content, durable recording, active context update, and replay recovery. |
 | 1 | 2026-05-25 | Human | Refinement | Added exact transcript-area lifecycle notices for manual and automatic compaction. |
-

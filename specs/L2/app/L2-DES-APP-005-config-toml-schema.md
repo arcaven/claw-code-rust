@@ -6,7 +6,7 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-25
+last_updated: 2026-05-26
 ---
 
 # L2-DES-APP-005 - Config TOML And Auth JSON Schema
@@ -45,6 +45,7 @@ The JSON auth schema stores credential material for the same source scopes. `con
 - `L1-REQ-TUI-010` requires onboarding to submit setup results for persistence.
 - `L1-REQ-APP-008` requires MCP integrations to be user-configured and status-visible.
 - `L1-REQ-APP-009` requires skills to be discoverable from configured sources with visible missing/unavailable states.
+- `L1-REQ-APP-003` requires permission modes, sandboxing, user approval for out-of-boundary actions, and fail-closed behavior when permission state is ambiguous.
 - `L1-REQ-APP-012` requires credential and privacy-safe projections.
 
 ## Design Requirement
@@ -119,6 +120,7 @@ credential = "openai_api_key"
 [model_bindings.gpt55-openrouter]
 enabled = true
 model_slug = "openai/gpt-5.5"
+display_name = "GPT 5.5"
 provider = "openrouter"
 model_name = "openai/gpt-5.5"
 invocation_method = "openai_responses"
@@ -127,6 +129,7 @@ default_reasoning_effort = "medium"
 [model_bindings.deepseek-v4-pro]
 enabled = true
 model_slug = "deepseek/deepseek-v4-pro"
+display_name = "DeepSeek V4 Pro"
 provider = "openrouter"
 model_name = "deepseek/deepseek-v4-pro"
 invocation_method = "openai_chat_completions"
@@ -288,7 +291,7 @@ Optional fields:
 
 Provider ids are stable program-generated identifiers. Changing `name` must not change the provider id.
 
-Provider records must not contain model-specific fields such as `model_name`, `model_slug`, `invocation_method`, or reasoning effort.
+Provider records must not contain model-specific fields such as `model_name`, `model_slug`, binding `display_name`, `invocation_method`, or reasoning effort.
 
 ## Credentials
 
@@ -353,13 +356,13 @@ Required fields for an enabled binding:
 
 - `enabled`: boolean.
 - `model_slug`: canonical supported model slug.
+- `display_name`: user-configurable client display label for this binding.
 - `provider`: provider id from `[providers]`.
 - `model_name`: provider-specific model name used for API requests.
 - `invocation_method`: program-known invocation method id.
 
 Optional fields:
 
-- `display_name`: client display override.
 - `default_reasoning_effort`: logical reasoning effort selected by onboarding or default setup.
 - `availability_status`: last known safe status.
 
@@ -372,6 +375,8 @@ Allowed `invocation_method` values for the initial schema:
 Rules:
 
 - `model_slug` must exist in the built-in supported model catalog.
+- `display_name` is display metadata only. It must not be used as a stable identifier, provider API model name, or cross-reference key.
+- Program-created model bindings must persist `display_name`. When the user accepts the default suggestion, that persisted value should be copied from the built-in supported model definition's display name.
 - `provider` must reference an enabled effective provider.
 - `invocation_method` must be supported by the program and valid for the provider/model combination.
 - `default_reasoning_effort` must be absent when the supported model does not allow reasoning.
@@ -526,7 +531,7 @@ Source validation catches malformed TOML, unsupported schema versions, wrong val
 
 Auth validation catches malformed JSON, unsupported auth schema versions, wrong value types, missing credential values, duplicate credential ids after source precedence, and credential kinds unsupported by the referring config field.
 
-Effective validation catches references to missing providers, disabled providers, missing model bindings, missing credentials, invalid supported model slugs, invalid invocation methods, unsupported reasoning efforts, invalid MCP transport combinations, and unavailable skill roots.
+Effective validation catches references to missing providers, disabled providers, missing model bindings, missing credentials, invalid supported model slugs, invalid model display names, invalid invocation methods, unsupported reasoning efforts, invalid MCP transport combinations, and unavailable skill roots.
 
 Invalid higher-priority configuration must produce an actionable error instead of silently falling back to lower-priority values for the same setting.
 
@@ -563,12 +568,13 @@ When a setup flow writes both `config.toml` and `auth.json`, the program should 
 | related-to | L1-REQ-TUI-010 | 1 | specs/L1/L1-REQ-TUI-010-onboarding-ui.md | TUI onboarding collects values persisted by this schema. |
 | related-to | L1-REQ-APP-008 | 1 | specs/L1/L1-REQ-APP-008-mcp.md | MCP servers are configured through `config.toml` and use `auth.json` credential references. |
 | related-to | L1-REQ-APP-009 | 1 | specs/L1/L1-REQ-APP-009-skills.md | Skill roots and enablement are configured through `config.toml`. |
+| related-to | L1-REQ-APP-003 | 1 | specs/L1/L1-REQ-APP-003-safety.md | `[defaults].permission_policy` persists the default permission posture without replacing runtime approval or sandbox enforcement. |
 | related-to | L1-REQ-APP-012 | 1 | specs/L1/L1-REQ-APP-012-privacy-data-ownership.md | `auth.json` credential storage and redaction behavior protect secrets. |
 | related-to | L2-DES-APP-002 | 1 | specs/L2/app/L2-DES-APP-002-configuration-precedence.md | Source precedence resolves this schema across user and project files. |
 | related-to | L2-DES-MODEL-001 | 1 | specs/L2/model/L2-DES-MODEL-001-model-provider-binding.md | Provides concrete persistence fields for providers and model bindings. |
 | related-to | L2-DES-MCP-001 | 1 | specs/L2/mcp/L2-DES-MCP-001-mcp-integration-architecture.md | Provides concrete persistence fields for MCP servers. |
 | related-to | L2-DES-SKILLS-001 | 1 | specs/L2/skills/L2-DES-SKILLS-001-agent-skills-architecture.md | Provides concrete persistence fields for skill roots and enablement. |
-| specified-by | TBD | TBD | specs/L3/app/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-APP-001 | 1 | specs/L3/app/L3-BEH-APP-001-configuration-resolution.md | Defines schema validation, merge behavior, safe inspection, and atomic per-file write behavior for `config.toml` and `auth.json`. |
 
 ## Revision Notes
 
@@ -576,3 +582,5 @@ When a setup flow writes both `config.toml` and `auth.json`, the program should 
 |---:|---|---|---|---|
 | 1 | 2026-05-25 | Assistant | Initial | Initial TOML schema design for durable user and project configuration. |
 | 1 | 2026-05-25 | Human | Refinement | Moved API keys and other credential material into dedicated `auth.json` files and removed environment variables or external stores as the recommended credential persistence mechanism. |
+| 1 | 2026-05-25 | Assistant | Refinement | Linked persisted `permission_policy` defaults to application safety requirements. |
+| 1 | 2026-05-26 | Human | Refinement | Added explicit model binding `display_name` examples and clarified display-name fallback and identifier rules. |

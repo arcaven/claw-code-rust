@@ -170,7 +170,7 @@ The message should be emitted only when useful and should not expose internal de
 | related-to | L1-REQ-TUI-007 | 1 | specs/L1/L1-REQ-TUI-007-responsive-layout-readability.md | Resize handling must preserve layout and safe exit behavior. |
 | related-to | L2-DES-TUI-002 | 1 | specs/L2/tui/L2-DES-TUI-002-modern-tui-shell-layout.md | Defines the shell layout whose live region must be cleaned up safely. |
 | related-to | L2-DES-TUI-006 | 1 | specs/L2/tui/L2-DES-TUI-006-full-transcript-alternate-screen.md | Defines a concrete alternate-screen overlay and its return-to-inline lifecycle. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-003 | 1 | specs/L3/tui/L3-BEH-TUI-003-terminal-lifecycle-safety.md | L3 defines terminal raw mode, alternate-screen, signal, panic, and cleanup behavior. |
 
 ## Revision Notes
 

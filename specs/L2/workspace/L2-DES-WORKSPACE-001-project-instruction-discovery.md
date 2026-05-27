@@ -182,11 +182,10 @@ This information should be available through a configuration-inspection or debug
 | related-to | L1-REQ-APP-010 | 1 | specs/L1/L1-REQ-APP-010-configuration.md | Discovery behavior is controlled through persistent configuration with project-over-user precedence. |
 | related-to | L2-DES-CONTEXT-001 | 1 | specs/L2/context/L2-DES-CONTEXT-001-context-assembly.md | Assembled instruction content feeds into the instruction hierarchy during context assembly. |
 | related-to | L2-DES-APP-002 | 1 | specs/L2/app/L2-DES-APP-002-configuration-precedence.md | Configuration precedence resolves discovery settings from user-scoped and project-scoped sources. |
-| specified-by | TBD | TBD | specs/L3/workspace/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-CORE-008 | 2 | specs/L3/core/L3-BEH-CORE-008-project-instruction-discovery.md | L3 defines project root detection, instruction discovery, global instruction inclusion, size bounding, refresh, and diagnostics. |
 
 ## Revision Notes
 
 | Revision | Date | Author | Change Type | Notes |
 |---:|---|---|---|---|
 | 1 | 2026-05-22 | Assistant | Initial | Initial project instruction file discovery design covering filename priority, search algorithm, global instructions, configuration, refresh, and auditability. |
-

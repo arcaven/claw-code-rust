@@ -6,7 +6,7 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-23
+last_updated: 2026-05-26
 ---
 
 # L2-DES-TUI-CMD-001 — Slash Command: /theme
@@ -30,15 +30,17 @@ Define the TUI behavior for `/theme`, which lets the user switch the terminal UI
 ```text
 ┃ /theme
 
-  devo-dark
-  devo-light
-  terminal-default
+> ● devo-dark
+    devo-light
+    terminal-default
 ```
 
 Rules:
 
-- The current theme is preselected.
-- Up and Down move selection; Enter applies; Esc cancels.
+- The current theme is marked with `●`.
+- The row focused by Up and Down navigation is marked with `>`.
+- If the focused row is also the current theme, both markers are shown.
+- Enter applies the focused row; Esc cancels.
 - Theme preview may apply optimistically while the popup is open.
 - If canceled, the TUI restores the previous theme.
 - The selected theme should be persisted after confirmation.
@@ -55,10 +57,11 @@ Rules:
 |---|---|---:|---|---|
 | refines | L1-REQ-TUI-006 | 1 | specs/L1/L1-REQ-TUI-006-command-discovery-control.md | Defines command-specific behavior for a discoverable TUI command. |
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Uses shared slash-command discovery, popup, and invocation behavior. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-004 | 2 | specs/L3/tui/L3-BEH-TUI-004-slash-commands.md | L3 defines consolidated slash command parsing, routing, and theme command behavior. |
 
 ## Revision Notes
 
 | Revision | Date | Author | Change Type | Notes |
 |---:|---|---|---|---|
 | 1 | 2026-05-23 | Assistant | Initial | Initial `/theme` command design. |
+| 1 | 2026-05-26 | Human | Refinement | Updated theme list marker semantics so `>` marks focus and `●` marks the current enabled theme. |

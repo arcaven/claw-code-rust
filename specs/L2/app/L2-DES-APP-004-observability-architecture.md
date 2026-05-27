@@ -265,7 +265,7 @@ Telemetry must not include model prompts, model responses, tool outputs, credent
 | related-to | L2-DES-AGENT-001 | 1 | specs/L2/agent/L2-DES-AGENT-001-execution-engine.md | Execution phases provide the event capture points for observability. |
 | related-to | L2-DES-LLM-003 | 1 | specs/L2/llm/L2-DES-LLM-003-model-usage-observability.md | Defines the model-specific usage and streaming trace data used by this architecture. |
 | related-to | L2-DES-TOOL-001 | 1 | specs/L2/tool/L2-DES-TOOL-001-built-in-tool-system.md | Tool lifecycle events and result summaries feed user-facing diagnostics. |
-| specified-by | TBD | TBD | specs/L3/app/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-APP-002 | 1 | specs/L3/app/L3-BEH-APP-002-observability-runtime.md | Defines structured log records, active diagnostic projection, trace records, redaction, retention, and telemetry runtime behavior. |
 
 ## Revision Notes
 

@@ -95,7 +95,7 @@ When the composer recognizes `/goal`, the command token uses the theme primary c
 | related-to | L1-REQ-GOAL-001 | 1 | specs/L1/L1-REQ-GOAL-001-ralph-loop.md | `/goal` is the TUI control surface for Ralph Loop goals. |
 | related-to | L2-DES-GOAL-001 | 1 | specs/L2/goal/L2-DES-GOAL-001-ralph-loop-goals.md | Defines the goal state model, continuation loop, and protocol behavior controlled by this command. |
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Defines slash-command discovery, inline command rendering, and command submission. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-004 | 2 | specs/L3/tui/L3-BEH-TUI-004-slash-commands.md | L3 defines consolidated slash command parsing, routing, and goal command behavior. |
 
 ## Revision Notes
 

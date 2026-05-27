@@ -29,8 +29,6 @@ Define the TUI behavior for `/clear`, which clears the current TUI transcript vi
 
 ```text
 ┃ /clear
-
-  Transcript view cleared. Session history remains saved.
 ```
 
 Rules:
@@ -54,7 +52,7 @@ Rules:
 | related-to | L1-REQ-TUI-003 | 1 | specs/L1/L1-REQ-TUI-003-transcript.md | Clear affects local transcript presentation, not durable transcript data. |
 | related-to | L2-DES-TUI-004 | 1 | specs/L2/tui/L2-DES-TUI-004-streaming-transcript-and-state.md | Defines durable transcript and live overlay boundaries. |
 | related-to | L2-DES-TUI-003 | 1 | specs/L2/tui/L2-DES-TUI-003-composer-and-input-modes.md | Uses shared slash-command discovery and invocation behavior. |
-| specified-by | TBD | TBD | specs/L3/tui/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-TUI-004 | 2 | specs/L3/tui/L3-BEH-TUI-004-slash-commands.md | L3 defines consolidated slash command parsing, routing, and clear command behavior. |
 
 ## Revision Notes
 

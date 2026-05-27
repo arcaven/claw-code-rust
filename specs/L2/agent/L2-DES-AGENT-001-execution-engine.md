@@ -40,6 +40,7 @@ Those designs do not define what actually happens inside the server after `turn.
 - `L1-REQ-MODEL-001` requires model configuration and capability metadata.
 - `L1-REQ-TOOL-002` requires baseline built-in tools for coding-agent workflows.
 - `L1-REQ-TOOL-001` requires tool safety and redaction.
+- `L1-REQ-APP-003` requires permission modes, sandboxing, user approval for out-of-boundary actions, and visible approval outcomes.
 - `L1-REQ-GOAL-001` requires bounded autonomous Ralph Loop continuation around a durable objective.
 - `L1-REQ-APP-002` requires persistence and recovery behavior.
 - `L1-REQ-APP-011` requires actionable error recovery.
@@ -280,6 +281,7 @@ The final user-facing response should summarize the outcome, changed files where
 | related-to | L1-REQ-CONTEXT-001 | 1 | specs/L1/L1-REQ-CONTEXT-001-management.md | Execution assembles active context for model invocation. |
 | related-to | L1-REQ-LLM-002 | 1 | specs/L1/L1-REQ-LLM-002-tools.md | Execution validates and dispatches model-requested tools. |
 | related-to | L1-REQ-TOOL-001 | 1 | specs/L1/L1-REQ-TOOL-001-safety.md | Tool dispatch applies safety and approval rules. |
+| related-to | L1-REQ-APP-003 | 1 | specs/L1/L1-REQ-APP-003-safety.md | Execution applies permission, sandbox, and approval checks before risky tool execution. |
 | related-to | L1-REQ-TOOL-002 | 1 | specs/L1/L1-REQ-TOOL-002-tools.md | Execution dispatches built-in tools through the tool supervisor. |
 | related-to | L1-REQ-GOAL-001 | 1 | specs/L1/L1-REQ-GOAL-001-ralph-loop.md | Goal-driven continuation turns execute through the normal engine and provide budget accounting signals. |
 | related-to | L2-DES-APP-003 | 1 | specs/L2/app/L2-DES-APP-003-client-server-protocol.md | Protocol requests and events expose execution state to clients. |
@@ -287,7 +289,8 @@ The final user-facing response should summarize the outcome, changed files where
 | related-to | L2-DES-MODEL-001 | 1 | specs/L2/model/L2-DES-MODEL-001-model-provider-binding.md | Model resolution provides runtime invocation profiles. |
 | related-to | L2-DES-TOOL-001 | 1 | specs/L2/tool/L2-DES-TOOL-001-built-in-tool-system.md | Defines tool registry, lifecycle, and plan tool behavior used by dispatch. |
 | related-to | L2-DES-GOAL-001 | 1 | specs/L2/goal/L2-DES-GOAL-001-ralph-loop-goals.md | Defines autonomous goal continuation and model-facing goal update behavior layered on the engine. |
-| specified-by | TBD | TBD | specs/L3/agent/TBD.md | L3 behavior has not been authored yet. |
+| specified-by | L3-BEH-CORE-002 | 1 | specs/L3/core/L3-BEH-CORE-002-turn-execution-engine.md | L3 defines the core turn execution state machine and decision boundaries. |
+| specified-by | L3-BEH-SERVER-001 | 1 | specs/L3/server/L3-BEH-SERVER-001-server-runtime-transport.md | L3 defines server orchestration around core turn execution. |
 
 ## Revision Notes
 
@@ -296,3 +299,4 @@ The final user-facing response should summarize the outcome, changed files where
 | 1 | 2026-05-22 | Assistant | Initial | Initial server-side agent execution engine design. |
 | 1 | 2026-05-22 | Human | Refinement | Linked execution tool dispatch to the built-in tool system and plan tool. |
 | 1 | 2026-05-23 | Human | Refinement | Added goal-driven continuation integration and budget-accounting signal requirements. |
+| 1 | 2026-05-25 | Assistant | Refinement | Linked execution permission and approval checks to `L1-REQ-APP-003` application safety. |
