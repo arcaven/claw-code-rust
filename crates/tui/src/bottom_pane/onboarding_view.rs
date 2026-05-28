@@ -858,7 +858,7 @@ impl OnboardingView {
                     let name_style = if is_selected {
                         Style::default().bold()
                     } else {
-                        Style::default().dim()
+                        Style::default()
                     };
                     lines.push(Line::from(vec![
                         Span::styled(
@@ -869,7 +869,7 @@ impl OnboardingView {
                                 Style::default()
                             },
                         ),
-                        Span::styled("── Custom Model ──", name_style),
+                        Span::styled("Custom Model", name_style),
                     ]));
                     lines.push(Line::from(vec![
                         Span::raw("    "),
@@ -892,24 +892,6 @@ impl OnboardingView {
                         ),
                         Span::styled(item.display_name.clone(), name_style),
                     ]));
-
-                    // Description line with metadata
-                    let mut meta_parts = Vec::new();
-                    if !item.description.is_empty() {
-                        meta_parts.push(item.description.clone());
-                    }
-                    if item.context_window > 0 {
-                        meta_parts.push(format!("{}K ctx", item.context_window / 1000));
-                    }
-                    if !item.thinking_label.is_empty() {
-                        meta_parts.push(item.thinking_label.clone());
-                    }
-                    if !meta_parts.is_empty() {
-                        lines.push(Line::from(vec![
-                            Span::raw("    "),
-                            Span::styled(meta_parts.join(" · "), Style::default().dim()),
-                        ]));
-                    }
                 }
             }
         }

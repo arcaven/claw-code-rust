@@ -417,14 +417,17 @@ impl ChatWidget {
     fn add_busy_configuration_message(&mut self, command: SlashCommand) {
         let noun = match command {
             SlashCommand::Model => "model",
-            SlashCommand::Onboard => "provider",
             SlashCommand::Theme => "theme",
             SlashCommand::Compact => "session",
             SlashCommand::New => "session",
             SlashCommand::Resume => "session",
             SlashCommand::Permissions => "permissions",
             SlashCommand::Diff => "diff",
-            SlashCommand::Goal | SlashCommand::Exit | SlashCommand::Status | SlashCommand::Clear | SlashCommand::Btw => {
+            SlashCommand::Goal
+            | SlashCommand::Exit
+            | SlashCommand::Status
+            | SlashCommand::Clear
+            | SlashCommand::Btw => {
                 return;
             }
         };
@@ -2396,9 +2399,6 @@ impl ChatWidget {
                 self.active_text_items.clear();
                 self.stream_chunking_policy.reset();
                 self.set_status_message("Transcript cleared");
-            }
-            SlashCommand::Onboard => {
-                self.begin_onboarding();
             }
             SlashCommand::Status => {
                 let model = self

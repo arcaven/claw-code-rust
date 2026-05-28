@@ -8,9 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use devo_protocol::{SessionId, TurnId};
+use devo_protocol::SessionId;
+use devo_protocol::TurnId;
 
 use crate::invocation::ToolCallId;
 use crate::tool_spec::ToolSpec;
@@ -326,21 +328,19 @@ mod tests {
         for p in &progress_items {
             let json = serde_json::to_string(p).expect("serialize");
             let restored: ToolProgress = serde_json::from_str(&json).expect("deserialize");
-            match (p, &restored) {
-                (
-                    ToolProgress::OutputDelta { delta: d1 },
-                    ToolProgress::OutputDelta { delta: d2 },
-                ) => {
-                    assert_eq!(d1, d2);
-                }
-                _ => {}
+            if let (
+                ToolProgress::OutputDelta { delta: d1 },
+                ToolProgress::OutputDelta { delta: d2 },
+            ) = (p, &restored)
+            {
+                assert_eq!(d1, d2);
             }
         }
     }
 
     #[test]
     fn tool_terminal_status_all_variants() {
-        let statuses = vec![
+        let statuses = [
             ToolTerminalStatus::Completed,
             ToolTerminalStatus::Denied {
                 reason: "nope".into(),

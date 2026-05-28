@@ -1,16 +1,14 @@
 use anyhow::Result;
+use devo_core::AppConfig;
+use devo_core::AppConfigLoader;
+use devo_core::FileSystemAppConfigLoader;
 use devo_core::ModelCatalog;
 use devo_core::PresetModelCatalog;
 use devo_core::load_config;
 use devo_core::resolve_provider_settings;
-use devo_core::{AppConfig, AppConfigLoader, FileSystemAppConfigLoader};
 use devo_utils::find_devo_home;
 
-pub(crate) async fn run_prompt(
-    input: &str,
-    model_override: Option<&str>,
-    log_level: Option<&str>,
-) -> Result<()> {
+pub(crate) async fn run_prompt(input: &str, log_level: Option<&str>) -> Result<()> {
     if let Some(level) = log_level {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::new(level))
@@ -23,19 +21,14 @@ pub(crate) async fn run_prompt(
 
     let cwd = std::env::current_dir()?;
     let _stored_config = load_config().unwrap_or_default();
-    let mut resolved = resolve_provider_settings()
+    let resolved = resolve_provider_settings()
         .map_err(|e| anyhow::anyhow!("failed to resolve provider: {e}"))?;
-
-    if let Some(model) = model_override {
-        resolved.model = model.to_string();
-    }
 
     let home_dir = find_devo_home()?;
     let app_config = FileSystemAppConfigLoader::new(home_dir.clone())
         .load(Some(cwd.as_path()))
         .unwrap_or_else(|_| AppConfig::default());
-    let provider =
-        devo_server::load_server_provider(&home_dir.join("config.toml"), Some(&resolved.model))?;
+    let provider = devo_server::load_server_provider(&home_dir.join("config.toml"), None)?;
 
     let mut session_state = SessionState::new(
         SessionConfig {

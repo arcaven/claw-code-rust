@@ -9,7 +9,6 @@ pub enum SlashCommand {
     Status,
     Permissions,
     Clear,
-    Onboard,
     Diff,
     Exit,
     Btw,
@@ -27,7 +26,6 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Permissions => "choose what Devo is allowed to do",
             SlashCommand::Clear => "clear the current transcript",
-            SlashCommand::Onboard => "configure model provider connection",
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Btw => "inject text into the current turn immediately",
             SlashCommand::Goal => "view and manage the current goal",
@@ -45,7 +43,6 @@ impl SlashCommand {
             SlashCommand::Status => "status",
             SlashCommand::Permissions => "permissions",
             SlashCommand::Clear => "clear",
-            SlashCommand::Onboard => "onboard",
             SlashCommand::Diff => "diff",
             SlashCommand::Btw => "btw",
             SlashCommand::Goal => "goal",
@@ -62,7 +59,6 @@ impl SlashCommand {
             self,
             SlashCommand::Model
                 | SlashCommand::Theme
-                | SlashCommand::Onboard
                 | SlashCommand::Compact
                 | SlashCommand::Diff
                 | SlashCommand::Goal
@@ -85,7 +81,6 @@ impl std::str::FromStr for SlashCommand {
             "status" => Ok(Self::Status),
             "permissions" | "approvals" => Ok(Self::Permissions),
             "clear" => Ok(Self::Clear),
-            "onboard" => Ok(Self::Onboard),
             "diff" => Ok(Self::Diff),
             "btw" => Ok(Self::Btw),
             "goal" => Ok(Self::Goal),
@@ -105,7 +100,6 @@ pub fn built_in_slash_commands() -> Vec<(&'static str, SlashCommand)> {
         ("status", SlashCommand::Status),
         ("permissions", SlashCommand::Permissions),
         ("clear", SlashCommand::Clear),
-        ("onboard", SlashCommand::Onboard),
         ("diff", SlashCommand::Diff),
         ("goal", SlashCommand::Goal),
         ("btw", SlashCommand::Btw),

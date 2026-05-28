@@ -782,34 +782,6 @@ fn handle_app_command(
                 chat_widget.set_status_message("Loading sessions");
             } else if command == "session new" {
                 worker.start_new_session()?;
-            } else if command.starts_with("onboard ") {
-                let payload = command.trim_start_matches("onboard ");
-                let value: serde_json::Value = serde_json::from_str(payload)?;
-                let model = value
-                    .get("model")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let base_url = value
-                    .get("base_url")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned);
-                let api_key = value
-                    .get("api_key")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned);
-                let provider = context
-                    .model_catalog
-                    .get(&model)
-                    .map(Model::provider_wire_api)
-                    .unwrap_or(context.default_provider);
-                loop_state.pending_onboarding = Some(PendingOnboarding {
-                    provider,
-                    model: model.clone(),
-                    base_url: base_url.clone(),
-                    api_key: api_key.clone(),
-                });
-                worker.validate_provider(provider, model, base_url, api_key)?;
             } else {
                 chat_widget.set_status_message(format!("Unsupported command: {}", command));
             }
