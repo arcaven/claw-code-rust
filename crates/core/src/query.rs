@@ -441,6 +441,9 @@ pub async fn query(
                 devo_protocol::PendingInputKind::UserText { text } => {
                     session.push_message(Message::user(text.clone()));
                 }
+                devo_protocol::PendingInputKind::UserInput { prompt_text, .. } => {
+                    session.push_message(Message::user(prompt_text.clone()));
+                }
                 devo_protocol::PendingInputKind::ToolCallBlockedByHook {
                     tool_use_id,
                     reason,

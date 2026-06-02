@@ -25,6 +25,8 @@ pub fn provider_name_for_endpoint(provider: &ProviderWireApi, base_url: Option<&
 pub(crate) use persistence::non_empty_string;
 pub(crate) use persistence::provider_vendor_from_config;
 pub(crate) use persistence::read_provider_config;
+pub(crate) use persistence::read_provider_config_document;
+pub(crate) use persistence::write_atomic;
 pub(crate) use persistence::write_provider_config;
 
 #[cfg(test)]

@@ -418,7 +418,6 @@ fn default_deferred_tools() -> BTreeSet<String> {
         "websearch",
         "fetch_url",
         "webfetch",
-        "skill",
         "task",
         "multi_tool_use",
         "goal_update",

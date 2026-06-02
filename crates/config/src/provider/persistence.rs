@@ -53,7 +53,9 @@ pub(crate) fn write_provider_config(
 }
 
 /// Reads raw TOML so provider writes can preserve unrelated app config sections.
-fn read_provider_config_document(config_file: &Path) -> Result<Value, ProviderConfigError> {
+pub(crate) fn read_provider_config_document(
+    config_file: &Path,
+) -> Result<Value, ProviderConfigError> {
     if !config_file.exists() {
         return Ok(Value::Table(Default::default()));
     }

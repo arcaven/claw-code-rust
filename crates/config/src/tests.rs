@@ -20,6 +20,7 @@ use super::ProviderDefaultsConfig;
 use super::ProviderVendorConfig;
 use super::SummaryModelSelection;
 use super::UpdatesConfig;
+use crate::BundledSkillsConfig;
 use crate::SkillsConfig;
 use devo_protocol::ProviderModelBinding;
 use devo_protocol::ProviderVendor;
@@ -110,6 +111,9 @@ check_interval_hours = 48
                 user_roots: vec![PathBuf::from("custom-user-skills")],
                 workspace_roots: vec![PathBuf::from("project-skills")],
                 watch_for_changes: false,
+                bundled: Some(BundledSkillsConfig { enabled: true }),
+                include_instructions: Some(true),
+                config: Vec::new(),
             },
             mcp_oauth_credentials_store: Some(OAuthCredentialsStoreMode::default()),
             mcp: super::McpConfig::default(),

@@ -29,9 +29,11 @@ use crate::SkillsConfig;
 use crate::non_empty_string;
 use crate::provider_vendor_from_config;
 use crate::read_provider_config;
+use crate::read_provider_config_document;
 use crate::read_user_auth_config;
 use crate::resolve_provider_settings_from_config_and_auth;
 use crate::upsert_user_auth_api_key;
+use crate::write_atomic;
 use crate::write_provider_config;
 
 /// Stores the fully normalized runtime configuration.
@@ -135,12 +137,7 @@ impl Default for AppConfig {
                     max_files: 14,
                 },
             },
-            skills: SkillsConfig {
-                enabled: true,
-                user_roots: vec![PathBuf::from("skills")],
-                workspace_roots: vec![PathBuf::from("skills")],
-                watch_for_changes: true,
-            },
+            skills: SkillsConfig::default(),
             mcp_oauth_credentials_store: Some(OAuthCredentialsStoreMode::default()),
             mcp: McpConfig::default(),
             provider: ProviderConfigSection::default(),
@@ -294,6 +291,56 @@ impl AppConfigStore {
                 .expect("provider entry should exist after upsert"),
         ))
     }
+
+    /// Persists a path-based skill enablement override in the user config.
+    pub fn set_skill_enabled(&mut self, path: PathBuf, enabled: bool) -> anyhow::Result<()> {
+        if path.as_os_str().is_empty() {
+            anyhow::bail!("skill path must not be empty");
+        }
+
+        let target_config_file = self.user_config_file.as_path();
+        if let Some(parent) = target_config_file.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut document = read_provider_config_document(target_config_file)?;
+        let document = ensure_toml_table(&mut document);
+        let skills = document
+            .entry("skills".to_string())
+            .or_insert_with(|| toml::Value::Table(Default::default()));
+        let skills = ensure_toml_table(skills);
+        let config = skills
+            .entry("config".to_string())
+            .or_insert_with(|| toml::Value::Array(Vec::new()));
+        if !config.is_array() {
+            *config = toml::Value::Array(Vec::new());
+        }
+
+        let path_text = path.display().to_string();
+        let entries = config
+            .as_array_mut()
+            .expect("skills.config should be an array after normalization");
+        entries.retain(|entry| {
+            entry
+                .as_table()
+                .and_then(|table| table.get("path"))
+                .and_then(toml::Value::as_str)
+                != Some(path_text.as_str())
+        });
+
+        let mut entry = toml::map::Map::new();
+        entry.insert("path".to_string(), toml::Value::String(path_text));
+        entry.insert("enabled".to_string(), toml::Value::Boolean(enabled));
+        entries.push(toml::Value::Table(entry));
+
+        let data = toml::to_string_pretty(&document)?;
+        write_atomic(target_config_file, data.as_bytes())?;
+
+        self.config = self
+            .loader
+            .load(self.workspace_root.as_deref())
+            .map_err(|error| anyhow::anyhow!(error))?;
+        Ok(())
+    }
 }
 
 fn validate_provider_model_binding(
@@ -402,6 +449,15 @@ fn provider_section_from_value(
             path: path.to_path_buf(),
             message: source.to_string(),
         })
+}
+
+fn ensure_toml_table(value: &mut toml::Value) -> &mut toml::map::Map<String, toml::Value> {
+    if !value.is_table() {
+        *value = toml::Value::Table(Default::default());
+    }
+    value
+        .as_table_mut()
+        .expect("value should be a TOML table after normalization")
 }
 
 /// Filesystem-backed loader for project and user config files, plus CLI overrides.
@@ -545,6 +601,28 @@ fn validate_app_config(config: &AppConfig) -> Result<(), AppConfigError> {
         return Err(AppConfigError::Validation {
             message: "skills.workspace_roots must not contain duplicate paths".into(),
         });
+    }
+
+    for entry in &config.skills.config {
+        match (entry.path.as_ref(), entry.name.as_deref()) {
+            (Some(_), Some(_)) => {
+                return Err(AppConfigError::Validation {
+                    message: "skills.config entries must select either path or name, not both"
+                        .into(),
+                });
+            }
+            (None, None) => {
+                return Err(AppConfigError::Validation {
+                    message: "skills.config entries must include path or name".into(),
+                });
+            }
+            (None, Some(name)) if name.trim().is_empty() => {
+                return Err(AppConfigError::Validation {
+                    message: "skills.config name selectors must not be empty".into(),
+                });
+            }
+            (Some(_), None) | (None, Some(_)) => {}
+        }
     }
 
     Ok(())

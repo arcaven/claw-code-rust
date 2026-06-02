@@ -16,5 +16,8 @@ pub use provider::*;
 pub use server::*;
 pub use skills::*;
 
+pub(crate) use provider::read_provider_config_document;
+pub(crate) use provider::write_atomic;
+
 #[cfg(test)]
 mod tests;

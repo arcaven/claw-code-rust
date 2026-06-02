@@ -79,6 +79,9 @@ without clearing every omitted provider field from user config.
 - `skills.user_roots = ["skills"]`
 - `skills.workspace_roots = ["skills"]`
 - `skills.watch_for_changes = true`
+- `skills.bundled.enabled = true`
+- `skills.include_instructions = true`
+- `skills.config = []`
 - `updates.enabled = true`
 - `updates.check_on_startup = true`
 - `updates.check_interval_hours = 24`
@@ -116,6 +119,18 @@ enabled = true
 user_roots = ["skills"]
 workspace_roots = ["skills"]
 watch_for_changes = true
+include_instructions = true
+
+[skills.bundled]
+enabled = true
+
+[[skills.config]]
+path = "/path/to/skill/SKILL.md"
+enabled = false
+
+[[skills.config]]
+name = "code-review"
+enabled = true
 
 [updates]
 enabled = true
@@ -139,6 +154,9 @@ permission_preset = "default" # read-only, default, auto-review, or full-access
 - `updates.check_interval_hours` is less than `1`.
 - `skills.user_roots` contains duplicate paths.
 - `skills.workspace_roots` contains duplicate paths.
+- `skills.config` entries include both `path` and `name`.
+- `skills.config` entries include neither `path` nor `name`.
+- `skills.config` name selectors are empty.
 
 Provider-specific validation happens while resolving or mutating provider
 config.
