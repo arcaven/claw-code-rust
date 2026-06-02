@@ -112,6 +112,7 @@ check_interval_hours = 48
                 watch_for_changes: false,
             },
             mcp_oauth_credentials_store: Some(OAuthCredentialsStoreMode::default()),
+            mcp: super::McpConfig::default(),
             provider: ProviderConfigSection::default(),
             updates: UpdatesConfig {
                 enabled: false,

@@ -18,6 +18,7 @@ use crate::AppConfigError;
 use crate::LogRotation;
 use crate::LoggingConfig;
 use crate::LoggingFileConfig;
+use crate::McpConfig;
 use crate::ModelBindingConfig;
 use crate::OAuthCredentialsStoreMode;
 use crate::ProviderConfigError;
@@ -50,6 +51,9 @@ pub struct AppConfig {
     /// auto (default): Use the OS-specific keyring service if available, otherwise use a file.
     #[serde(default)]
     pub mcp_oauth_credentials_store: Option<OAuthCredentialsStoreMode>,
+    /// MCP server discovery and runtime configuration.
+    #[serde(default)]
+    pub mcp: McpConfig,
     /// Provider, model, and active model defaults.
     #[serde(flatten)]
     pub provider: ProviderConfigSection,
@@ -138,6 +142,7 @@ impl Default for AppConfig {
                 watch_for_changes: true,
             },
             mcp_oauth_credentials_store: Some(OAuthCredentialsStoreMode::default()),
+            mcp: McpConfig::default(),
             provider: ProviderConfigSection::default(),
             updates: UpdatesConfig {
                 enabled: true,

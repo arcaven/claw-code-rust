@@ -16,6 +16,7 @@ devo-utils = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.22"
+bm25 = { workspace = true }
 chrono = { workspace = true }
 diffy = { workspace = true }
 futures = { workspace = true }

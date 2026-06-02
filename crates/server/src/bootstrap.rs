@@ -13,6 +13,7 @@ use devo_core::ProviderVendorCatalog;
 use devo_core::SkillsConfig;
 use devo_core::tools::ToolPlanConfig;
 use devo_core::tools::handlers;
+use devo_mcp::manager::RmcpMcpManager;
 use devo_provider::SingleProviderRouter;
 use devo_utils::FileSystemConfigPathResolver;
 
@@ -82,12 +83,29 @@ pub async fn run_server_process(args: ServerProcessArgs) -> Result<()> {
         "loaded server config"
     );
 
-    let registry = handlers::build_registry_from_plan(&ToolPlanConfig::default());
-    let provider = load_server_provider(&config, None, &resolver.user_config_dir())?;
+    let mcp_manager = Arc::new(RmcpMcpManager::new(
+        config.mcp.clone(),
+        config
+            .mcp_oauth_credentials_store
+            .unwrap_or_default(),
+    ));
+    let registry =
+        handlers::build_registry_from_plan_with_mcp(&ToolPlanConfig::default(), mcp_manager).await;
     let model_catalog: Arc<dyn ModelCatalog> = Arc::new(PresetModelCatalog::load_from_config(
         &resolver.user_config_dir(),
         args.working_root.as_deref(),
     )?);
+    let default_model = model_catalog.resolve_for_turn(None)?.slug.clone();
+    if !config.has_provider_configuration() {
+        tracing::warn!(
+            "No provider configured. Run `devo onboard` to complete setup; continuing with onboarding-capable server"
+        );
+    }
+    let provider = load_server_provider(
+        &config,
+        Some(default_model.as_str()),
+        &resolver.user_config_dir(),
+    )?;
     let skill_workspace_root = args.working_root.clone();
     let project_skill_base = skill_workspace_root
         .as_deref()

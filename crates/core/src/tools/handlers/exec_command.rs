@@ -512,9 +512,9 @@ mod tests {
 
     fn test_ctx(cwd: std::path::PathBuf) -> crate::contracts::ToolContext {
         crate::contracts::ToolContext {
-            // session_id: devo_protocol::SessionId::new(),
-            // turn_id: devo_protocol::TurnId::new(),
             tool_call_id: crate::invocation::ToolCallId("test".into()),
+            session_id: "test-session".into(),
+            turn_id: Some("test-turn".into()),
             workspace_root: cwd,
             // permission_profile: crate::contracts::ToolPermissionProfile {
             //     can_read_workspace: true,

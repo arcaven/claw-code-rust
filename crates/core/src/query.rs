@@ -47,6 +47,8 @@ use crate::history::compaction::compact_history;
 use crate::history::summarizer::DefaultHistorySummarizer;
 use crate::response_item::ResponseItem;
 use crate::response_item::message_to_response_items;
+use crate::tool_prompt::build_deferred_tool_prompt_surface;
+use crate::tools::DeferredLoadingConfig;
 
 fn estimate_request_prompt_tokens(request: &ModelRequest) -> usize {
     let system_bytes = request.system.as_ref().map_or(0, String::len);
@@ -496,7 +498,21 @@ pub async fn query(
         info!("starting turn");
 
         // Build model request from the session-locked prefix.
-        let system = session_context.build_system_prompt();
+        let base_system = session_context.build_system_prompt();
+        let deferred_config = DeferredLoadingConfig::default();
+        let loaded_deferred_tools = registry.loaded_deferred_tools();
+        let prompt_surface = {
+            let loaded_deferred_tools = loaded_deferred_tools.lock().map_err(|_| {
+                AgentError::Provider(anyhow::anyhow!("loaded deferred tool state lock poisoned"))
+            })?;
+            build_deferred_tool_prompt_surface(
+                Some(base_system),
+                &registry,
+                &session.id,
+                &loaded_deferred_tools,
+                &deferred_config,
+            )
+        };
 
         // resolve thinking request parameter
         let ResolvedThinkingRequest {
@@ -535,11 +551,7 @@ pub async fn query(
 
         let request = ModelRequest {
             model: request_model,
-            system: if system.is_empty() {
-                None
-            } else {
-                Some(system)
-            },
+            system: prompt_surface.system,
             messages,
             max_tokens: turn_config
                 .model
@@ -547,7 +559,7 @@ pub async fn query(
                 .map_or(session.config.token_budget.max_output_tokens, |value| {
                     value as usize
                 }),
-            tools: Some(registry.tool_definitions()),
+            tools: Some(prompt_surface.tools),
             sampling: SamplingControls {
                 temperature: turn_config.model.temperature,
                 top_p: turn_config.model.top_p,
