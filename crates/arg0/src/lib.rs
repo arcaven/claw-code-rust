@@ -21,6 +21,7 @@ use std::future::Future;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -33,6 +34,7 @@ const LOCK_FILENAME: &str = ".lock";
 
 /// Stack size for Tokio worker threads (16 MB).
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(500);
 
 // ── Public types ───────────────────────────────────────────────────────────
 
@@ -93,13 +95,15 @@ where
     });
 
     let runtime = build_runtime()?;
-    runtime.block_on(async move {
+    let result = runtime.block_on(async move {
         let current_exe = std::env::current_exe().ok();
         let paths = Arg0DispatchPaths {
             devo_self_exe: current_exe,
         };
         main_fn(paths).await
-    })
+    });
+    runtime.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
+    result
 }
 
 // ── argv[0] detection ─────────────────────────────────────────────────────

@@ -24,6 +24,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ChatWidgetInit;
+use crate::chatwidget::MCP_SERVERS_TRANSCRIPT_TITLE;
 use crate::chatwidget::TuiSessionState;
 use crate::events::WorkerEvent;
 use crate::host_overlay::OverlayState;
@@ -279,6 +280,7 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
                 )? {
                     LoopAction::Continue => {}
                     LoopAction::ClearAndExit => {
+                        tracing::info!("interactive loop exiting from tui event");
                         clear_before_exit(&mut tui)?;
                         break;
                     }
@@ -300,6 +302,7 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
                 )? {
                     LoopAction::Continue => {}
                     LoopAction::ClearAndExit => {
+                        tracing::info!("interactive loop exiting from app event");
                         clear_before_exit(&mut tui)?;
                         break;
                     }
@@ -314,6 +317,7 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
                 )? {
                     LoopAction::Continue => {}
                     LoopAction::ClearAndExit => {
+                        tracing::info!("interactive loop exiting from worker event");
                         clear_before_exit(&mut tui)?;
                         break;
                     }
@@ -323,9 +327,13 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
     }
 
     // Tear down the terminal wrapper before awaiting worker shutdown.
+    tracing::info!("dropping tui before terminal restore");
     drop(tui);
+    tracing::info!("restoring terminal before worker shutdown");
     terminal_restore_guard.restore()?;
+    tracing::info!("terminal restored; starting worker shutdown");
     worker.shutdown().await?;
+    tracing::info!("worker shutdown completed; returning app exit");
     Ok(AppExit {
         session_id: loop_state.session_id,
         turn_count: loop_state.turn_count,
@@ -351,7 +359,13 @@ fn resolve_initial_model(
 }
 
 fn clear_before_exit(tui: &mut Tui) -> Result<()> {
-    Ok(tui.shutdown_terminal_safe()?)
+    tracing::info!("clearing tui before exit");
+    let result = tui.shutdown_terminal_safe();
+    tracing::info!(
+        success = result.is_ok(),
+        "finished clearing tui before exit"
+    );
+    Ok(result?)
 }
 
 fn handle_tui_event(
@@ -575,7 +589,8 @@ fn handle_app_event(
         return Ok(LoopAction::ClearAndExit);
     };
 
-    if let AppEvent::Exit(_) = &app_event {
+    if let AppEvent::Exit(mode) = &app_event {
+        tracing::info!(?mode, "host received app exit event");
         return Ok(LoopAction::ClearAndExit);
     }
 
@@ -843,7 +858,8 @@ fn handle_app_command(
                     }) {
                     Ok(app_config) => {
                         let body = crate::mcp_servers::render_mcp_servers_markdown(&app_config.mcp);
-                        chat_widget.add_padded_markdown_history("MCP Servers", &body);
+                        chat_widget
+                            .add_padded_markdown_history(MCP_SERVERS_TRANSCRIPT_TITLE, &body);
                         chat_widget.set_status_message("MCP servers loaded");
                     }
                     Err(error) => {

@@ -53,6 +53,7 @@ impl ChatWidget {
 
         match command {
             SlashCommand::Exit => {
+                tracing::info!("slash /exit dispatched from chat widget");
                 self.app_event_tx
                     .send(AppEvent::Exit(crate::app_event::ExitMode::ShutdownFirst));
             }

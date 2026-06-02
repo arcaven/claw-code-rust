@@ -24,6 +24,7 @@ use super::ActiveToolCall;
 use super::ChatWidget;
 use super::DotStatus;
 use super::PendingApprovalRequest;
+use super::SKILLS_TRANSCRIPT_TITLE;
 use super::text_stream::ActiveTextItemId;
 
 impl ChatWidget {
@@ -612,7 +613,7 @@ impl ChatWidget {
             } => {
                 self.bottom_pane.set_skill_mentions(Some(skills));
                 if show_in_transcript {
-                    self.add_padded_markdown_history("Skills", &body);
+                    self.add_padded_markdown_history(SKILLS_TRANSCRIPT_TITLE, &body);
                     self.set_status_message("Skills loaded");
                 }
             }

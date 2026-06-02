@@ -68,9 +68,13 @@ use self::resume_browser::ResumeBrowserState;
 
 use self::text_stream::ActiveTextItem;
 
+pub(crate) const MCP_SERVERS_TRANSCRIPT_TITLE: &str = "⬡  MCP Servers";
+pub(crate) const SKILLS_TRANSCRIPT_TITLE: &str = "▦  Skills";
+
 #[cfg(test)]
 pub(crate) use self::thinking::ThinkingListEntry;
-pub(crate) use self::transcript_view::{ActiveCellTranscriptKey, TranscriptOverlayCell};
+pub(crate) use self::transcript_view::ActiveCellTranscriptKey;
+pub(crate) use self::transcript_view::TranscriptOverlayCell;
 
 /// Common initialization parameters shared by `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {

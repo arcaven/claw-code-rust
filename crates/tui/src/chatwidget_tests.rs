@@ -1082,6 +1082,24 @@ fn slash_command_list_does_not_include_thinking() {
 }
 
 #[test]
+fn trailing_space_exit_slash_command_exits() {
+    let model = Model {
+        slug: "test-model".to_string(),
+        display_name: "Test Model".to_string(),
+        ..Model::default()
+    };
+    let (mut widget, mut app_event_rx) = widget_with_model(model, PathBuf::from("."));
+
+    widget.handle_paste("/exit ".to_string());
+    widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        app_event_rx.try_recv().ok(),
+        Some(AppEvent::Exit(crate::app_event::ExitMode::ShutdownFirst))
+    );
+}
+
+#[test]
 fn busy_widget_blocks_model_change_with_transcript_message() {
     let model = Model {
         slug: "test-model".to_string(),

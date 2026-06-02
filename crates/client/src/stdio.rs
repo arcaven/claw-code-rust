@@ -311,12 +311,18 @@ impl StdioServerClient {
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
+        tracing::info!("stdio server client shutdown requested");
         let _ = timeout(SERVER_CHILD_STDIN_SHUTDOWN_TIMEOUT, self.stdin.shutdown()).await;
+        tracing::info!("stdio server stdin shutdown attempted");
         if let Err(error) = self.child.start_kill() {
             tracing::debug!(%error, "failed to start stdio server child kill");
+        } else {
+            tracing::info!("stdio server child kill requested");
         }
         match timeout(SERVER_CHILD_EXIT_TIMEOUT, self.child.wait()).await {
-            Ok(Ok(_status)) => {}
+            Ok(Ok(status)) => {
+                tracing::info!(?status, "stdio server child exited during shutdown");
+            }
             Ok(Err(error)) => {
                 tracing::debug!(%error, "failed to wait for stdio server child exit");
             }

@@ -404,17 +404,26 @@ impl QueryWorkerHandle {
 
     /// Stops the worker task and waits briefly for it to finish.
     pub(crate) async fn shutdown(self) -> Result<()> {
+        tracing::info!("query worker shutdown requested");
         let _ = self.command_tx.send(OperationCommand::Shutdown);
         let mut join_handle = self.join_handle;
         tokio::select! {
             result = &mut join_handle => {
+                tracing::info!("query worker joined during graceful shutdown");
                 map_worker_join_result(result)
             }
             _ = tokio::time::sleep(WORKER_SHUTDOWN_GRACE) => {
+                tracing::warn!("query worker did not stop during grace period; aborting task");
                 join_handle.abort();
                 match tokio::time::timeout(WORKER_ABORT_JOIN_TIMEOUT, &mut join_handle).await {
-                    Ok(result) => map_worker_join_result(result),
-                    Err(_) => Ok(()),
+                    Ok(result) => {
+                        tracing::info!("query worker abort join completed");
+                        map_worker_join_result(result)
+                    }
+                    Err(_) => {
+                        tracing::warn!("timed out waiting for aborted query worker task");
+                        Ok(())
+                    }
                 }
             }
         }
@@ -1347,6 +1356,7 @@ async fn run_worker_inner(
                         let _ = event_tx.send(WorkerEvent::InputHistoryLoaded { direction, text });
                     }
                     Some(OperationCommand::Shutdown) | None => {
+                        tracing::info!("query worker received shutdown command");
                         break;
                     }
                 }
@@ -1665,7 +1675,9 @@ async fn run_worker_inner(
         }
     }
 
+    tracing::info!("query worker shutting down stdio client");
     client.shutdown().await?;
+    tracing::info!("query worker stdio client shutdown completed");
     Ok(())
 }
 
