@@ -167,8 +167,8 @@ fn normalize_scopes(scopes_supported: Option<Vec<String>>) -> Option<Vec<String>
 
 /// Implements RFC 8414 section 3.1 for discovering well-known oauth endpoints.
 /// This is a requirement for MCP servers to support OAuth.
-/// https://datatracker.ietf.org/doc/html/rfc8414#section-3.1
-/// https://github.com/modelcontextprotocol/rust-sdk/blob/main/crates/rmcp/src/transport/auth.rs#L182
+/// <https://datatracker.ietf.org/doc/html/rfc8414#section-3.1>
+/// <https://github.com/modelcontextprotocol/rust-sdk/blob/main/crates/rmcp/src/transport/auth.rs#L182>
 fn discovery_paths(base_path: &str) -> Vec<String> {
     let trimmed = base_path.trim_start_matches('/').trim_end_matches('/');
     let canonical = "/.well-known/oauth-authorization-server".to_string();

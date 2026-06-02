@@ -2633,7 +2633,6 @@ mod tests {
     use crate::events::TranscriptItem;
     use crate::events::TranscriptItemKind;
     use crate::events::WorkerEvent;
-    use crate::markdown_render::render_markdown_text;
     use devo_core::ItemId;
     use devo_protocol::SessionHistoryMetadata;
     use devo_protocol::SessionPlanStepStatus;
@@ -2744,7 +2743,7 @@ mod tests {
             plugin_id: None,
         }]);
 
-        let lines = render_markdown_text(&body)
+        let lines = crate::markdown_render::render_markdown_text(&body)
             .lines
             .into_iter()
             .map(|line| {
