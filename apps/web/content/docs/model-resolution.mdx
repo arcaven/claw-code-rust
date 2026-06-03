@@ -12,11 +12,19 @@ Devo chooses the active model binding in this order:
    `model_name`.
 3. The first enabled model binding.
 
+`model_slug` is the local catalog key matching a `slug` in the effective
+`models.json` catalog. `model_name` is the provider-specific model string sent
+on the wire, so it may differ from `model_slug`. Turn metadata keeps both
+values separate: `model` records the catalog slug, while `request_model`
+records the provider request model. If both values are the same, the request
+uses that shared value.
+
 ## Validation
 
 Resolution requires:
 
 - The selected binding is enabled.
+- The binding's `model_slug` exists in the effective model catalog.
 - The referenced provider exists and is enabled.
 - The binding invocation method is supported by the provider.
 - The provider credential reference exists in `auth.json`, when one is

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,7 +46,45 @@ impl Default for SessionConfig {
 #[derive(Debug, Clone)]
 pub struct TurnConfig {
     pub model: Model,
+    pub request_model: String,
+    pub variant_request_models: HashMap<String, String>,
     pub thinking_selection: Option<String>,
+}
+
+impl TurnConfig {
+    pub fn new(model: Model, thinking_selection: Option<String>) -> Self {
+        let request_model = model.slug.clone();
+        Self {
+            model,
+            request_model,
+            variant_request_models: HashMap::new(),
+            thinking_selection,
+        }
+    }
+
+    pub fn with_request_model(
+        model: Model,
+        request_model: String,
+        variant_request_models: HashMap<String, String>,
+        thinking_selection: Option<String>,
+    ) -> Self {
+        Self {
+            model,
+            request_model,
+            variant_request_models,
+            thinking_selection,
+        }
+    }
+
+    pub fn provider_request_model(&self, resolved_catalog_model: &str) -> String {
+        if resolved_catalog_model == self.model.slug {
+            return self.request_model.clone();
+        }
+        self.variant_request_models
+            .get(resolved_catalog_model)
+            .cloned()
+            .unwrap_or_else(|| resolved_catalog_model.to_string())
+    }
 }
 
 /// Mutable state for one conversation session.

@@ -248,6 +248,7 @@ After a binding is selected, resolution requires:
 - The binding's `provider` exists in `[providers]`.
 - The provider is enabled.
 - The binding is enabled.
+- The binding's `model_slug` exists in the effective model catalog.
 - If the provider lists `wire_apis`, the binding's `invocation_method` is in
   that list.
 - If the provider references a credential, that credential exists in
@@ -256,6 +257,13 @@ After a binding is selected, resolution requires:
 The resolved runtime settings contain the provider id, wire API, final model
 name, optional base URL, optional API key, model limits, thinking selection,
 response-storage flag, and preferred auth method.
+
+`model_slug` is the local catalog key matching a `slug` in the effective
+`models.json` catalog. `model_name` is the provider-specific model name used for
+the API request. The effective catalog is read at startup from built-in defaults,
+`<DEVO_HOME>/models.json`, then `<workspace>/.devo/models.json`, merged by
+`slug`. Turn metadata records `model` as the catalog slug and `request_model` as
+the provider request model; these values may be identical.
 
 ## Writing Provider Config
 

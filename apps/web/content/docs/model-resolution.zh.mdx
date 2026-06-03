@@ -11,11 +11,17 @@ Devo 按以下顺序选择当前模型绑定：
 2. 顶层 `model`，如果它匹配某个绑定的 `model_slug` 或 `model_name`。
 3. 第一个启用的模型绑定。
 
+`model_slug` 是本地 catalog key，匹配有效 `models.json` catalog 中的
+`slug`。`model_name` 是发送给提供方的模型字符串，因此可以和
+`model_slug` 不同。Turn metadata 会同时保留两者：`model` 记录 catalog
+slug，`request_model` 记录提供方请求模型。如果两者相同，请求会使用这个共同值。
+
 ## 验证
 
 解析要求：
 
 - 选中的绑定已启用。
+- 绑定的 `model_slug` 存在于有效模型 catalog 中。
 - 引用的提供方存在并已启用。
 - 绑定的调用方式受到该提供方支持。
 - 如果提供方配置了凭证引用，该凭证必须存在于 `auth.json`。

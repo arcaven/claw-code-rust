@@ -50,9 +50,13 @@ pub fn load_server_provider(
 
     if app_config.provider.model_providers.is_empty() {
         let resolved = app_config.resolve_provider_settings(user_config_dir)?;
+        let default_model = active_model_binding(&app_config.provider)
+            .map(|binding| binding.model_slug.clone())
+            .or_else(|| default_model.map(ToOwned::to_owned))
+            .unwrap_or(resolved.model);
         return build_server_provider(
             resolved.wire_api,
-            resolved.model,
+            default_model,
             resolved.base_url,
             resolved.api_key,
         );
@@ -193,7 +197,6 @@ fn resolve_provider_api_key(
     Ok(Some(credential.value.clone()))
 }
 
-#[cfg(test)]
 fn active_model_binding(config: &ProviderConfigSection) -> Option<&devo_core::ModelBindingConfig> {
     config
         .defaults
