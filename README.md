@@ -275,6 +275,8 @@ capabilities from the effective catalog entry with `"slug": "deepseek-v4-pro"`,
 while `model_name = "deepseek/deepseek-v4-pro"` is sent to the provider.
 `context_window`, `effective_context_window_percent`, and `max_tokens` are read
 from the effective catalog at startup.
+If thinking selects a model-variant slug, the provider request model is resolved
+from enabled bindings for the same provider as the selected turn binding.
 
 The `/model` slash command in the TUI shows only models you have configured
 with credentials in `config.toml`, not the full catalog.
