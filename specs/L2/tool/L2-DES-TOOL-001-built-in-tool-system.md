@@ -6,7 +6,7 @@ active_baseline: no
 supersedes:
 superseded_by:
 owner: Assistant
-last_updated: 2026-05-25
+last_updated: 2026-06-04
 ---
 
 # L2-DES-TOOL-001 — Built-In Tool System
@@ -142,7 +142,7 @@ The baseline built-in tool set should cover these categories:
 |---|---|---|
 | File read | Inspect file contents and metadata. | read file, list directory. |
 | File mutation | Create, edit, delete, or rename files through structured operations. | write, apply patch. |
-| Search | Find files or content in the workspace. | file-name search, content search. |
+| Search | Find files, literal content, or semantically relevant code in the workspace. | file-name search, content search, semantic code retrieval. |
 | Command execution | Run shell commands with bounded output. | one-shot command execution. |
 | Background process | Track long-running commands and process stdin. | dev server, test watcher, interactive command. |
 | Planning | Maintain visible task plan state. | plan tool. |
@@ -154,6 +154,26 @@ The baseline built-in tool set should cover these categories:
 | Parallel orchestration | Execute an explicit group of valid tool calls concurrently. | `multi_tool_use`. |
 
 Exact tool names and schemas are L3 concerns. This L2 design defines the categories and lifecycle constraints.
+
+## Semantic Code Retrieval
+
+The built-in search category may include a read-only semantic code retrieval tool for agent codebase navigation. This tool complements literal content search rather than replacing it.
+
+The semantic retrieval tool should:
+
+- Accept a search operation for natural-language or code-symbol queries.
+- Accept a related-code operation that starts from a workspace file path and 1-indexed line number.
+- Restrict all roots and source paths to the active workspace boundary.
+- Support content filters for code, docs, config, and all indexed non-data text.
+- Return bounded structured JSON results containing score, workspace-relative file path, line range, language, and chunk content.
+- Use workspace search permissions and remain eligible for parallel read-only execution.
+- Chunk supported programming and structured config languages with tree-sitter AST boundaries, while using line-based fallback for docs, data, unsupported language labels, parser errors, or empty AST output.
+- Cache indexes locally when possible, while invalidating them when the indexed file manifest, content mode, or embedding model changes.
+- Refresh cached indexes incrementally when possible, re-embedding changed files while reusing unchanged file records, and use watcher-backed warm reuse only when the watched root is clean and within a bounded safety interval.
+- Store local vector cache data in compact binary form where practical, and use approximate nearest-neighbor candidate search plus exact reranking for large semantic indexes while preserving exact fallbacks for filtered or small searches.
+- Return a structured unavailable result when the embedding model cannot be loaded or cached, rather than fabricating semantic results.
+
+The initial retrieval design uses hybrid ranking: dense code embeddings, BM25 sparse retrieval over code-aware identifier tokens, reciprocal-rank fusion, and code-aware reranking that can boost symbol definitions and path matches while de-emphasizing tests, examples, docs, compatibility, and legacy paths.
 
 ## Tool Invocation Lifecycle
 
@@ -386,3 +406,7 @@ Live server-client events may be more frequent than durable records, but replay 
 | 1 | 2026-05-25 | Human | Refinement | Renamed tool metadata from `approval_policy` to `permission_policy` and separated permission policy from sandbox enforcement direction. |
 | 1 | 2026-05-25 | Assistant | Refinement | Added `L1-REQ-APP-003` as the application-safety source for tool permission, sandbox, and approval behavior. |
 | 1 | 2026-05-26 | Assistant | Refinement | Linked `multi_tool_use` behavior to `L2-DES-TOOL-002` and removed runtime-selected serialization wording. |
+| 1 | 2026-06-04 | Assistant | Refinement | Added read-only semantic code retrieval as a workspace search capability with structured output, model-unavailable behavior, and cache invalidation expectations. |
+| 1 | 2026-06-04 | Assistant | Refinement | Clarified semantic code retrieval cache refresh as incremental per-file re-embedding with watcher-backed warm reuse bounded by a safety interval. |
+| 1 | 2026-06-04 | Assistant | Refinement | Clarified semantic code retrieval performance internals for binary vector cache storage, ANN candidate search with exact reranking, and exact fallbacks. |
+| 1 | 2026-06-04 | Assistant | Refinement | Clarified semantic code retrieval chunking as tree-sitter AST chunking for supported programming/config languages with line fallback for docs, data, unsupported labels, and parser failures. |

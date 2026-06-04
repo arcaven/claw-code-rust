@@ -26,6 +26,12 @@ use devo_protocol::ProviderVendorListParams;
 use devo_protocol::ProviderVendorListResult;
 use devo_protocol::ProviderVendorUpsertParams;
 use devo_protocol::ProviderVendorUpsertResult;
+use devo_protocol::ReferenceSearchCancelParams;
+use devo_protocol::ReferenceSearchCancelResult;
+use devo_protocol::ReferenceSearchStartParams;
+use devo_protocol::ReferenceSearchStartResult;
+use devo_protocol::ReferenceSearchUpdateParams;
+use devo_protocol::ReferenceSearchUpdateResult;
 use devo_protocol::ServerEvent;
 use devo_protocol::SessionCompactParams;
 use devo_protocol::SessionCompactResult;
@@ -291,6 +297,27 @@ impl StdioServerClient {
     pub async fn approval_respond(&mut self, params: ApprovalRespondParams) -> Result<()> {
         let _: serde_json::Value = self.request("approval/respond", params).await?;
         Ok(())
+    }
+
+    pub async fn reference_search_start(
+        &mut self,
+        params: ReferenceSearchStartParams,
+    ) -> Result<ReferenceSearchStartResult> {
+        self.request("search/start", params).await
+    }
+
+    pub async fn reference_search_update(
+        &mut self,
+        params: ReferenceSearchUpdateParams,
+    ) -> Result<ReferenceSearchUpdateResult> {
+        self.request("search/update", params).await
+    }
+
+    pub async fn reference_search_cancel(
+        &mut self,
+        params: ReferenceSearchCancelParams,
+    ) -> Result<ReferenceSearchCancelResult> {
+        self.request("search/cancel", params).await
     }
 
     pub async fn recv_notification(&mut self) -> Option<ServerNotificationMessage> {

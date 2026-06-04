@@ -34,10 +34,16 @@ impl ServerRuntime {
     pub async fn unregister_connection(&self, connection_id: u64) {
         let mut connections = self.connections.lock().await;
         let removed = connections.remove(&connection_id);
+        drop(connections);
+        self.reference_searches
+            .lock()
+            .await
+            .retain(|_, state| state.connection_id() != connection_id);
+        let active_connections = self.connections.lock().await.len();
         tracing::info!(
             connection_id,
             transport = ?removed.as_ref().map(|connection| connection.transport.clone()),
-            active_connections = connections.len(),
+            active_connections,
             "unregistered client connection"
         );
     }
@@ -145,6 +151,16 @@ impl ServerRuntime {
             // client approval result
             Some(ClientMethod::ApprovalRespond) => {
                 Some(self.handle_approval_respond(id?, params).await)
+            }
+            Some(ClientMethod::SearchStart) => Some(
+                self.handle_reference_search_start(connection_id, id?, params)
+                    .await,
+            ),
+            Some(ClientMethod::SearchUpdate) => {
+                Some(self.handle_reference_search_update(id?, params).await)
+            }
+            Some(ClientMethod::SearchCancel) => {
+                Some(self.handle_reference_search_cancel(id?, params).await)
             }
             Some(ClientMethod::EventsSubscribe) => Some(
                 self.handle_events_subscribe(connection_id, id?, params)

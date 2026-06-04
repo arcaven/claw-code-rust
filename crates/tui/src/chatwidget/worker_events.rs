@@ -617,6 +617,9 @@ impl ChatWidget {
                     self.set_status_message("Skills loaded");
                 }
             }
+            WorkerEvent::ReferenceSearchUpdated { snapshot } => {
+                self.bottom_pane.on_reference_search_result(snapshot);
+            }
             WorkerEvent::NewSessionPrepared {
                 cwd,
                 model,

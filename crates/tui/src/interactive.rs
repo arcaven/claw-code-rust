@@ -131,6 +131,7 @@ struct AppCommandContext<'a, M: ModelCatalog> {
     default_provider: ProviderWireApi,
     cwd: &'a Path,
     project_config_key: &'a str,
+    app_event_tx: &'a AppEventSender,
 }
 
 /// RAII guard that restores terminal modes exactly once after the TUI loop ends.
@@ -212,6 +213,7 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
     // App events come from widgets and request host-level actions such as commands or exit.
     let (app_event_tx, mut app_event_rx) = mpsc::channel(APP_EVENT_CHANNEL_CAPACITY);
     let app_event_sender = AppEventSender::new_bounded(app_event_tx);
+    let host_app_event_sender = app_event_sender.clone();
 
     // Resolve model metadata for the chat widget, falling back to the session slug.
     let available_models = config
@@ -298,6 +300,7 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
                         default_provider: initial_session.provider,
                         cwd: &cwd,
                         project_config_key: &project_config_key,
+                        app_event_tx: &host_app_event_sender,
                     },
                 )? {
                     LoopAction::Continue => {}
@@ -602,6 +605,25 @@ fn handle_app_event(
         return Ok(LoopAction::Continue);
     }
 
+    match &app_event {
+        AppEvent::ReferenceSearchRequested { query } => {
+            if let Err(error) = worker.reference_search_requested(query.clone()) {
+                tracing::warn!(?error, "failed to request composer reference search");
+            }
+            return Ok(LoopAction::Continue);
+        }
+        AppEvent::ReferenceSearchCancelled => {
+            if let Err(error) = worker.reference_search_cancelled() {
+                tracing::warn!(?error, "failed to cancel composer reference search");
+            }
+            return Ok(LoopAction::Continue);
+        }
+        AppEvent::ReferenceSearchResults { .. } => {
+            chat_widget.handle_app_event(app_event);
+            return Ok(LoopAction::Continue);
+        }
+        _ => {}
+    }
     if let AppEvent::Command(command) = &app_event {
         chat_widget.handle_app_event(app_event.clone());
         // Commands that affect sessions, providers, or turns are forwarded to the worker.
@@ -618,7 +640,6 @@ fn handle_app_event(
 
     Ok(LoopAction::Continue)
 }
-
 fn handle_worker_event(
     worker_event: Option<WorkerEvent>,
     worker: &QueryWorkerHandle,
@@ -748,6 +769,7 @@ fn handle_worker_event(
         | WorkerEvent::ProviderVendorsListed { .. }
         | WorkerEvent::SessionsListed { .. }
         | WorkerEvent::SkillsListed { .. }
+        | WorkerEvent::ReferenceSearchUpdated { .. }
         | WorkerEvent::NewSessionPrepared { .. }
         | WorkerEvent::SessionRenamed { .. }
         | WorkerEvent::SessionTitleUpdated { .. }

@@ -5,6 +5,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use devo_protocol::ReferenceSearchSnapshot;
 use devo_protocol::user_input::TextElement;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -21,13 +22,13 @@ pub(crate) mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
-mod file_search_popup;
 mod footer;
 pub(crate) mod list_selection_view;
 mod paste_burst;
 mod pending_thread_approvals;
 pub(crate) mod popup_consts;
 mod prompt_args;
+mod reference_popup;
 pub(crate) mod scroll_state;
 mod selection_popup_common;
 mod skill_popup;
@@ -194,10 +195,7 @@ impl BottomPane {
             enhanced_keys_supported,
             placeholder_text.clone(),
             disable_paste_burst,
-            ChatComposerConfig {
-                file_search_enabled: false,
-                ..ChatComposerConfig::default()
-            },
+            ChatComposerConfig::default(),
         );
         composer.set_frame_requester(frame_requester.clone());
         composer.set_skill_mentions(skills);
@@ -230,6 +228,11 @@ impl BottomPane {
 
     pub(crate) fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_reference_search_result(&mut self, snapshot: ReferenceSearchSnapshot) {
+        self.composer.on_reference_search_result(snapshot);
         self.request_redraw();
     }
 

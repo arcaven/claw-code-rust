@@ -138,6 +138,7 @@ mod items;
 mod lifecycle;
 mod model_api;
 mod provider_vendor_api;
+mod reference_search;
 mod skills;
 mod turn_exec;
 
@@ -158,6 +159,9 @@ pub struct ServerRuntime {
     goal_stores: Mutex<HashMap<SessionId, GoalStore>>,
     /// Per-root-session agent registries for subagent coordination.
     agent_registries: Mutex<HashMap<SessionId, AgentRegistry>>,
+    /// Live client-owned reference search sessions.
+    reference_searches:
+        Mutex<HashMap<devo_protocol::ReferenceSearchId, reference_search::ReferenceSearchState>>,
 }
 
 impl ServerRuntime {
@@ -179,6 +183,7 @@ impl ServerRuntime {
             next_connection_id: AtomicU64::new(1),
             goal_stores: Mutex::new(HashMap::new()),
             agent_registries: Mutex::new(HashMap::new()),
+            reference_searches: Mutex::new(HashMap::new()),
         })
     }
 }

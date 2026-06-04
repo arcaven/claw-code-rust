@@ -3,7 +3,7 @@
 //! It is responsible for:
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
-//! - Routing keys to the active popup (slash commands, file search, skill/apps mentions).
+//! - Routing keys to the active popup (slash commands, `@` reference search, `$` skill mentions).
 //! - Promoting typed slash commands into atomic elements when the command name is completed.
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
@@ -145,7 +145,6 @@ use super::chat_composer_history::HistoryEntry;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
-use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
@@ -169,6 +168,8 @@ use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::reference_popup::ReferencePopup;
+use super::reference_popup::ReferenceSelection;
 use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use super::slash_commands;
@@ -180,6 +181,7 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use devo_protocol::ReferenceSearchSnapshot;
 use devo_protocol::user_input::TextElement;
 use devo_protocol::user_input::Utf8ByteSpan as ByteRange;
 
@@ -196,7 +198,6 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::tui::frame_requester::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use devo_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -252,13 +253,13 @@ struct ActiveLargePaste {
 /// specific behaviors by constructing a config with those flags set to `false`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ChatComposerConfig {
-    /// Whether command/file/skill popups are allowed to appear.
+    /// Whether command/reference/skill popups are allowed to appear.
     pub(crate) popups_enabled: bool,
     /// Whether `/...` input is parsed and dispatched as slash commands.
     pub(crate) slash_commands_enabled: bool,
     /// Whether pasting a file path can attach local images.
     pub(crate) image_paste_enabled: bool,
-    /// Whether `@...` file-search popups are available.
+    /// Whether `@...` reference popups include file-search results.
     pub(crate) file_search_enabled: bool,
 }
 
@@ -370,7 +371,7 @@ struct ComposerMentionBinding {
 enum ActivePopup {
     None,
     Command(CommandPopup),
-    File(FileSearchPopup),
+    Reference(ReferencePopup),
     Skill(SkillPopup),
 }
 
@@ -592,6 +593,13 @@ impl ChatComposer {
         self.config.file_search_enabled
     }
 
+    fn cancel_file_search(&mut self) {
+        if self.current_file_query.is_some() {
+            self.app_event_tx.send(AppEvent::ReferenceSearchCancelled);
+            self.current_file_query = None;
+        }
+    }
+
     #[allow(dead_code)]
     #[cfg(target_os = "windows")]
     pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
@@ -609,7 +617,9 @@ impl ChatComposer {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
-            ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::Reference(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
             ActivePopup::Skill(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
@@ -1152,23 +1162,20 @@ impl ChatComposer {
     }
 
     #[allow(dead_code)]
-    /// Integrate results from an asynchronous file search.
-    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
-        // Only apply if user is still editing a token starting with `query`.
-        let current_opt = Self::current_at_token(&self.textarea);
-        let Some(current_token) = current_opt else {
+    /// Integrate results from an asynchronous reference search.
+    pub(crate) fn on_reference_search_result(&mut self, snapshot: ReferenceSearchSnapshot) {
+        let Some(current_token) = Self::current_at_token(&self.textarea) else {
             return;
         };
 
-        if !current_token.starts_with(&query) {
+        if current_token != snapshot.query {
             return;
         }
 
-        if let ActivePopup::File(popup) = &mut self.active_popup {
-            popup.set_matches(&query, matches);
+        if let ActivePopup::Reference(popup) = &mut self.active_popup {
+            popup.set_snapshot(snapshot);
         }
     }
-
     #[allow(dead_code)]
     /// Show the transient "press again to quit" hint for `key`.
     ///
@@ -1318,7 +1325,7 @@ impl ChatComposer {
 
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
-            ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
+            ActivePopup::Reference(_) => self.handle_key_event_with_reference_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
@@ -1327,7 +1334,7 @@ impl ChatComposer {
         result
     }
 
-    /// Return true if either the slash-command popup or the file-search popup is active.
+    /// Return true if any composer popup is active.
     pub(crate) fn popup_active(&self) -> bool {
         !matches!(self.active_popup, ActivePopup::None)
     }
@@ -1541,26 +1548,20 @@ impl ChatComposer {
         (InputResult::None, true)
     }
 
-    /// Handle key events when file search popup is visible.
-    fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+    /// Handle key events when the combined reference popup is visible.
+    fn handle_key_event_with_reference_popup(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
         if Self::is_modified_enter(&key_event) {
             return self.handle_input_basic(key_event);
         }
-        if key_event.code == KeyCode::Esc {
-            let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
-            if next_mode != self.footer_mode {
-                self.footer_mode = next_mode;
-                return (InputResult::None, true);
-            }
-        } else {
+        if key_event.code != KeyCode::Esc {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
-        let ActivePopup::File(popup) = &mut self.active_popup else {
-            unreachable!();
-        };
 
         match key_event {
             KeyEvent {
@@ -1571,7 +1572,9 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                popup.move_up();
+                if let ActivePopup::Reference(popup) = &mut self.active_popup {
+                    popup.move_up();
+                }
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -1583,16 +1586,18 @@ impl ChatComposer {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                popup.move_down();
+                if let ActivePopup::Reference(popup) = &mut self.active_popup {
+                    popup.move_down();
+                }
                 (InputResult::None, true)
             }
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                // Hide popup without modifying text, remember token to avoid immediate reopen.
                 if let Some(tok) = Self::current_at_token(&self.textarea) {
                     self.dismissed_file_popup_token = Some(tok);
                 }
+                self.cancel_file_search();
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
@@ -1604,70 +1609,79 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                let Some(sel) = popup.selected_match() else {
+                let selected = match &self.active_popup {
+                    ActivePopup::Reference(popup) => popup.selected_reference(),
+                    _ => None,
+                };
+                let Some(selection) = selected else {
+                    if let Some(tok) = Self::current_at_token(&self.textarea) {
+                        self.dismissed_file_popup_token = Some(tok);
+                    }
+                    self.cancel_file_search();
                     self.active_popup = ActivePopup::None;
-                    return if key_event.code == KeyCode::Enter {
-                        self.handle_key_event_without_popup(key_event)
-                    } else {
-                        (InputResult::None, true)
-                    };
+                    return (InputResult::None, true);
                 };
 
-                let sel_path = sel.to_string_lossy().to_string();
-                // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
-                let is_image = Self::is_image_path(&sel_path);
-                if is_image {
-                    // Determine dimensions; if that fails fall back to normal path insertion.
-                    let path_buf = PathBuf::from(&sel_path);
-                    match image::image_dimensions(&path_buf) {
-                        Ok((width, height)) => {
-                            tracing::debug!("selected image dimensions={}x{}", width, height);
-                            // Remove the current @token (mirror logic from insert_selected_path without inserting text)
-                            // using the flat text and byte-offset cursor API.
-                            let cursor_offset = self.textarea.cursor();
-                            let text = self.textarea.text();
-                            // Clamp to a valid char boundary to avoid panics when slicing.
-                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-                            let before_cursor = &text[..safe_cursor];
-                            let after_cursor = &text[safe_cursor..];
-
-                            // Determine token boundaries in the full text.
-                            let start_idx = before_cursor
-                                .char_indices()
-                                .rfind(|(_, c)| c.is_whitespace())
-                                .map(|(idx, c)| idx + c.len_utf8())
-                                .unwrap_or(0);
-                            let end_rel_idx = after_cursor
-                                .char_indices()
-                                .find(|(_, c)| c.is_whitespace())
-                                .map(|(idx, _)| idx)
-                                .unwrap_or(after_cursor.len());
-                            let end_idx = safe_cursor + end_rel_idx;
-
-                            self.textarea.replace_range(start_idx..end_idx, "");
-                            self.textarea.set_cursor(start_idx);
-
-                            self.attach_image(path_buf);
-                            // Add a trailing space to keep typing fluid.
-                            self.textarea.insert_str(" ");
+                match selection {
+                    ReferenceSelection::Skill { insert_text, path } => {
+                        self.insert_selected_mention(&insert_text, path.as_deref());
+                    }
+                    ReferenceSelection::Mcp { insert_text, path } => {
+                        if let Some(token) = insert_text.strip_prefix('@') {
+                            self.dismissed_file_popup_token = Some(token.to_string());
                         }
-                        Err(err) => {
-                            tracing::trace!("image dimensions lookup failed: {err}");
-                            // Fallback to plain path insertion if metadata read fails.
+                        self.insert_selected_mention(&insert_text, Some(&path));
+                    }
+                    ReferenceSelection::File { path, insert_text } => {
+                        let sel_path = insert_text;
+                        if Self::is_image_path(&sel_path) {
+                            match image::image_dimensions(&path) {
+                                Ok((width, height)) => {
+                                    tracing::debug!(
+                                        "selected image dimensions={}x{}",
+                                        width,
+                                        height
+                                    );
+                                    let cursor_offset = self.textarea.cursor();
+                                    let text = self.textarea.text();
+                                    let safe_cursor =
+                                        Self::clamp_to_char_boundary(text, cursor_offset);
+                                    let before_cursor = &text[..safe_cursor];
+                                    let after_cursor = &text[safe_cursor..];
+                                    let start_idx = before_cursor
+                                        .char_indices()
+                                        .rfind(|(_, c)| c.is_whitespace())
+                                        .map(|(idx, c)| idx + c.len_utf8())
+                                        .unwrap_or(0);
+                                    let end_rel_idx = after_cursor
+                                        .char_indices()
+                                        .find(|(_, c)| c.is_whitespace())
+                                        .map(|(idx, _)| idx)
+                                        .unwrap_or(after_cursor.len());
+                                    let end_idx = safe_cursor + end_rel_idx;
+
+                                    self.textarea.replace_range(start_idx..end_idx, "");
+                                    self.textarea.set_cursor(start_idx);
+                                    self.attach_image(path);
+                                    self.textarea.insert_str(" ");
+                                }
+                                Err(err) => {
+                                    tracing::trace!("image dimensions lookup failed: {err}");
+                                    self.insert_selected_path(&sel_path);
+                                }
+                            }
+                        } else {
                             self.insert_selected_path(&sel_path);
                         }
                     }
-                } else {
-                    // Non-image: inserting file path.
-                    self.insert_selected_path(&sel_path);
                 }
+                self.cancel_file_search();
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
             input => self.handle_input_basic(input),
         }
     }
-
     fn handle_key_event_with_skill_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
@@ -2007,7 +2021,7 @@ impl ChatComposer {
     ///
     /// The returned string **does not** include the leading `@`.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
-        Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
+        Self::current_prefixed_token(textarea, '@', /*allow_empty*/ true)
     }
 
     fn current_mention_token(&self) -> Option<String> {
@@ -2109,21 +2123,13 @@ impl ChatComposer {
     }
 
     fn mention_name_from_insert_text(insert_text: &str) -> Option<String> {
-        let name = insert_text.strip_prefix('$')?;
-        if name.is_empty() {
-            return None;
+        if let Some(name) = insert_text.strip_prefix('$') {
+            return valid_mention_name(name).then(|| name.to_string());
         }
-        if name
-            .as_bytes()
-            .iter()
-            .all(|byte| is_mention_name_char(*byte))
-        {
-            Some(name.to_string())
-        } else {
-            None
-        }
-    }
 
+        let server_id = insert_text.strip_prefix("@mcp:")?;
+        valid_mention_name(server_id).then(|| insert_text.to_string())
+    }
     fn current_mention_elements(&self) -> Vec<(u64, String)> {
         self.textarea
             .text_element_snapshots()
@@ -2159,7 +2165,11 @@ impl ChatComposer {
         let text = self.textarea.text().to_string();
         let mut scan_from = 0usize;
         for binding in mention_bindings {
-            let token = format!("${}", binding.mention);
+            let token = if binding.mention.starts_with('@') {
+                binding.mention.clone()
+            } else {
+                format!("${}", binding.mention)
+            };
             let Some(range) =
                 find_next_mention_token_range(text.as_str(), token.as_str(), scan_from)
             else {
@@ -3008,73 +3018,58 @@ impl ChatComposer {
     pub(crate) fn sync_popups(&mut self) {
         self.sync_slash_command_elements();
         if !self.popups_enabled() {
+            self.cancel_file_search();
             self.active_popup = ActivePopup::None;
             return;
         }
-        let file_token = Self::current_at_token(&self.textarea);
+        let reference_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
             .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
         // When browsing input history (shell-style Up/Down recall), skip all popup
         // synchronization so nothing steals focus from continued history navigation.
         if browsing_history {
-            if self.current_file_query.is_some() {
-                self.app_event_tx
-                    .send(AppEvent::StartFileSearch(String::new()));
-                self.current_file_query = None;
-            }
+            self.cancel_file_search();
             self.active_popup = ActivePopup::None;
             return;
         }
         let mention_token = self.current_mention_token();
 
         let allow_command_popup =
-            self.slash_commands_enabled() && file_token.is_none() && mention_token.is_none();
+            self.slash_commands_enabled() && reference_token.is_none() && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
-            if self.current_file_query.is_some() {
-                self.app_event_tx
-                    .send(AppEvent::StartFileSearch(String::new()));
-                self.current_file_query = None;
-            }
+            self.cancel_file_search();
             self.dismissed_file_popup_token = None;
             self.dismissed_mention_popup_token = None;
             return;
         }
 
         if let Some(token) = mention_token {
-            if self.current_file_query.is_some() {
-                self.app_event_tx
-                    .send(AppEvent::StartFileSearch(String::new()));
-                self.current_file_query = None;
-            }
+            self.cancel_file_search();
             self.sync_mention_popup(token);
             return;
         }
         self.dismissed_mention_popup_token = None;
 
-        if let Some(token) = file_token
-            && self.file_search_enabled()
+        let has_reference_sources = self.file_search_enabled();
+        if let Some(token) = reference_token
+            && has_reference_sources
         {
-            self.sync_file_search_popup(token);
+            self.sync_reference_popup(token);
             return;
         }
 
-        if self.current_file_query.is_some() {
-            self.app_event_tx
-                .send(AppEvent::StartFileSearch(String::new()));
-            self.current_file_query = None;
-        }
+        self.cancel_file_search();
         self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
-            ActivePopup::File(_) | ActivePopup::Skill(_)
+            ActivePopup::Reference(_) | ActivePopup::Skill(_)
         ) {
             self.active_popup = ActivePopup::None;
         }
     }
-
     /// Keep slash command elements aligned with the current first line.
     fn sync_slash_command_elements(&mut self) {
         if !self.slash_commands_enabled() {
@@ -3202,7 +3197,7 @@ impl ChatComposer {
                 .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
 
         // If the cursor is currently positioned within an `@token`, prefer the
-        // file-search popup over the slash popup so users can insert a file path
+        // reference popup over the slash popup so users can insert a file path
         // as an argument to the command (e.g., "/review @docs/...").
         if Self::current_at_token(&self.textarea).is_some() {
             if matches!(self.active_popup, ActivePopup::Command(_)) {
@@ -3247,49 +3242,43 @@ impl ChatComposer {
         }
     }
 
-    /// Synchronize `self.file_search_popup` with the current text in the textarea.
+    /// Synchronize the combined reference popup with the current text in the textarea.
     /// Note this is only called when self.active_popup is NOT Command.
-    fn sync_file_search_popup(&mut self, query: String) {
-        // If user dismissed popup for this exact query, don't reopen until text changes.
+    fn sync_reference_popup(&mut self, query: String) {
         if self.dismissed_file_popup_token.as_ref() == Some(&query) {
             return;
         }
 
-        if query.is_empty() {
-            self.app_event_tx
-                .send(AppEvent::StartFileSearch(String::new()));
+        let has_sources = self.file_search_enabled();
+        if !has_sources {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
+
+        if self.file_search_enabled() {
+            if self.current_file_query.as_deref() != Some(query.as_str()) {
+                self.app_event_tx.send(AppEvent::ReferenceSearchRequested {
+                    query: query.clone(),
+                });
+                self.current_file_query = Some(query.clone());
+            }
         } else {
-            self.app_event_tx
-                .send(AppEvent::StartFileSearch(query.clone()));
+            self.cancel_file_search();
         }
 
         match &mut self.active_popup {
-            ActivePopup::File(popup) => {
-                if query.is_empty() {
-                    popup.set_empty_prompt();
-                } else {
-                    popup.set_query(&query);
-                }
+            ActivePopup::Reference(popup) => {
+                popup.set_query(&query);
             }
             _ => {
-                let mut popup = FileSearchPopup::new(self.accent_color);
-                if query.is_empty() {
-                    popup.set_empty_prompt();
-                } else {
-                    popup.set_query(&query);
-                }
-                self.active_popup = ActivePopup::File(popup);
+                let mut popup = ReferencePopup::new(self.accent_color);
+                popup.set_query(&query);
+                self.active_popup = ActivePopup::Reference(popup);
             }
         }
 
-        if query.is_empty() {
-            self.current_file_query = None;
-        } else {
-            self.current_file_query = Some(query);
-        }
         self.dismissed_file_popup_token = None;
     }
-
     fn sync_mention_popup(&mut self, query: String) {
         if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
             return;
@@ -3450,6 +3439,14 @@ fn local_image_label_text(index: usize) -> String {
     format!("[Image #{index}]")
 }
 
+fn valid_mention_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .as_bytes()
+            .iter()
+            .all(|byte| is_mention_name_char(*byte))
+}
+
 fn is_mention_name_char(byte: u8) -> bool {
     matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
 }
@@ -3458,29 +3455,26 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
     if token.is_empty() || from >= text.len() {
         return None;
     }
+
     let bytes = text.as_bytes();
     let token_bytes = token.as_bytes();
     let mut index = from;
-
     while index < bytes.len() {
-        if bytes[index] != b'$' {
-            index += 1;
-            continue;
-        }
-
+        let found = text[index..].find(token)?;
+        index += found;
         let end = index.saturating_add(token_bytes.len());
         if end > bytes.len() {
             return None;
         }
-        if &bytes[index..end] != token_bytes {
-            index += 1;
-            continue;
-        }
 
-        if bytes
+        let previous_ok = index == 0
+            || bytes
+                .get(index.saturating_sub(1))
+                .is_none_or(|byte| !is_mention_name_char(*byte));
+        let next_ok = bytes
             .get(end)
-            .is_none_or(|byte| !is_mention_name_char(*byte))
-        {
+            .is_none_or(|byte| !is_mention_name_char(*byte));
+        if previous_ok && next_ok {
             return Some(index..end);
         }
 
@@ -3489,7 +3483,6 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
 
     None
 }
-
 impl Renderable for ChatComposer {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if !self.input_enabled || self.selected_remote_image_index.is_some() {
@@ -3523,7 +3516,7 @@ impl Renderable for ChatComposer {
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
-                ActivePopup::File(c) => c.calculate_required_height(),
+                ActivePopup::Reference(c) => c.calculate_required_height(width),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
             }
     }
@@ -3541,7 +3534,7 @@ impl ChatComposer {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
-            ActivePopup::File(popup) => {
+            ActivePopup::Reference(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::Skill(popup) => {
@@ -3853,5 +3846,116 @@ impl ChatComposer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod reference_popup_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::UnboundedReceiver;
+
+    fn test_composer() -> (ChatComposer, UnboundedReceiver<AppEvent>) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let composer = ChatComposer::new_with_config(
+            /*has_input_focus*/ true,
+            AppEventSender::new(tx),
+            /*enhanced_keys_supported*/ true,
+            "Ask anything".to_string(),
+            /*disable_paste_burst*/ true,
+            ChatComposerConfig::default(),
+        );
+        (composer, rx)
+    }
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        }
+    }
+
+    fn set_text_at_end(composer: &mut ChatComposer, text: &str) {
+        composer.set_text_content(text.to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+    }
+
+    fn next_file_search_request(rx: &mut UnboundedReceiver<AppEvent>) -> String {
+        loop {
+            match rx.try_recv() {
+                Ok(AppEvent::ReferenceSearchRequested { query }) => return query,
+                Ok(_) => {}
+                Err(error) => panic!("expected file search request, got {error:?}"),
+            }
+        }
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: A bare @ token opens reference search and requests an empty query.
+    #[test]
+    fn bare_at_opens_reference_popup() {
+        let (mut composer, mut rx) = test_composer();
+
+        set_text_at_end(&mut composer, "@");
+
+        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
+        assert_eq!(next_file_search_request(&mut rx), String::new());
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Token-local @ opens reference search inside normal text.
+    #[test]
+    fn at_inside_normal_text_opens_reference_popup() {
+        let (mut composer, mut rx) = test_composer();
+
+        set_text_at_end(&mut composer, "please inspect @src");
+
+        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
+        assert_eq!(next_file_search_request(&mut rx), "src".to_string());
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Token-local @ opens reference search inside slash-command arguments.
+    #[test]
+    fn at_inside_slash_command_args_opens_reference_popup() {
+        let (mut composer, mut rx) = test_composer();
+
+        set_text_at_end(&mut composer, "/review @docs");
+
+        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
+        assert_eq!(next_file_search_request(&mut rx), "docs".to_string());
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Escape closes reference search without reopening for the same token.
+    #[test]
+    fn esc_dismissal_does_not_reopen_until_token_changes() {
+        let (mut composer, _rx) = test_composer();
+        set_text_at_end(&mut composer, "@src");
+
+        let result = composer.handle_key_event(press(KeyCode::Esc));
+        composer.sync_popups();
+
+        assert_eq!(result, (InputResult::None, true));
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        set_text_at_end(&mut composer, "@srcx");
+
+        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Enter with no selected reference does not submit the chat turn.
+    #[test]
+    fn enter_with_no_selected_reference_does_not_submit() {
+        let (mut composer, _rx) = test_composer();
+        set_text_at_end(&mut composer, "@missing");
+
+        let result = composer.handle_key_event(press(KeyCode::Enter));
+
+        assert_eq!(result, (InputResult::None, true));
+        assert!(matches!(composer.active_popup, ActivePopup::None));
     }
 }

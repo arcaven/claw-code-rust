@@ -326,7 +326,7 @@ The bottom pane is the user-facing input area. It contains:
 | Module | Purpose |
 |--------|---------|
 | `mod.rs` | `BottomPane` orchestrator. Assembles composer, footer, and popup stack. Routes key events to the active surface (composer or popup). |
-| `chat_composer.rs` | Multiline text input with mention autocomplete, paste handling, and input history. |
+| `chat_composer.rs` | Multiline text input with slash commands, token-local `@` reference search, `$` skill mentions, paste handling, and input history. |
 | `bottom_pane_view.rs` | Layout: splits the bottom area into composer + footer rows. |
 | `textarea.rs` | Custom textarea with cursor positioning and selection support. |
 | `footer.rs` | Status footer rendering: mode indicators, session info. |
@@ -340,8 +340,8 @@ The bottom pane is the user-facing input area. It contains:
 | `pending_input_preview.rs` | Preview of user input before submission. |
 | `paste_burst.rs` | Multi-line paste detection and debouncing. |
 | `theme_picker.rs` | Theme selection popup. |
-| `skill_popup.rs` | Skill selection popup. |
-| `file_search_popup.rs` | File-search popup for mention autocomplete. |
+| `skill_popup.rs` | `$` skill selection popup retained for compatibility. |
+| `reference_popup.rs` | Combined `@` fuzzy-search popup that renders server-provided skill, MCP server, and file reference rows. |
 | `onboarding_view.rs` | First-run model/provider configuration. |
 | `scroll_state.rs` | Scroll position tracking for the composer. |
 | `selection_popup_common.rs` | Shared popup behavior. |
@@ -421,7 +421,7 @@ Full-screen overlays rendered in the terminal alternate screen:
 [`worker.rs`](/Users/tsiao/Desktop/devo/crates/tui/src/worker.rs) (2900+ lines) spawns the `devo-server` as a child process over stdio and bridges TUI commands with server RPC:
 
 1. Starts a server process via `StdioServerClient`.
-2. Receives `AppCommand` from the host and translates into server RPC calls (session start/resume/list, turn start/interrupt/steer, approval respond, permission update, etc.).
+2. Receives `AppCommand` and selected `AppEvent` requests from the host and translates them into server RPC calls (session start/resume/list, reference search start/update/cancel, turn start/interrupt/steer, approval respond, permission update, etc.).
 3. Listens for `ServerEvent` from the server and converts them into `WorkerEvent` for the host.
 4. Handles session lifecycle: ensures a session exists, starts turns, processes streamed item events.
 
