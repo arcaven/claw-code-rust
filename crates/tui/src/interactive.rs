@@ -6,12 +6,17 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 use devo_core::AppConfigLoader;
 use devo_core::FileSystemAppConfigLoader;
+use devo_file_search::FileSearchOptions;
+use devo_file_search::FileSearchSession;
+use devo_file_search::FileSearchSnapshot;
+use devo_file_search::SessionReporter;
 use devo_protocol::Model;
 use devo_protocol::ModelCatalog;
 use devo_protocol::ProviderWireApi;
 use devo_utils::find_devo_home;
 use futures::StreamExt;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -22,6 +27,7 @@ use crate::app::InteractiveTuiConfig;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::McpServerMetadata;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::MCP_SERVERS_TRANSCRIPT_TITLE;
@@ -50,6 +56,33 @@ struct PendingOnboarding {
     provider_credential_id: Option<String>,
 }
 
+struct ActiveFileSearch {
+    query: String,
+    session: FileSearchSession,
+}
+
+impl std::fmt::Debug for ActiveFileSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActiveFileSearch")
+            .field("query", &self.query)
+            .finish_non_exhaustive()
+    }
+}
+
+struct TuiFileSearchReporter {
+    app_event_tx: AppEventSender,
+}
+
+impl SessionReporter for TuiFileSearchReporter {
+    fn on_update(&self, snapshot: &FileSearchSnapshot) {
+        self.app_event_tx.send(AppEvent::FileSearchResults {
+            query: snapshot.query.clone(),
+            matches: snapshot.matches.clone(),
+        });
+    }
+
+    fn on_complete(&self) {}
+}
 #[derive(Debug, serde::Deserialize)]
 struct OnboardingCommandPayload {
     model_slug: String,
@@ -84,6 +117,30 @@ fn normalized_display_name(
         .unwrap_or_else(|| model_slug.to_string())
 }
 
+fn load_mcp_server_mentions(cwd: &Path) -> Vec<McpServerMetadata> {
+    match find_devo_home()
+        .map_err(anyhow::Error::from)
+        .and_then(|config_home| {
+            FileSystemAppConfigLoader::new(config_home)
+                .load(Some(cwd))
+                .map_err(anyhow::Error::from)
+        }) {
+        Ok(app_config) => app_config
+            .mcp
+            .servers
+            .into_iter()
+            .map(|server| McpServerMetadata {
+                id: server.id.0,
+                display_name: server.display_name,
+                enabled: server.enabled,
+            })
+            .collect(),
+        Err(error) => {
+            tracing::debug!(?error, "failed to load MCP servers for composer references");
+            Vec::new()
+        }
+    }
+}
 #[derive(Debug, Default)]
 struct InteractiveLoopState {
     session_id: Option<devo_core::SessionId>,
@@ -103,6 +160,7 @@ struct InteractiveLoopState {
     last_ctrl_c_at: Option<Instant>,
     esc_backtrack_primed: bool,
     overlay: OverlayState,
+    file_search: Option<ActiveFileSearch>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +189,7 @@ struct AppCommandContext<'a, M: ModelCatalog> {
     default_provider: ProviderWireApi,
     cwd: &'a Path,
     project_config_key: &'a str,
+    app_event_tx: &'a AppEventSender,
 }
 
 /// RAII guard that restores terminal modes exactly once after the TUI loop ends.
@@ -212,6 +271,7 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
     // App events come from widgets and request host-level actions such as commands or exit.
     let (app_event_tx, mut app_event_rx) = mpsc::channel(APP_EVENT_CHANNEL_CAPACITY);
     let app_event_sender = AppEventSender::new_bounded(app_event_tx);
+    let host_app_event_sender = app_event_sender.clone();
 
     // Resolve model metadata for the chat widget, falling back to the session slug.
     let available_models = config
@@ -261,6 +321,7 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
         startup_tooltip_override: Some(format!("Ready in {}", cwd.display())),
         initial_theme_name,
     });
+    chat_widget.set_mcp_server_mentions(load_mcp_server_mentions(&cwd));
     // tui events, such as `[TuiEvent::Draw]`, `[TuiEvent::Key]`, `TuiEvent::Paste`
     let events = tui.event_stream();
     tokio::pin!(events);
@@ -298,6 +359,7 @@ pub async fn run_interactive_tui(config: InteractiveTuiConfig) -> Result<AppExit
                         default_provider: initial_session.provider,
                         cwd: &cwd,
                         project_config_key: &project_config_key,
+                        app_event_tx: &host_app_event_sender,
                     },
                 )? {
                     LoopAction::Continue => {}
@@ -602,6 +664,21 @@ fn handle_app_event(
         return Ok(LoopAction::Continue);
     }
 
+    match &app_event {
+        AppEvent::FileSearchRequested { query } => {
+            handle_file_search_request(query, loop_state, context);
+            return Ok(LoopAction::Continue);
+        }
+        AppEvent::FileSearchCancelled => {
+            loop_state.file_search = None;
+            return Ok(LoopAction::Continue);
+        }
+        AppEvent::FileSearchResults { .. } => {
+            chat_widget.handle_app_event(app_event);
+            return Ok(LoopAction::Continue);
+        }
+        _ => {}
+    }
     if let AppEvent::Command(command) = &app_event {
         chat_widget.handle_app_event(app_event.clone());
         // Commands that affect sessions, providers, or turns are forwarded to the worker.
@@ -619,6 +696,49 @@ fn handle_app_event(
     Ok(LoopAction::Continue)
 }
 
+fn handle_file_search_request(
+    query: &str,
+    loop_state: &mut InteractiveLoopState,
+    context: &AppCommandContext<'_, impl ModelCatalog>,
+) {
+    if let Some(active) = loop_state.file_search.as_mut() {
+        if active.query == query {
+            return;
+        }
+        active.session.update_query(query);
+        active.query = query.to_string();
+        return;
+    }
+
+    let reporter = Arc::new(TuiFileSearchReporter {
+        app_event_tx: context.app_event_tx.clone(),
+    });
+    let options = FileSearchOptions {
+        compute_indices: true,
+        ..FileSearchOptions::default()
+    };
+    match devo_file_search::create_session(
+        vec![context.cwd.to_path_buf()],
+        options,
+        reporter,
+        /*cancel_flag*/ None,
+    ) {
+        Ok(session) => {
+            session.update_query(query);
+            loop_state.file_search = Some(ActiveFileSearch {
+                query: query.to_string(),
+                session,
+            });
+        }
+        Err(error) => {
+            tracing::warn!(?error, "failed to start composer file search");
+            context.app_event_tx.send(AppEvent::FileSearchResults {
+                query: query.to_string(),
+                matches: Vec::new(),
+            });
+        }
+    }
+}
 fn handle_worker_event(
     worker_event: Option<WorkerEvent>,
     worker: &QueryWorkerHandle,
@@ -1036,5 +1156,44 @@ mod tests {
         }
 
         assert_eq!(loop_state.session_id, Some(session_id));
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Host file-search requests treat empty query as a search update and reuse the session for later queries.
+    #[test]
+    fn file_search_request_creates_and_updates_active_session() {
+        let tempdir = tempfile::tempdir().expect("create tempdir");
+        std::fs::write(tempdir.path().join("alpha.rs"), "").expect("write temp file");
+        let model_catalog = devo_protocol::InMemoryModelCatalog::new(Vec::new());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let context = AppCommandContext {
+            model_catalog: &model_catalog,
+            default_provider: ProviderWireApi::OpenAIChatCompletions,
+            cwd: tempdir.path(),
+            project_config_key: "test-project",
+            app_event_tx: &app_event_tx,
+        };
+        let mut loop_state = InteractiveLoopState::default();
+
+        handle_file_search_request("", &mut loop_state, &context);
+
+        assert_eq!(
+            loop_state
+                .file_search
+                .as_ref()
+                .map(|active| active.query.as_str()),
+            Some("")
+        );
+
+        handle_file_search_request("alpha", &mut loop_state, &context);
+
+        assert_eq!(
+            loop_state
+                .file_search
+                .as_ref()
+                .map(|active| active.query.as_str()),
+            Some("alpha")
+        );
     }
 }

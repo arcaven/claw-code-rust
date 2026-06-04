@@ -5,6 +5,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use devo_file_search::FileMatch;
 use devo_protocol::user_input::TextElement;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -28,6 +29,7 @@ mod paste_burst;
 mod pending_thread_approvals;
 pub(crate) mod popup_consts;
 mod prompt_args;
+mod reference_popup;
 pub(crate) mod scroll_state;
 mod selection_popup_common;
 mod skill_popup;
@@ -101,6 +103,13 @@ pub(crate) struct SkillMetadata {
     pub(crate) short_description: Option<String>,
     pub(crate) interface: Option<SkillInterfaceMetadata>,
     pub(crate) path_to_skills_md: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct McpServerMetadata {
+    pub(crate) id: String,
+    pub(crate) display_name: String,
+    pub(crate) enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,10 +203,7 @@ impl BottomPane {
             enhanced_keys_supported,
             placeholder_text.clone(),
             disable_paste_burst,
-            ChatComposerConfig {
-                file_search_enabled: false,
-                ..ChatComposerConfig::default()
-            },
+            ChatComposerConfig::default(),
         );
         composer.set_frame_requester(frame_requester.clone());
         composer.set_skill_mentions(skills);
@@ -230,6 +236,16 @@ impl BottomPane {
 
     pub(crate) fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_mcp_server_mentions(&mut self, servers: Vec<McpServerMetadata>) {
+        self.composer.set_mcp_server_mentions(servers);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
+        self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }
 

@@ -201,12 +201,17 @@ impl ChatWidget {
             | AppEvent::OpenThinkingPicker
             | AppEvent::OpenThemePicker
             | AppEvent::StatusLineBranchUpdated { .. }
-            | AppEvent::StartFileSearch(_)
+            | AppEvent::FileSearchRequested { .. }
+            | AppEvent::FileSearchCancelled
             | AppEvent::StatusLineSetup { .. }
             | AppEvent::StatusLineSetupCancelled
             | AppEvent::TerminalTitleSetup { .. }
             | AppEvent::TerminalTitleSetupPreview { .. }
             | AppEvent::TerminalTitleSetupCancelled => {
+                self.frame_requester.schedule_frame();
+            }
+            AppEvent::FileSearchResults { query, matches } => {
+                self.bottom_pane.on_file_search_result(query, matches);
                 self.frame_requester.schedule_frame();
             }
             AppEvent::DiffResult(text) => {
@@ -353,16 +358,23 @@ fn input_items_for_user_message(user_message: &UserMessage) -> Vec<InputItem> {
     }];
 
     for binding in &user_message.mention_bindings {
-        let Some(name) = binding.mention.strip_prefix('$') else {
-            continue;
-        };
-        if !is_skill_binding_path(&binding.path) {
+        if is_skill_binding_path(&binding.path) {
+            let name = binding
+                .mention
+                .strip_prefix('$')
+                .unwrap_or(binding.mention.as_str());
+            input.push(InputItem::Skill {
+                name: name.to_string(),
+                path: Path::new(&binding.path).to_path_buf(),
+            });
             continue;
         }
-        input.push(InputItem::Skill {
-            name: name.to_string(),
-            path: Path::new(&binding.path).to_path_buf(),
-        });
+        if binding.path.starts_with("mcp://") {
+            input.push(InputItem::Mention {
+                path: binding.path.clone(),
+                name: Some(binding.mention.clone()),
+            });
+        }
     }
 
     input.extend(

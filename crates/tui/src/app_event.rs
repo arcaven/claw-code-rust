@@ -2,6 +2,8 @@
 //!
 use std::path::PathBuf;
 
+use devo_file_search::FileMatch;
+
 use crate::app_command::AppCommand;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,8 +76,17 @@ pub(crate) enum AppEvent {
         branch: Option<String>,
     },
 
-    /// Request a file-search refresh for composer mention popups.
-    StartFileSearch(String),
+    /// Request a file-search refresh for composer reference popups.
+    FileSearchRequested { query: String },
+
+    /// Cancel the active composer file-search session, if any.
+    FileSearchCancelled,
+
+    /// Async file-search results for a composer reference popup query.
+    FileSearchResults {
+        query: String,
+        matches: Vec<FileMatch>,
+    },
 
     /// Request a persistent composer-history entry by absolute log offset.
     HistoryEntryRequested { log_id: u64, offset: usize },

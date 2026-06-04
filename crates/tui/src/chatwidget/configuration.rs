@@ -15,6 +15,7 @@ use ratatui::text::Line;
 
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::bottom_pane::McpServerMetadata;
 use crate::bottom_pane::ModelPickerEntry;
 use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
@@ -28,6 +29,11 @@ use super::permission_preset_label;
 use super::thinking::ThinkingListEntry;
 
 impl ChatWidget {
+    pub(crate) fn set_mcp_server_mentions(&mut self, servers: Vec<McpServerMetadata>) {
+        self.bottom_pane.set_mcp_server_mentions(servers);
+        self.frame_requester.schedule_frame();
+    }
+
     pub(crate) fn set_model(&mut self, model: Model) {
         self.thinking_selection = model.default_thinking_selection();
         self.session.reasoning_effort = model
