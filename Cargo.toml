@@ -70,6 +70,7 @@ fs2 = "0.4"
 futures = { version = "0.3", default-features = false }
 glob = "0.3"
 hf-hub = { version = "1.0.0-rc.1", features = ["blocking", "rustls-tls"] }
+hnsw_rs = "0.3.4"
 iana-time-zone = "0.1.65"
 ignore = "0.4.23"
 image = { version = "^0.25.9", default-features = false }
@@ -87,6 +88,7 @@ pathdiff = "0.2"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
 rand = "0.9"
+rayon = "1.12.0"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex = "1"

@@ -2,15 +2,17 @@ use std::path::{Path, PathBuf};
 
 use bm25::{Document, SearchEngine, SearchEngineBuilder, Tokenizer};
 
-use crate::cache::CachedIndexPayloadV2;
+use crate::cache::CachedIndex;
 #[cfg(test)]
 use crate::dense::EmbeddingProvider;
 use crate::dense::cosine_similarity;
 #[cfg(test)]
 use crate::files::FileEntry;
 use crate::files::FileManifestEntry;
+use crate::matrix::EmbeddingMatrix;
 #[cfg(test)]
 use crate::refresh::IndexRefresh;
+use crate::semantic::SemanticBackend;
 use crate::tokens::{enrich_for_bm25, split_identifier_tokens};
 use crate::types::{
     Chunk, CodeSearchError, ContentFilter, IndexStats, SearchFilters, SearchResult,
@@ -30,7 +32,8 @@ pub struct SearchIndex {
     content: ContentFilter,
     manifest: Vec<FileManifestEntry>,
     chunks: Vec<Chunk>,
-    embeddings: Vec<Vec<f32>>,
+    embeddings: EmbeddingMatrix,
+    semantic: SemanticBackend,
     bm25: SearchEngine<usize, u32, CodeTokenizer>,
     stats: IndexStats,
 }
@@ -45,27 +48,34 @@ impl SearchIndex {
     ) -> Result<Self, CodeSearchError> {
         let outcome =
             IndexRefresh::refresh(root.as_path(), content, files.to_vec(), None, provider)?;
-        Self::from_payload(outcome.payload)
+        Self::from_cached(CachedIndex {
+            payload: outcome.payload,
+            embeddings: outcome.embeddings,
+        })
     }
 
-    pub fn from_payload(payload: CachedIndexPayloadV2) -> Result<Self, CodeSearchError> {
-        let indexed_files = payload.files.len();
+    pub fn from_cached(cached: CachedIndex) -> Result<Self, CodeSearchError> {
+        let indexed_files = cached.payload.files.len();
         let mut manifest = Vec::new();
         let mut chunks = Vec::new();
-        let mut embeddings = Vec::new();
-        for record in payload.files {
-            if record.chunks.len() != record.embeddings.len() {
+        let mut embeddings = EmbeddingMatrix::empty();
+        for record in cached.payload.files {
+            if record.chunks.len() != record.embedding_count {
                 return Err(CodeSearchError::Index(
                     "cached chunk and embedding counts do not match".to_string(),
                 ));
             }
             manifest.push(record.manifest);
             chunks.extend(record.chunks);
-            embeddings.extend(record.embeddings);
+            embeddings.extend_rows_from(
+                &cached.embeddings,
+                record.embedding_start,
+                record.embedding_count,
+            )?;
         }
         Self::from_parts(
-            payload.root,
-            payload.content,
+            cached.payload.root,
+            cached.payload.content,
             manifest,
             chunks,
             embeddings,
@@ -93,24 +103,46 @@ impl SearchIndex {
         self.chunks.get(chunk_id)
     }
 
+    #[cfg(test)]
+    pub fn uses_hnsw_for_test(&self) -> bool {
+        self.semantic.is_hnsw()
+    }
+
     pub fn semantic_search(
         &self,
         query_embedding: &[f32],
         limit: usize,
         filters: &SearchFilters,
     ) -> Vec<(usize, f32)> {
-        let mut scores = self
-            .embeddings
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| {
-                self.chunks
-                    .get(*idx)
-                    .is_some_and(|chunk| filters.allows(chunk))
+        let candidate_ids = filters
+            .is_empty()
+            .then(|| {
+                self.semantic
+                    .candidate_ids(query_embedding, limit, self.embeddings.row_count())
             })
-            .map(|(idx, embedding)| (idx, cosine_similarity(query_embedding, embedding)))
-            .filter(|(_, score)| *score > 0.0)
-            .collect::<Vec<_>>();
+            .flatten();
+        let mut scores = match candidate_ids {
+            Some(ids) => ids
+                .into_iter()
+                .filter_map(|idx| {
+                    let embedding = self.embeddings.row(idx)?;
+                    Some((idx, cosine_similarity(query_embedding, embedding)))
+                })
+                .filter(|(_, score)| *score > 0.0)
+                .collect::<Vec<_>>(),
+            None => (0..self.embeddings.row_count())
+                .filter(|idx| {
+                    self.chunks
+                        .get(*idx)
+                        .is_some_and(|chunk| filters.allows(chunk))
+                })
+                .filter_map(|idx| {
+                    let embedding = self.embeddings.row(idx)?;
+                    Some((idx, cosine_similarity(query_embedding, embedding)))
+                })
+                .filter(|(_, score)| *score > 0.0)
+                .collect::<Vec<_>>(),
+        };
         scores.sort_by(|left, right| {
             right
                 .1
@@ -149,19 +181,17 @@ impl SearchIndex {
         let Some(source_chunk) = self.chunks.get(source_idx) else {
             return Vec::new();
         };
-        let Some(source_embedding) = self.embeddings.get(source_idx) else {
+        let Some(source_embedding) = self.embeddings.row(source_idx) else {
             return Vec::new();
         };
-        let mut results = self
-            .embeddings
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| *idx != source_idx)
-            .filter_map(|(idx, embedding)| {
+        let mut results = (0..self.embeddings.row_count())
+            .filter(|idx| *idx != source_idx)
+            .filter_map(|idx| {
                 let chunk = self.chunks.get(idx)?;
                 if chunk.language != source_chunk.language || !filters.allows(chunk) {
                     return None;
                 }
+                let embedding = self.embeddings.row(idx)?;
                 let score = cosine_similarity(source_embedding, embedding);
                 (score > 0.0).then(|| SearchResult {
                     score,
@@ -193,14 +223,15 @@ impl SearchIndex {
         content: ContentFilter,
         manifest: Vec<FileManifestEntry>,
         chunks: Vec<Chunk>,
-        embeddings: Vec<Vec<f32>>,
+        embeddings: EmbeddingMatrix,
         indexed_files: usize,
     ) -> Result<Self, CodeSearchError> {
-        if chunks.len() != embeddings.len() {
+        if chunks.len() != embeddings.row_count() {
             return Err(CodeSearchError::Index(
                 "cached chunk and embedding counts do not match".to_string(),
             ));
         }
+        let semantic = SemanticBackend::build(&embeddings);
         let bm25 = build_bm25(&chunks);
         let stats = IndexStats {
             indexed_files,
@@ -212,6 +243,7 @@ impl SearchIndex {
             manifest,
             chunks,
             embeddings,
+            semantic,
             bm25,
             stats,
         })
@@ -238,6 +270,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
+    use crate::cache::{CachedFileRecord, CachedIndexPayloadV3, content_hash};
     use crate::dense::HashEmbeddingProvider;
     use crate::files::discover_files;
 
@@ -281,11 +314,13 @@ mod tests {
             end_line: 12,
             language: "rust".to_string(),
         };
-        let payload = CachedIndexPayloadV2::new(
+        let embeddings = EmbeddingMatrix::from_vectors(vec![vec![1.0]]).expect("matrix");
+        let payload = CachedIndexPayloadV3::new(
             PathBuf::from("/repo"),
             ContentFilter::Code,
             "test".to_string(),
-            vec![crate::cache::CachedFileRecord::new(
+            &embeddings,
+            vec![CachedFileRecord::new(
                 FileManifestEntry {
                     path: PathBuf::from("src/lib.rs"),
                     size: 10,
@@ -293,15 +328,124 @@ mod tests {
                 },
                 crate::cache::content_hash("fn parse() {}"),
                 vec![chunk],
-                vec![vec![1.0]],
+                0,
+                1,
             )],
         );
-        let index = SearchIndex::from_payload(payload).expect("index");
+        let index = SearchIndex::from_cached(CachedIndex {
+            payload,
+            embeddings,
+        })
+        .expect("index");
 
         assert_eq!(
             index.find_source_chunk(Path::new("src/lib.rs"), 11),
             Some(0)
         );
         assert_eq!(index.find_source_chunk(Path::new("src/lib.rs"), 13), None);
+    }
+
+    /// Trace: L2-DES-TOOL-001
+    /// Verifies: large-enough indexes use HNSW candidates and exact cosine reranking.
+    #[test]
+    fn semantic_search_uses_hnsw_candidates_with_exact_rerank() {
+        let index = index_with_chunks_and_embeddings(vec![
+            (
+                Chunk {
+                    content: "fn alpha() {}".to_string(),
+                    file_path: PathBuf::from("src/a.rs"),
+                    start_line: 1,
+                    end_line: 1,
+                    language: "rust".to_string(),
+                },
+                vec![1.0, 0.0],
+            ),
+            (
+                Chunk {
+                    content: "fn beta() {}".to_string(),
+                    file_path: PathBuf::from("src/b.rs"),
+                    start_line: 1,
+                    end_line: 1,
+                    language: "rust".to_string(),
+                },
+                vec![0.0, 1.0],
+            ),
+        ]);
+
+        let results = index.semantic_search(&[1.0, 0.0], 1, &SearchFilters::empty());
+
+        assert_eq!(index.uses_hnsw_for_test(), true);
+        assert_eq!(results, vec![(0, 1.0)]);
+    }
+
+    /// Trace: L2-DES-TOOL-001
+    /// Verifies: path or language filtered semantic search remains exact instead of using ANN.
+    #[test]
+    fn filtered_semantic_search_uses_exact_path() {
+        let index = index_with_chunks_and_embeddings(vec![
+            (
+                Chunk {
+                    content: "fn alpha() {}".to_string(),
+                    file_path: PathBuf::from("src/a.rs"),
+                    start_line: 1,
+                    end_line: 1,
+                    language: "rust".to_string(),
+                },
+                vec![1.0, 0.0],
+            ),
+            (
+                Chunk {
+                    content: "fn beta() {}".to_string(),
+                    file_path: PathBuf::from("src/b.rs"),
+                    start_line: 1,
+                    end_line: 1,
+                    language: "rust".to_string(),
+                },
+                vec![0.0, 1.0],
+            ),
+        ]);
+        let filters = SearchFilters::normalized(vec!["src/b.rs".to_string()], Vec::new());
+
+        let results = index.semantic_search(&[1.0, 0.0], 5, &filters);
+
+        assert_eq!(index.uses_hnsw_for_test(), true);
+        assert_eq!(results, Vec::<(usize, f32)>::new());
+    }
+
+    fn index_with_chunks_and_embeddings(chunks: Vec<(Chunk, Vec<f32>)>) -> SearchIndex {
+        let vectors = chunks
+            .iter()
+            .map(|(_, embedding)| embedding.clone())
+            .collect::<Vec<_>>();
+        let embeddings = EmbeddingMatrix::from_vectors(vectors).expect("matrix");
+        let records = chunks
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (chunk, _))| {
+                CachedFileRecord::new(
+                    FileManifestEntry {
+                        path: chunk.file_path.clone(),
+                        size: chunk.content.len() as u64,
+                        modified_unix_nanos: 1,
+                    },
+                    content_hash(&chunk.content),
+                    vec![chunk],
+                    idx,
+                    1,
+                )
+            })
+            .collect::<Vec<_>>();
+        let payload = CachedIndexPayloadV3::new(
+            PathBuf::from("/repo"),
+            ContentFilter::Code,
+            "test".to_string(),
+            &embeddings,
+            records,
+        );
+        SearchIndex::from_cached(CachedIndex {
+            payload,
+            embeddings,
+        })
+        .expect("index")
     }
 }

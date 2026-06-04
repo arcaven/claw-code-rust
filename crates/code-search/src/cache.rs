@@ -4,24 +4,36 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::files::FileManifestEntry;
+use crate::matrix::EmbeddingMatrix;
 use crate::types::{Chunk, CodeSearchError, ContentFilter};
 
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
+const F32_BYTES: usize = 4;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedIndex {
+    pub payload: CachedIndexPayloadV3,
+    pub embeddings: EmbeddingMatrix,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CachedIndexPayloadV2 {
+pub struct CachedIndexPayloadV3 {
     pub cache_version: u32,
     pub root: PathBuf,
     pub content: ContentFilter,
     pub model_id: String,
+    pub embedding_format: EmbeddingFormat,
+    pub embedding_dimensions: usize,
+    pub embedding_rows: usize,
     pub files: Vec<CachedFileRecord>,
 }
 
-impl CachedIndexPayloadV2 {
+impl CachedIndexPayloadV3 {
     pub fn new(
         root: PathBuf,
         content: ContentFilter,
         model_id: String,
+        embeddings: &EmbeddingMatrix,
         files: Vec<CachedFileRecord>,
     ) -> Self {
         Self {
@@ -29,6 +41,9 @@ impl CachedIndexPayloadV2 {
             root,
             content,
             model_id,
+            embedding_format: EmbeddingFormat::F32LittleEndian,
+            embedding_dimensions: embeddings.dimensions(),
+            embedding_rows: embeddings.row_count(),
             files,
         }
     }
@@ -38,16 +53,33 @@ impl CachedIndexPayloadV2 {
             && self.root == root
             && self.content == content
             && self.model_id == model_id
+            && self.embedding_format == EmbeddingFormat::F32LittleEndian
             && self.is_internally_consistent()
     }
 
-    fn is_loadable(&self) -> bool {
-        self.cache_version == CACHE_VERSION && self.is_internally_consistent()
+    fn is_loadable_with(&self, embeddings: &EmbeddingMatrix) -> bool {
+        self.cache_version == CACHE_VERSION
+            && self.embedding_format == EmbeddingFormat::F32LittleEndian
+            && self.embedding_dimensions == embeddings.dimensions()
+            && self.embedding_rows == embeddings.row_count()
+            && self.is_internally_consistent()
     }
 
     fn is_internally_consistent(&self) -> bool {
-        self.files.iter().all(CachedFileRecord::is_consistent)
+        self.files.iter().all(|record| {
+            record.is_consistent()
+                && record
+                    .embedding_start
+                    .checked_add(record.embedding_count)
+                    .is_some_and(|end| end <= self.embedding_rows)
+        })
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingFormat {
+    F32LittleEndian,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -55,7 +87,8 @@ pub struct CachedFileRecord {
     pub manifest: FileManifestEntry,
     pub content_hash: String,
     pub chunks: Vec<Chunk>,
-    pub embeddings: Vec<Vec<f32>>,
+    pub embedding_start: usize,
+    pub embedding_count: usize,
 }
 
 impl CachedFileRecord {
@@ -63,13 +96,15 @@ impl CachedFileRecord {
         manifest: FileManifestEntry,
         content_hash: String,
         chunks: Vec<Chunk>,
-        embeddings: Vec<Vec<f32>>,
+        embedding_start: usize,
+        embedding_count: usize,
     ) -> Self {
         Self {
             manifest,
             content_hash,
             chunks,
-            embeddings,
+            embedding_start,
+            embedding_count,
         }
     }
 
@@ -78,7 +113,7 @@ impl CachedFileRecord {
     }
 
     fn is_consistent(&self) -> bool {
-        self.chunks.len() == self.embeddings.len()
+        self.chunks.len() == self.embedding_count
     }
 }
 
@@ -99,16 +134,32 @@ pub fn cache_file_path(
     cache_dir.join(format!("{}.json", cache_key(root, content, model_id)))
 }
 
-pub fn load_payload(path: &Path) -> Option<CachedIndexPayloadV2> {
-    let bytes = std::fs::read(path).ok()?;
-    let payload = serde_json::from_slice::<CachedIndexPayloadV2>(&bytes).ok()?;
-    payload.is_loadable().then_some(payload)
+pub fn embedding_file_path(metadata_path: &Path) -> PathBuf {
+    metadata_path.with_extension("embeddings.f32")
 }
 
-pub fn save_payload(path: &Path, payload: &CachedIndexPayloadV2) -> Result<(), CodeSearchError> {
+pub fn load_payload(path: &Path) -> Option<CachedIndex> {
+    let bytes = std::fs::read(path).ok()?;
+    let payload = serde_json::from_slice::<CachedIndexPayloadV3>(&bytes).ok()?;
+    let embeddings = read_embeddings(&embedding_file_path(path), &payload)?;
+    payload
+        .is_loadable_with(&embeddings)
+        .then_some(CachedIndex {
+            payload,
+            embeddings,
+        })
+}
+
+pub fn save_payload(
+    path: &Path,
+    payload: &CachedIndexPayloadV3,
+    embeddings: &EmbeddingMatrix,
+) -> Result<(), CodeSearchError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    validate_payload_embeddings(payload, embeddings)?;
+    write_embeddings(&embedding_file_path(path), embeddings)?;
     let bytes =
         serde_json::to_vec(payload).map_err(|error| CodeSearchError::Io(error.to_string()))?;
     std::fs::write(path, bytes)?;
@@ -117,6 +168,46 @@ pub fn save_payload(path: &Path, payload: &CachedIndexPayloadV2) -> Result<(), C
 
 pub fn content_hash(text: &str) -> String {
     hex_sha256(text.as_bytes())
+}
+
+fn validate_payload_embeddings(
+    payload: &CachedIndexPayloadV3,
+    embeddings: &EmbeddingMatrix,
+) -> Result<(), CodeSearchError> {
+    if payload.embedding_dimensions != embeddings.dimensions()
+        || payload.embedding_rows != embeddings.row_count()
+        || !payload.is_internally_consistent()
+    {
+        return Err(CodeSearchError::Index(
+            "cache metadata and embedding matrix do not match".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn read_embeddings(path: &Path, payload: &CachedIndexPayloadV3) -> Option<EmbeddingMatrix> {
+    let bytes = std::fs::read(path).ok()?;
+    let expected_bytes = payload
+        .embedding_rows
+        .checked_mul(payload.embedding_dimensions)?
+        .checked_mul(F32_BYTES)?;
+    if bytes.len() != expected_bytes {
+        return None;
+    }
+    let mut rows = Vec::with_capacity(bytes.len() / F32_BYTES);
+    for chunk in bytes.chunks_exact(F32_BYTES) {
+        rows.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+    EmbeddingMatrix::new(payload.embedding_dimensions, rows).ok()
+}
+
+fn write_embeddings(path: &Path, embeddings: &EmbeddingMatrix) -> Result<(), CodeSearchError> {
+    let mut bytes = Vec::with_capacity(embeddings.rows().len() * F32_BYTES);
+    for value in embeddings.rows() {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    std::fs::write(path, bytes)?;
+    Ok(())
 }
 
 fn cache_key(root: &Path, content: ContentFilter, model_id: &str) -> String {
@@ -149,10 +240,8 @@ mod tests {
 
     use super::*;
 
-    /// Trace: L2-DES-TOOL-001
-    /// Verifies: v2 cache payload validity depends on model, content filter, and record consistency.
-    #[test]
-    fn cached_payload_validates_header_and_records() {
+    fn cached_index() -> CachedIndex {
+        let embeddings = EmbeddingMatrix::from_vectors(vec![vec![1.0, 0.0]]).expect("matrix");
         let record = CachedFileRecord::new(
             FileManifestEntry {
                 path: PathBuf::from("src/lib.rs"),
@@ -167,39 +256,104 @@ mod tests {
                 end_line: 1,
                 language: "rust".to_string(),
             }],
-            vec![vec![1.0]],
+            0,
+            1,
         );
-        let payload = CachedIndexPayloadV2::new(
+        let payload = CachedIndexPayloadV3::new(
             PathBuf::from("/repo"),
             ContentFilter::Code,
             "model-a".to_string(),
+            &embeddings,
             vec![record],
         );
+        CachedIndex {
+            payload,
+            embeddings,
+        }
+    }
+
+    /// Trace: L2-DES-TOOL-001
+    /// Verifies: v3 cache metadata validates model, content filter, and embedding ranges.
+    #[test]
+    fn cached_payload_validates_header_and_records() {
+        let cached = cached_index();
 
         let validity = vec![
-            payload.is_valid_for(Path::new("/repo"), ContentFilter::Code, "model-a"),
-            payload.is_valid_for(Path::new("/repo"), ContentFilter::Code, "model-b"),
+            cached
+                .payload
+                .is_valid_for(Path::new("/repo"), ContentFilter::Code, "model-a"),
+            cached
+                .payload
+                .is_valid_for(Path::new("/repo"), ContentFilter::Code, "model-b"),
         ];
 
         assert_eq!(validity, vec![true, false]);
     }
 
     /// Trace: L2-DES-TOOL-001
-    /// Verifies: stale v1 and malformed cache files are treated as disposable cache misses.
+    /// Verifies: cache persists JSON metadata separately from row-major f32 embedding bytes.
     #[test]
-    fn load_payload_rejects_v1_and_malformed_cache_files() {
+    fn cache_round_trips_metadata_and_binary_embeddings() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let v1_path = temp.path().join("v1.json");
+        let path = temp.path().join("index.json");
+        let cached = cached_index();
+
+        save_payload(&path, &cached.payload, &cached.embeddings).expect("save");
+        let json = fs::read_to_string(&path).expect("json");
+        let embedding_bytes = fs::read(embedding_file_path(&path)).expect("binary");
+        let loaded = load_payload(&path);
+
+        assert_eq!(json.contains("embeddings"), false);
+        assert_eq!(embedding_bytes.len(), 8);
+        assert_eq!(loaded, Some(cached));
+    }
+
+    /// Trace: L2-DES-TOOL-001
+    /// Verifies: stale v1/v2 and malformed cache files are treated as disposable cache misses.
+    #[test]
+    fn load_payload_rejects_stale_and_malformed_cache_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let v2_path = temp.path().join("v2.json");
         let malformed_path = temp.path().join("malformed.json");
         fs::write(
-            &v1_path,
-            r#"{"cache_version":1,"root":"/repo","content":"code","model_id":"test","manifest":[],"chunks":[],"embeddings":[]}"#,
+            &v2_path,
+            r#"{"cache_version":2,"root":"/repo","content":"code","model_id":"test","files":[]}"#,
         )
-        .expect("write v1");
+        .expect("write v2");
         fs::write(&malformed_path, b"{").expect("write malformed");
 
-        let loaded = vec![load_payload(&v1_path), load_payload(&malformed_path)];
+        let loaded = vec![load_payload(&v2_path), load_payload(&malformed_path)];
 
         assert_eq!(loaded, vec![None, None]);
+    }
+
+    /// Trace: L2-DES-TOOL-001
+    /// Verifies: missing, truncated, or dimension-mismatched binary embedding files are cache misses.
+    #[test]
+    fn load_payload_rejects_invalid_binary_embeddings() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("index.json");
+        let cached = cached_index();
+        save_payload(&path, &cached.payload, &cached.embeddings).expect("save");
+
+        fs::remove_file(embedding_file_path(&path)).expect("remove binary");
+        let missing = load_payload(&path);
+
+        save_payload(&path, &cached.payload, &cached.embeddings).expect("save");
+        fs::write(embedding_file_path(&path), [0_u8; 4]).expect("truncate");
+        let truncated = load_payload(&path);
+
+        save_payload(&path, &cached.payload, &cached.embeddings).expect("save");
+        let mut json =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&path).expect("json"))
+                .expect("json value");
+        json["embedding_dimensions"] = serde_json::json!(3);
+        fs::write(&path, serde_json::to_vec(&json).expect("json bytes")).expect("write json");
+        let wrong_dimensions = load_payload(&path);
+
+        assert_eq!(
+            vec![missing, truncated, wrong_dimensions],
+            vec![None, None, None]
+        );
     }
 }

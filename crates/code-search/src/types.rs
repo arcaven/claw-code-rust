@@ -5,19 +5,14 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_TOP_K: usize = 5;
 pub const MAX_TOP_K: usize = 20;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentFilter {
+    #[default]
     Code,
     Docs,
     Config,
     All,
-}
-
-impl Default for ContentFilter {
-    fn default() -> Self {
-        Self::Code
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +97,10 @@ impl SearchFilters {
             paths: Vec::new(),
             languages: Vec::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty() && self.languages.is_empty()
     }
 
     pub fn normalized(paths: Vec<String>, languages: Vec<String>) -> Self {

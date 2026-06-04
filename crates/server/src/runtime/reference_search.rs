@@ -446,8 +446,11 @@ fn mcp_results(filter: &str, sources: &[McpReferenceSource]) -> Vec<ReferenceSea
     let mut matches = sources
         .iter()
         .filter_map(|source| {
-            let match_indices =
-                reference_match_indices(filter, &source.display_name, &[source.id.clone()])?;
+            let match_indices = reference_match_indices(
+                filter,
+                &source.display_name,
+                std::slice::from_ref(&source.id),
+            )?;
             Some((
                 source,
                 match_indices.score,

@@ -3483,116 +3483,6 @@ fn find_next_mention_token_range(text: &str, token: &str, from: usize) -> Option
 
     None
 }
-#[cfg(test)]
-mod reference_popup_tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use tokio::sync::mpsc::UnboundedReceiver;
-
-    fn test_composer() -> (ChatComposer, UnboundedReceiver<AppEvent>) {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let composer = ChatComposer::new_with_config(
-            /*has_input_focus*/ true,
-            AppEventSender::new(tx),
-            /*enhanced_keys_supported*/ true,
-            "Ask anything".to_string(),
-            /*disable_paste_burst*/ true,
-            ChatComposerConfig::default(),
-        );
-        (composer, rx)
-    }
-
-    fn press(code: KeyCode) -> KeyEvent {
-        KeyEvent {
-            code,
-            modifiers: KeyModifiers::NONE,
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        }
-    }
-
-    fn set_text_at_end(composer: &mut ChatComposer, text: &str) {
-        composer.set_text_content(text.to_string(), Vec::new(), Vec::new());
-        composer.move_cursor_to_end();
-    }
-
-    fn next_file_search_request(rx: &mut UnboundedReceiver<AppEvent>) -> String {
-        loop {
-            match rx.try_recv() {
-                Ok(AppEvent::ReferenceSearchRequested { query }) => return query,
-                Ok(_) => {}
-                Err(error) => panic!("expected file search request, got {error:?}"),
-            }
-        }
-    }
-
-    /// Trace: L2-DES-CLIENT-002
-    /// Verifies: A bare @ token opens reference search and requests an empty query.
-    #[test]
-    fn bare_at_opens_reference_popup() {
-        let (mut composer, mut rx) = test_composer();
-
-        set_text_at_end(&mut composer, "@");
-
-        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
-        assert_eq!(next_file_search_request(&mut rx), String::new());
-    }
-
-    /// Trace: L2-DES-CLIENT-002
-    /// Verifies: Token-local @ opens reference search inside normal text.
-    #[test]
-    fn at_inside_normal_text_opens_reference_popup() {
-        let (mut composer, mut rx) = test_composer();
-
-        set_text_at_end(&mut composer, "please inspect @src");
-
-        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
-        assert_eq!(next_file_search_request(&mut rx), "src".to_string());
-    }
-
-    /// Trace: L2-DES-CLIENT-002
-    /// Verifies: Token-local @ opens reference search inside slash-command arguments.
-    #[test]
-    fn at_inside_slash_command_args_opens_reference_popup() {
-        let (mut composer, mut rx) = test_composer();
-
-        set_text_at_end(&mut composer, "/review @docs");
-
-        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
-        assert_eq!(next_file_search_request(&mut rx), "docs".to_string());
-    }
-
-    /// Trace: L2-DES-CLIENT-002
-    /// Verifies: Escape closes reference search without reopening for the same token.
-    #[test]
-    fn esc_dismissal_does_not_reopen_until_token_changes() {
-        let (mut composer, _rx) = test_composer();
-        set_text_at_end(&mut composer, "@src");
-
-        let result = composer.handle_key_event(press(KeyCode::Esc));
-        composer.sync_popups();
-
-        assert_eq!(result, (InputResult::None, true));
-        assert!(matches!(composer.active_popup, ActivePopup::None));
-
-        set_text_at_end(&mut composer, "@srcx");
-
-        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
-    }
-
-    /// Trace: L2-DES-CLIENT-002
-    /// Verifies: Enter with no selected reference does not submit the chat turn.
-    #[test]
-    fn enter_with_no_selected_reference_does_not_submit() {
-        let (mut composer, _rx) = test_composer();
-        set_text_at_end(&mut composer, "@missing");
-
-        let result = composer.handle_key_event(press(KeyCode::Enter));
-
-        assert_eq!(result, (InputResult::None, true));
-        assert!(matches!(composer.active_popup, ActivePopup::None));
-    }
-}
 impl Renderable for ChatComposer {
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         if !self.input_enabled || self.selected_remote_image_index.is_some() {
@@ -3956,5 +3846,116 @@ impl ChatComposer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod reference_popup_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tokio::sync::mpsc::UnboundedReceiver;
+
+    fn test_composer() -> (ChatComposer, UnboundedReceiver<AppEvent>) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let composer = ChatComposer::new_with_config(
+            /*has_input_focus*/ true,
+            AppEventSender::new(tx),
+            /*enhanced_keys_supported*/ true,
+            "Ask anything".to_string(),
+            /*disable_paste_burst*/ true,
+            ChatComposerConfig::default(),
+        );
+        (composer, rx)
+    }
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        }
+    }
+
+    fn set_text_at_end(composer: &mut ChatComposer, text: &str) {
+        composer.set_text_content(text.to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+    }
+
+    fn next_file_search_request(rx: &mut UnboundedReceiver<AppEvent>) -> String {
+        loop {
+            match rx.try_recv() {
+                Ok(AppEvent::ReferenceSearchRequested { query }) => return query,
+                Ok(_) => {}
+                Err(error) => panic!("expected file search request, got {error:?}"),
+            }
+        }
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: A bare @ token opens reference search and requests an empty query.
+    #[test]
+    fn bare_at_opens_reference_popup() {
+        let (mut composer, mut rx) = test_composer();
+
+        set_text_at_end(&mut composer, "@");
+
+        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
+        assert_eq!(next_file_search_request(&mut rx), String::new());
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Token-local @ opens reference search inside normal text.
+    #[test]
+    fn at_inside_normal_text_opens_reference_popup() {
+        let (mut composer, mut rx) = test_composer();
+
+        set_text_at_end(&mut composer, "please inspect @src");
+
+        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
+        assert_eq!(next_file_search_request(&mut rx), "src".to_string());
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Token-local @ opens reference search inside slash-command arguments.
+    #[test]
+    fn at_inside_slash_command_args_opens_reference_popup() {
+        let (mut composer, mut rx) = test_composer();
+
+        set_text_at_end(&mut composer, "/review @docs");
+
+        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
+        assert_eq!(next_file_search_request(&mut rx), "docs".to_string());
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Escape closes reference search without reopening for the same token.
+    #[test]
+    fn esc_dismissal_does_not_reopen_until_token_changes() {
+        let (mut composer, _rx) = test_composer();
+        set_text_at_end(&mut composer, "@src");
+
+        let result = composer.handle_key_event(press(KeyCode::Esc));
+        composer.sync_popups();
+
+        assert_eq!(result, (InputResult::None, true));
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+
+        set_text_at_end(&mut composer, "@srcx");
+
+        assert!(matches!(composer.active_popup, ActivePopup::Reference(_)));
+    }
+
+    /// Trace: L2-DES-CLIENT-002
+    /// Verifies: Enter with no selected reference does not submit the chat turn.
+    #[test]
+    fn enter_with_no_selected_reference_does_not_submit() {
+        let (mut composer, _rx) = test_composer();
+        set_text_at_end(&mut composer, "@missing");
+
+        let result = composer.handle_key_event(press(KeyCode::Enter));
+
+        assert_eq!(result, (InputResult::None, true));
+        assert!(matches!(composer.active_popup, ActivePopup::None));
     }
 }

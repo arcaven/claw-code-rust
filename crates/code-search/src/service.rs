@@ -132,8 +132,11 @@ impl CodeSearchService {
         }
 
         let cache_path = cache_file_path(&self.cache_dir, &root, content, self.provider.model_id());
-        let previous_payload = load_payload(&cache_path)
-            .filter(|payload| payload.is_valid_for(&root, content, self.provider.model_id()));
+        let previous_payload = load_payload(&cache_path).filter(|cache| {
+            cache
+                .payload
+                .is_valid_for(&root, content, self.provider.model_id())
+        });
         let outcome = IndexRefresh::refresh(
             &root,
             content,
@@ -141,8 +144,11 @@ impl CodeSearchService {
             previous_payload,
             self.provider.as_ref(),
         )?;
-        let index = Arc::new(SearchIndex::from_payload(outcome.payload.clone())?);
-        save_payload(&cache_path, &outcome.payload)?;
+        let index = Arc::new(SearchIndex::from_cached(crate::cache::CachedIndex {
+            payload: outcome.payload.clone(),
+            embeddings: outcome.embeddings.clone(),
+        })?);
+        save_payload(&cache_path, &outcome.payload, &outcome.embeddings)?;
         self.store_index(key, &root, Arc::clone(&index))?;
         Ok(index)
     }
@@ -274,8 +280,9 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
-    use crate::cache::{CachedIndexPayloadV2, cache_file_path, load_payload};
+    use crate::cache::{CachedIndex, CachedIndexPayloadV3, cache_file_path, load_payload};
     use crate::dense::HashEmbeddingProvider;
+    use crate::matrix::EmbeddingMatrix;
     use crate::types::SearchFilters;
 
     use super::*;
@@ -500,13 +507,19 @@ mod tests {
     }
 
     fn empty_index() -> Arc<SearchIndex> {
+        let embeddings = EmbeddingMatrix::empty();
+        let payload = CachedIndexPayloadV3::new(
+            PathBuf::from("/repo"),
+            ContentFilter::Code,
+            "test".to_string(),
+            &embeddings,
+            Vec::new(),
+        );
         Arc::new(
-            SearchIndex::from_payload(CachedIndexPayloadV2::new(
-                PathBuf::from("/repo"),
-                ContentFilter::Code,
-                "test".to_string(),
-                Vec::new(),
-            ))
+            SearchIndex::from_cached(CachedIndex {
+                payload,
+                embeddings,
+            })
             .expect("index"),
         )
     }

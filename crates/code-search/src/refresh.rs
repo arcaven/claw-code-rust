@@ -1,11 +1,16 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::cache::{CachedFileRecord, CachedIndexPayloadV2, content_hash};
+use rayon::prelude::*;
+
+use crate::cache::{CachedFileRecord, CachedIndex, CachedIndexPayloadV3, content_hash};
 use crate::chunking::chunk_file;
 use crate::dense::EmbeddingProvider;
 use crate::files::{FileEntry, FileManifestEntry, read_indexable_text};
+use crate::matrix::EmbeddingMatrix;
 use crate::types::{Chunk, CodeSearchError, ContentFilter};
+
+const EMBEDDING_BATCH_SIZE: usize = 256;
 
 pub struct IndexRefresh;
 
@@ -14,13 +19,22 @@ impl IndexRefresh {
         root: &Path,
         content: ContentFilter,
         files: Vec<FileEntry>,
-        previous_payload: Option<CachedIndexPayloadV2>,
+        previous_cache: Option<CachedIndex>,
         provider: &dyn EmbeddingProvider,
     ) -> Result<RefreshOutcome, CodeSearchError> {
-        let mut previous_records = previous_payload
-            .filter(|payload| payload.is_valid_for(root, content, provider.model_id()))
-            .map(|payload| {
-                payload
+        let previous_cache = previous_cache.filter(|cache| {
+            cache
+                .payload
+                .is_valid_for(root, content, provider.model_id())
+        });
+        let previous_embeddings = previous_cache
+            .as_ref()
+            .map(|cache| cache.embeddings.clone())
+            .unwrap_or_else(EmbeddingMatrix::empty);
+        let mut previous_records = previous_cache
+            .map(|cache| {
+                cache
+                    .payload
                     .files
                     .into_iter()
                     .map(|record| (record.manifest.path.clone(), record))
@@ -28,8 +42,8 @@ impl IndexRefresh {
             })
             .unwrap_or_default();
 
-        let mut records = Vec::new();
-        let mut pending_records = Vec::new();
+        let mut slots = Vec::with_capacity(files.len());
+        let mut pending_files = Vec::new();
         let mut reused_files = 0;
 
         for file in files {
@@ -37,53 +51,88 @@ impl IndexRefresh {
                 && record.can_reuse_for(&file.manifest)
             {
                 reused_files += 1;
-                records.push(record);
+                slots.push(RefreshSlot::Reused(record));
                 continue;
             }
-            pending_records.push(PendingFileRecord::read(file)?);
+            let slot_idx = slots.len();
+            pending_files.push((slot_idx, file));
+            slots.push(RefreshSlot::Pending);
         }
 
         let deleted_files = previous_records.len();
-        let reembedded_files = pending_records.len();
+        let mut pending_records = pending_files
+            .into_par_iter()
+            .map(|(slot_idx, file)| PendingFileRecord::read(file).map(|record| (slot_idx, record)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        pending_records.sort_by_key(|(slot_idx, _)| *slot_idx);
+
         let texts = pending_records
             .iter()
-            .flat_map(|record| record.chunks.iter().map(|chunk| chunk.content.clone()))
+            .flat_map(|(_, record)| record.chunks.iter().map(|chunk| chunk.content.clone()))
             .collect::<Vec<_>>();
-        let embeddings = if texts.is_empty() {
-            Vec::new()
-        } else {
-            provider.embed(&texts)?
-        };
-        if embeddings.len() != texts.len() {
-            return Err(CodeSearchError::Index(format!(
-                "embedding provider returned {} vectors for {} chunks",
-                embeddings.len(),
-                texts.len()
-            )));
-        }
+        let changed_embeddings =
+            EmbeddingMatrix::from_vectors(embed_in_batches(provider, &texts)?)?;
+        let pending_by_slot = pending_records
+            .into_iter()
+            .collect::<HashMap<usize, PendingFileRecord>>();
+        let reembedded_files = pending_by_slot.len();
 
-        let mut embedding_cursor = 0;
-        for pending in pending_records {
-            let next_cursor = embedding_cursor + pending.chunks.len();
-            let file_embeddings = embeddings[embedding_cursor..next_cursor].to_vec();
-            embedding_cursor = next_cursor;
-            records.push(CachedFileRecord::new(
-                pending.manifest,
-                pending.content_hash,
-                pending.chunks,
-                file_embeddings,
-            ));
+        let mut embeddings = EmbeddingMatrix::empty();
+        let mut changed_cursor = 0;
+        let mut records = Vec::with_capacity(slots.len());
+
+        for (slot_idx, slot) in slots.into_iter().enumerate() {
+            match slot {
+                RefreshSlot::Reused(record) => {
+                    let embedding_start = embeddings.row_count();
+                    embeddings.extend_rows_from(
+                        &previous_embeddings,
+                        record.embedding_start,
+                        record.embedding_count,
+                    )?;
+                    records.push(CachedFileRecord::new(
+                        record.manifest,
+                        record.content_hash,
+                        record.chunks,
+                        embedding_start,
+                        record.embedding_count,
+                    ));
+                }
+                RefreshSlot::Pending => {
+                    let pending = pending_by_slot.get(&slot_idx).ok_or_else(|| {
+                        CodeSearchError::Index("missing pending file record".to_string())
+                    })?;
+                    let embedding_start = embeddings.row_count();
+                    embeddings.extend_rows_from(
+                        &changed_embeddings,
+                        changed_cursor,
+                        pending.chunks.len(),
+                    )?;
+                    changed_cursor += pending.chunks.len();
+                    records.push(CachedFileRecord::new(
+                        pending.manifest.clone(),
+                        pending.content_hash.clone(),
+                        pending.chunks.clone(),
+                        embedding_start,
+                        pending.chunks.len(),
+                    ));
+                }
+            }
         }
 
         records.sort_by(|left, right| left.manifest.path.cmp(&right.manifest.path));
-        let payload = CachedIndexPayloadV2::new(
+        let payload = CachedIndexPayloadV3::new(
             root.to_path_buf(),
             content,
             provider.model_id().to_string(),
+            &embeddings,
             records,
         );
         Ok(RefreshOutcome {
             payload,
+            embeddings,
             reused_files,
             reembedded_files,
             deleted_files,
@@ -93,12 +142,19 @@ impl IndexRefresh {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RefreshOutcome {
-    pub payload: CachedIndexPayloadV2,
+    pub payload: CachedIndexPayloadV3,
+    pub embeddings: EmbeddingMatrix,
     pub reused_files: usize,
     pub reembedded_files: usize,
     pub deleted_files: usize,
 }
 
+enum RefreshSlot {
+    Reused(CachedFileRecord),
+    Pending,
+}
+
+#[derive(Clone)]
 struct PendingFileRecord {
     manifest: FileManifestEntry,
     content_hash: String,
@@ -123,6 +179,24 @@ impl PendingFileRecord {
     }
 }
 
+fn embed_in_batches(
+    provider: &dyn EmbeddingProvider,
+    texts: &[String],
+) -> Result<Vec<Vec<f32>>, CodeSearchError> {
+    let mut embeddings = Vec::new();
+    for batch in texts.chunks(EMBEDDING_BATCH_SIZE) {
+        embeddings.extend(provider.embed(batch)?);
+    }
+    if embeddings.len() != texts.len() {
+        return Err(CodeSearchError::Index(format!(
+            "embedding provider returned {} vectors for {} chunks",
+            embeddings.len(),
+            texts.len()
+        )));
+    }
+    Ok(embeddings)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -131,6 +205,7 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
+    use crate::cache::CachedIndex;
     use crate::dense::{EmbeddingProvider, HashEmbeddingProvider};
     use crate::files::discover_files;
     use crate::index::SearchIndex;
@@ -169,16 +244,23 @@ mod tests {
 
     fn refresh(
         root: &Path,
-        previous_payload: Option<CachedIndexPayloadV2>,
+        previous_cache: Option<CachedIndex>,
         provider: &CountingProvider,
     ) -> RefreshOutcome {
         let files = discover_files(root, ContentFilter::Code).expect("files");
-        IndexRefresh::refresh(root, ContentFilter::Code, files, previous_payload, provider)
+        IndexRefresh::refresh(root, ContentFilter::Code, files, previous_cache, provider)
             .expect("refresh")
     }
 
+    fn cached(outcome: &RefreshOutcome) -> CachedIndex {
+        CachedIndex {
+            payload: outcome.payload.clone(),
+            embeddings: outcome.embeddings.clone(),
+        }
+    }
+
     /// Trace: L2-DES-TOOL-001
-    /// Verifies: unchanged files reuse cached chunks and embeddings without another embedding call.
+    /// Verifies: unchanged files reuse cached chunks and embedding rows without another embedding call.
     #[test]
     fn unchanged_files_reuse_cached_records() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -186,9 +268,10 @@ mod tests {
         let provider = CountingProvider::new();
 
         let first = refresh(temp.path(), None, &provider);
-        let second = refresh(temp.path(), Some(first.payload.clone()), &provider);
+        let second = refresh(temp.path(), Some(cached(&first)), &provider);
 
         assert_eq!(second.payload, first.payload);
+        assert_eq!(second.embeddings, first.embeddings);
         assert_eq!(second.reused_files, 1);
         assert_eq!(second.reembedded_files, 0);
         assert_eq!(provider.batches().len(), 1);
@@ -209,7 +292,7 @@ mod tests {
         )
         .expect("rewrite b");
 
-        let second = refresh(temp.path(), Some(first.payload), &provider);
+        let second = refresh(temp.path(), Some(cached(&first)), &provider);
 
         assert_eq!(second.reused_files, 1);
         assert_eq!(second.reembedded_files, 1);
@@ -219,7 +302,7 @@ mod tests {
     }
 
     /// Trace: L2-DES-TOOL-001
-    /// Verifies: adding and deleting files updates the v2 payload and flattened search index.
+    /// Verifies: adding and deleting files updates the v3 payload and flattened search index.
     #[test]
     fn added_and_deleted_files_update_flattened_index() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -230,8 +313,8 @@ mod tests {
         fs::remove_file(temp.path().join("a.rs")).expect("remove a");
         fs::write(temp.path().join("c.rs"), "pub fn gamma() {}\n").expect("write c");
 
-        let second = refresh(temp.path(), Some(first.payload), &provider);
-        let index = SearchIndex::from_payload(second.payload.clone()).expect("index");
+        let second = refresh(temp.path(), Some(cached(&first)), &provider);
+        let index = SearchIndex::from_cached(cached(&second)).expect("index");
         let payload_paths = second
             .payload
             .files
@@ -262,10 +345,30 @@ mod tests {
         let provider = CountingProvider::new();
 
         let first = refresh(temp.path(), None, &provider);
-        let second = refresh(temp.path(), Some(first.payload.clone()), &provider);
+        let second = refresh(temp.path(), Some(cached(&first)), &provider);
 
         assert_eq!(first.payload.files[0].chunks, Vec::<Chunk>::new());
         assert_eq!(second.reused_files, 1);
         assert_eq!(provider.batches(), Vec::<Vec<String>>::new());
+    }
+
+    /// Trace: L2-DES-TOOL-001
+    /// Verifies: embedding provider calls are split into deterministic bounded batches.
+    #[test]
+    fn embedding_calls_are_batched() {
+        let texts = (0..600)
+            .map(|idx| format!("chunk {idx}"))
+            .collect::<Vec<_>>();
+        let provider = CountingProvider::new();
+
+        let embeddings = embed_in_batches(&provider, &texts).expect("embed");
+        let batch_sizes = provider
+            .batches()
+            .into_iter()
+            .map(|batch| batch.len())
+            .collect::<Vec<_>>();
+
+        assert_eq!(embeddings.len(), 600);
+        assert_eq!(batch_sizes, vec![256, 256, 88]);
     }
 }
