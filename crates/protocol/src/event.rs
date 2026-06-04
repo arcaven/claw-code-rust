@@ -3,6 +3,7 @@ use smol_str::SmolStr;
 
 use crate::parse_command::ParsedCommand;
 use crate::protocol::{ExecCommandSource, FileChange};
+use crate::reference_search::{ReferenceSearchFailedPayload, ReferenceSearchSnapshot};
 use crate::session::{SessionMetadata, SessionRuntimeStatus};
 use crate::turn::TurnMetadata;
 use crate::{ItemId, SessionId, TurnId, TurnUsage};
@@ -258,6 +259,9 @@ pub enum ServerEvent {
         payload: ItemDeltaPayload,
     },
     ServerRequestResolved(ServerRequestResolvedPayload),
+    ReferenceSearchUpdated(ReferenceSearchSnapshot),
+    ReferenceSearchCompleted(ReferenceSearchSnapshot),
+    ReferenceSearchFailed(ReferenceSearchFailedPayload),
 }
 
 impl ServerEvent {
@@ -286,6 +290,9 @@ impl ServerEvent {
             }
             Self::ItemDelta { payload, .. } => Some(payload.context.session_id),
             Self::ServerRequestResolved(payload) => Some(payload.session_id),
+            Self::ReferenceSearchUpdated(_)
+            | Self::ReferenceSearchCompleted(_)
+            | Self::ReferenceSearchFailed(_) => None,
         }
     }
 
@@ -320,6 +327,9 @@ impl ServerEvent {
                 ItemDeltaKind::PlanDelta => "item/plan/delta",
             },
             Self::ServerRequestResolved(_) => "serverRequest/resolved",
+            Self::ReferenceSearchUpdated(_) => "search/updated",
+            Self::ReferenceSearchCompleted(_) => "search/completed",
+            Self::ReferenceSearchFailed(_) => "search/failed",
         }
     }
 
@@ -329,7 +339,12 @@ impl ServerEvent {
                 payload.context.seq = seq;
             }
             Self::ItemDelta { payload, .. } => payload.context.seq = seq,
-            Self::TurnUsageUpdated(_) | Self::InputQueueUpdated(_) | Self::SteerAccepted(_) => {}
+            Self::TurnUsageUpdated(_)
+            | Self::InputQueueUpdated(_)
+            | Self::SteerAccepted(_)
+            | Self::ReferenceSearchUpdated(_)
+            | Self::ReferenceSearchCompleted(_)
+            | Self::ReferenceSearchFailed(_) => {}
             _ => {}
         }
         self

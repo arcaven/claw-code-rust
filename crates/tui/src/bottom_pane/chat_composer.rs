@@ -181,6 +181,7 @@ use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
 use crate::style::user_message_style;
+use devo_protocol::ReferenceSearchSnapshot;
 use devo_protocol::user_input::TextElement;
 use devo_protocol::user_input::Utf8ByteSpan as ByteRange;
 
@@ -188,7 +189,6 @@ use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
-use crate::bottom_pane::McpServerMetadata;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::PluginCapabilitySummary;
 use crate::bottom_pane::SkillMetadata;
@@ -198,7 +198,6 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::tui::frame_requester::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use devo_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -333,7 +332,6 @@ pub(crate) struct ChatComposer {
     next_element_id: u64,
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
-    mcp_servers: Vec<McpServerMetadata>,
     plugins: Option<Vec<PluginCapabilitySummary>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     dismissed_mention_popup_token: Option<String>,
@@ -459,7 +457,6 @@ impl ChatComposer {
             next_element_id: 0,
             context_window_used_tokens: None,
             skills: None,
-            mcp_servers: Vec::new(),
             plugins: None,
             connectors_snapshot: None,
             dismissed_mention_popup_token: None,
@@ -506,11 +503,6 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
-        self.sync_popups();
-    }
-
-    pub(crate) fn set_mcp_server_mentions(&mut self, servers: Vec<McpServerMetadata>) {
-        self.mcp_servers = servers;
         self.sync_popups();
     }
 
@@ -603,7 +595,7 @@ impl ChatComposer {
 
     fn cancel_file_search(&mut self) {
         if self.current_file_query.is_some() {
-            self.app_event_tx.send(AppEvent::FileSearchCancelled);
+            self.app_event_tx.send(AppEvent::ReferenceSearchCancelled);
             self.current_file_query = None;
         }
     }
@@ -1170,18 +1162,18 @@ impl ChatComposer {
     }
 
     #[allow(dead_code)]
-    /// Integrate results from an asynchronous file search.
-    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
+    /// Integrate results from an asynchronous reference search.
+    pub(crate) fn on_reference_search_result(&mut self, snapshot: ReferenceSearchSnapshot) {
         let Some(current_token) = Self::current_at_token(&self.textarea) else {
             return;
         };
 
-        if current_token != query {
+        if current_token != snapshot.query {
             return;
         }
 
         if let ActivePopup::Reference(popup) = &mut self.active_popup {
-            popup.set_file_matches(&query, matches);
+            popup.set_snapshot(snapshot);
         }
     }
     #[allow(dead_code)]
@@ -1640,8 +1632,8 @@ impl ChatComposer {
                         }
                         self.insert_selected_mention(&insert_text, Some(&path));
                     }
-                    ReferenceSelection::File { path } => {
-                        let sel_path = path.to_string_lossy().to_string();
+                    ReferenceSelection::File { path, insert_text } => {
+                        let sel_path = insert_text;
                         if Self::is_image_path(&sel_path) {
                             match image::image_dimensions(&path) {
                                 Ok((width, height)) => {
@@ -3061,12 +3053,7 @@ impl ChatComposer {
         }
         self.dismissed_mention_popup_token = None;
 
-        let has_reference_sources = self.file_search_enabled()
-            || self
-                .skills
-                .as_ref()
-                .is_some_and(|skills| !skills.is_empty())
-            || !self.mcp_servers.is_empty();
+        let has_reference_sources = self.file_search_enabled();
         if let Some(token) = reference_token
             && has_reference_sources
         {
@@ -3262,10 +3249,7 @@ impl ChatComposer {
             return;
         }
 
-        let skill_mentions = self.mention_items();
-        let mcp_servers = self.mcp_servers.clone();
-        let has_sources =
-            self.file_search_enabled() || !skill_mentions.is_empty() || !mcp_servers.is_empty();
+        let has_sources = self.file_search_enabled();
         if !has_sources {
             self.active_popup = ActivePopup::None;
             return;
@@ -3273,7 +3257,7 @@ impl ChatComposer {
 
         if self.file_search_enabled() {
             if self.current_file_query.as_deref() != Some(query.as_str()) {
-                self.app_event_tx.send(AppEvent::FileSearchRequested {
+                self.app_event_tx.send(AppEvent::ReferenceSearchRequested {
                     query: query.clone(),
                 });
                 self.current_file_query = Some(query.clone());
@@ -3284,11 +3268,10 @@ impl ChatComposer {
 
         match &mut self.active_popup {
             ActivePopup::Reference(popup) => {
-                popup.set_sources(skill_mentions, mcp_servers);
                 popup.set_query(&query);
             }
             _ => {
-                let mut popup = ReferencePopup::new(skill_mentions, mcp_servers, self.accent_color);
+                let mut popup = ReferencePopup::new(self.accent_color);
                 popup.set_query(&query);
                 self.active_popup = ActivePopup::Reference(popup);
             }
@@ -3536,7 +3519,7 @@ mod reference_popup_tests {
     fn next_file_search_request(rx: &mut UnboundedReceiver<AppEvent>) -> String {
         loop {
             match rx.try_recv() {
-                Ok(AppEvent::FileSearchRequested { query }) => return query,
+                Ok(AppEvent::ReferenceSearchRequested { query }) => return query,
                 Ok(_) => {}
                 Err(error) => panic!("expected file search request, got {error:?}"),
             }

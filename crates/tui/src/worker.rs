@@ -19,6 +19,10 @@ use devo_protocol::ProviderValidateParams;
 use devo_protocol::ProviderVendor;
 use devo_protocol::ProviderVendorListParams;
 use devo_protocol::ProviderVendorUpsertParams;
+use devo_protocol::ReferenceSearchCancelParams;
+use devo_protocol::ReferenceSearchId;
+use devo_protocol::ReferenceSearchStartParams;
+use devo_protocol::ReferenceSearchUpdateParams;
 use devo_protocol::SessionHistoryMetadata;
 use devo_protocol::SessionPlanStepStatus;
 use devo_server::ApprovalDecisionPayload;
@@ -134,6 +138,10 @@ enum OperationCommand {
     ListSessions,
     /// Request a skills list from the server.
     ListSkills,
+    /// Request or update a server-backed composer reference search.
+    ReferenceSearchRequested { query: String },
+    /// Cancel the active composer reference search session.
+    ReferenceSearchCancelled,
     /// Persistently enable or disable one skill by canonical `SKILL.md` path.
     SetSkillEnabled { path: PathBuf, enabled: bool },
     /// Request proactive compaction for the active session.
@@ -300,6 +308,18 @@ impl QueryWorkerHandle {
     pub(crate) fn list_skills(&self) -> Result<()> {
         self.command_tx
             .send(OperationCommand::ListSkills)
+            .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
+    }
+
+    pub(crate) fn reference_search_requested(&self, query: String) -> Result<()> {
+        self.command_tx
+            .send(OperationCommand::ReferenceSearchRequested { query })
+            .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
+    }
+
+    pub(crate) fn reference_search_cancelled(&self) -> Result<()> {
+        self.command_tx
+            .send(OperationCommand::ReferenceSearchCancelled)
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
@@ -486,6 +506,7 @@ async fn run_worker_inner(
     let mut saw_usage_update_for_turn = false;
     let mut latest_completed_agent_message: Option<String> = None;
     let mut input_history_cursor: Option<usize> = None;
+    let mut active_reference_search_id: Option<ReferenceSearchId> = None;
 
     if let Some(initial_session_id) = config.initial_session_id {
         match client
@@ -760,6 +781,7 @@ async fn run_worker_inner(
                         client.initialize().await?;
                         session_id = None;
                         active_turn_id = None;
+                        active_reference_search_id = None;
                         last_query_total_tokens = 0;
                     }
                     Some(OperationCommand::ListSessions) => {
@@ -825,6 +847,29 @@ async fn run_worker_inner(
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
                             });
+                        }
+                    }
+                    Some(OperationCommand::ReferenceSearchRequested { query }) => {
+                        match emit_reference_search_update(
+                            &mut client,
+                            &session_cwd,
+                            &mut active_reference_search_id,
+                            query,
+                            event_tx,
+                        )
+                        .await
+                        {
+                            Ok(()) => {}
+                            Err(error) => {
+                                tracing::warn!(?error, "reference search request failed");
+                            }
+                        }
+                    }
+                    Some(OperationCommand::ReferenceSearchCancelled) => {
+                        if let Some(search_id) = active_reference_search_id.take() {
+                            let _ = client
+                                .reference_search_cancel(ReferenceSearchCancelParams { search_id })
+                                .await;
                         }
                     }
                     Some(OperationCommand::CompactSession) => {
@@ -904,6 +949,7 @@ async fn run_worker_inner(
                     Some(OperationCommand::StartNewSession) => {
                         active_turn_id = None;
                         session_id = None;
+                        active_reference_search_id = None;
                         session_cwd = config.cwd.clone();
                         input_history_cursor = None;
                         turn_count = 0;
@@ -924,6 +970,7 @@ async fn run_worker_inner(
                         let _ = emit_skills_list(&mut client, &session_cwd, event_tx, false).await;
                     }
                     Some(OperationCommand::SwitchSession(next_session_id)) => {
+                        active_reference_search_id = None;
                         match client
                             .session_resume(SessionResumeParams {
                                 session_id: next_session_id,
@@ -1636,6 +1683,32 @@ async fn run_worker_inner(
                                     });
                                 }
                             }
+                            "search/updated" => {
+                                if let ServerEvent::ReferenceSearchUpdated(snapshot) = event {
+                                    let _ =
+                                        event_tx.send(WorkerEvent::ReferenceSearchUpdated {
+                                            snapshot,
+                                        });
+                                }
+                            }
+                            "search/completed" => {
+                                if let ServerEvent::ReferenceSearchCompleted(snapshot) = event {
+                                    let _ =
+                                        event_tx.send(WorkerEvent::ReferenceSearchUpdated {
+                                            snapshot,
+                                        });
+                                }
+                            }
+                            "search/failed" => {
+                                if let ServerEvent::ReferenceSearchFailed(payload) = event {
+                                    tracing::warn!(
+                                        search_id = %payload.search_id,
+                                        query = %payload.query,
+                                        message = %payload.message,
+                                        "reference search failed"
+                                    );
+                                }
+                            }
                             "session/title/updated" => {
                                 if let ServerEvent::SessionTitleUpdated(payload) = event
                                     && let Some(title) = payload.session.title {
@@ -1763,6 +1836,32 @@ async fn emit_skills_list(
     .await
     .context("skills list request timed out")??;
     emit_skills_list_result(result.skills, event_tx, show_in_transcript);
+    Ok(())
+}
+
+async fn emit_reference_search_update(
+    client: &mut StdioServerClient,
+    cwd: &Path,
+    active_search_id: &mut Option<ReferenceSearchId>,
+    query: String,
+    event_tx: &mpsc::UnboundedSender<WorkerEvent>,
+) -> Result<()> {
+    let snapshot = if let Some(search_id) = active_search_id.clone() {
+        client
+            .reference_search_update(ReferenceSearchUpdateParams { search_id, query })
+            .await?
+            .snapshot
+    } else {
+        let result = client
+            .reference_search_start(ReferenceSearchStartParams {
+                cwd: Some(cwd.to_path_buf()),
+                query,
+            })
+            .await?;
+        *active_search_id = Some(result.snapshot.search_id.clone());
+        result.snapshot
+    };
+    let _ = event_tx.send(WorkerEvent::ReferenceSearchUpdated { snapshot });
     Ok(())
 }
 

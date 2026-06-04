@@ -5,7 +5,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use devo_file_search::FileMatch;
+use devo_protocol::ReferenceSearchSnapshot;
 use devo_protocol::user_input::TextElement;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -22,7 +22,6 @@ pub(crate) mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
-mod file_search_popup;
 mod footer;
 pub(crate) mod list_selection_view;
 mod paste_burst;
@@ -103,13 +102,6 @@ pub(crate) struct SkillMetadata {
     pub(crate) short_description: Option<String>,
     pub(crate) interface: Option<SkillInterfaceMetadata>,
     pub(crate) path_to_skills_md: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct McpServerMetadata {
-    pub(crate) id: String,
-    pub(crate) display_name: String,
-    pub(crate) enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,13 +231,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub(crate) fn set_mcp_server_mentions(&mut self, servers: Vec<McpServerMetadata>) {
-        self.composer.set_mcp_server_mentions(servers);
-        self.request_redraw();
-    }
-
-    pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
-        self.composer.on_file_search_result(query, matches);
+    pub(crate) fn on_reference_search_result(&mut self, snapshot: ReferenceSearchSnapshot) {
+        self.composer.on_reference_search_result(snapshot);
         self.request_redraw();
     }
 

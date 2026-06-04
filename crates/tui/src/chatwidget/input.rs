@@ -201,8 +201,8 @@ impl ChatWidget {
             | AppEvent::OpenThinkingPicker
             | AppEvent::OpenThemePicker
             | AppEvent::StatusLineBranchUpdated { .. }
-            | AppEvent::FileSearchRequested { .. }
-            | AppEvent::FileSearchCancelled
+            | AppEvent::ReferenceSearchRequested { .. }
+            | AppEvent::ReferenceSearchCancelled
             | AppEvent::StatusLineSetup { .. }
             | AppEvent::StatusLineSetupCancelled
             | AppEvent::TerminalTitleSetup { .. }
@@ -210,8 +210,8 @@ impl ChatWidget {
             | AppEvent::TerminalTitleSetupCancelled => {
                 self.frame_requester.schedule_frame();
             }
-            AppEvent::FileSearchResults { query, matches } => {
-                self.bottom_pane.on_file_search_result(query, matches);
+            AppEvent::ReferenceSearchResults { snapshot } => {
+                self.bottom_pane.on_reference_search_result(snapshot);
                 self.frame_requester.schedule_frame();
             }
             AppEvent::DiffResult(text) => {

@@ -9,6 +9,7 @@ use devo_core::SessionId;
 use devo_protocol::ProviderVendor;
 use devo_protocol::ProviderWireApi;
 use devo_protocol::ReasoningEffort;
+use devo_protocol::ReferenceSearchSnapshot;
 use devo_protocol::SessionHistoryItem;
 use devo_protocol::parse_command::ParsedCommand;
 use devo_protocol::protocol::FileChange;
@@ -249,6 +250,11 @@ pub(crate) enum WorkerEvent {
         skills: Vec<SkillMetadata>,
         /// Whether this list should be rendered into the transcript.
         show_in_transcript: bool,
+    },
+    /// Server-owned `@` reference search results for the composer popup.
+    ReferenceSearchUpdated {
+        /// Correlated unified result snapshot returned by `search/*`.
+        snapshot: ReferenceSearchSnapshot,
     },
     /// The interactive client cleared its active session and is waiting for the next prompt.
     NewSessionPrepared {
