@@ -10,8 +10,10 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use devo_protocol::InputItem;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
@@ -19,6 +21,7 @@ use crate::bottom_pane::InputResult;
 use crate::history_cell;
 use crate::history_cell::PlainHistoryCell;
 use crate::onboarding_widget::OnboardingResult;
+use crate::onboarding_widget::OnboardingTranscriptEvent;
 use crate::slash_command::SlashCommand;
 use devo_utils::ansi_escape::ansi_escape_line;
 
@@ -51,9 +54,16 @@ impl ChatWidget {
         if self.onboarding.is_some() && Self::is_copy_shortcut(key) {
             return;
         }
-        if let Some(onboarding) = self.onboarding.as_mut() {
-            onboarding.handle_key_event(key);
-            if let Some(result) = onboarding.take_result() {
+        if self.onboarding.is_some() {
+            if let Some(onboarding) = self.onboarding.as_mut() {
+                onboarding.handle_key_event(key);
+            }
+            self.drain_onboarding_transcript_events();
+            if let Some(result) = self
+                .onboarding
+                .as_mut()
+                .and_then(crate::onboarding_widget::OnboardingWidget::take_result)
+            {
                 self.handle_onboarding_result(result);
             }
             self.frame_requester.schedule_frame();
@@ -120,7 +130,12 @@ impl ChatWidget {
             return false;
         };
         onboarding.handle_key_event(key);
-        if let Some(result) = onboarding.take_result() {
+        self.drain_onboarding_transcript_events();
+        if let Some(result) = self
+            .onboarding
+            .as_mut()
+            .and_then(crate::onboarding_widget::OnboardingWidget::take_result)
+        {
             self.handle_onboarding_result(result);
         }
         self.frame_requester.schedule_frame();
@@ -139,6 +154,7 @@ impl ChatWidget {
         }
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.handle_paste(text);
+            self.drain_onboarding_transcript_events();
             self.frame_requester.schedule_frame();
             return;
         }
@@ -276,6 +292,9 @@ impl ChatWidget {
                     Some("onboarding complete".to_string()),
                 ));
                 self.onboarding = None;
+                self.push_session_header(/*is_first_run*/ false, None);
+                self.bottom_pane
+                    .set_composer_input_enabled(/*enabled*/ true, /*placeholder*/ None);
                 self.set_default_placeholder();
                 self.set_status_message("Onboarding complete");
             }
@@ -290,6 +309,9 @@ impl ChatWidget {
                     Some("onboarding validation skipped".to_string()),
                 ));
                 self.onboarding = None;
+                self.push_session_header(/*is_first_run*/ false, None);
+                self.bottom_pane
+                    .set_composer_input_enabled(/*enabled*/ true, /*placeholder*/ None);
                 self.set_default_placeholder();
                 self.set_status_message("Onboarding complete");
             }
@@ -297,6 +319,92 @@ impl ChatWidget {
                 self.onboarding = None;
                 self.app_event_tx
                     .send(AppEvent::Exit(crate::app_event::ExitMode::ShutdownFirst));
+            }
+        }
+    }
+
+    pub(super) fn drain_onboarding_transcript_events(&mut self) {
+        let events = match self.onboarding.as_mut() {
+            Some(onboarding) => onboarding.take_transcript_events(),
+            None => return,
+        };
+        for event in events {
+            self.add_to_history(PlainHistoryCell::new(
+                self.onboarding_transcript_lines(event),
+            ));
+        }
+    }
+
+    fn onboarding_transcript_lines(&self, event: OnboardingTranscriptEvent) -> Vec<Line<'static>> {
+        let marker = Span::styled("▌", Style::default().fg(self.active_accent_color()));
+        match event {
+            OnboardingTranscriptEvent::ModelSelected {
+                model_slug,
+                display_name,
+            } => {
+                let suffix = if model_slug == display_name {
+                    String::new()
+                } else {
+                    format!(" ({model_slug})")
+                };
+                vec![Line::from(vec![
+                    marker,
+                    " ".into(),
+                    "Onboarding model selected".bold(),
+                    format!(" {display_name}{suffix}").into(),
+                ])]
+            }
+            OnboardingTranscriptEvent::ProviderSelected {
+                provider_name,
+                base_url,
+                credential_summary,
+            } => {
+                let mut lines = vec![Line::from(vec![
+                    marker,
+                    " ".into(),
+                    "Onboarding provider selected".bold(),
+                    format!(" {provider_name}").into(),
+                ])];
+                if let Some(base_url) = base_url {
+                    lines.push(Line::from(format!("  base URL: {base_url}").dim()));
+                }
+                lines.push(Line::from(
+                    format!("  credentials: {credential_summary}").dim(),
+                ));
+                lines
+            }
+            OnboardingTranscriptEvent::SettingsConfirmed {
+                provider_name,
+                base_url,
+                model_name,
+                display_name,
+                invocation_method,
+                default_reasoning_effort,
+                credential_summary,
+            } => {
+                let mut lines = vec![Line::from(vec![
+                    marker,
+                    " ".into(),
+                    "Onboarding settings confirmed".bold(),
+                ])];
+                lines.push(Line::from(format!("  provider: {provider_name}").dim()));
+                if let Some(base_url) = base_url {
+                    lines.push(Line::from(format!("  base URL: {base_url}").dim()));
+                }
+                lines.push(Line::from(format!("  request model: {model_name}").dim()));
+                lines.push(Line::from(format!("  display name: {display_name}").dim()));
+                lines.push(Line::from(format!("  wire API: {invocation_method}").dim()));
+                lines.push(Line::from(
+                    format!(
+                        "  reasoning: {}",
+                        default_reasoning_effort.unwrap_or_else(|| "default".to_string())
+                    )
+                    .dim(),
+                ));
+                lines.push(Line::from(
+                    format!("  credentials: {credential_summary}").dim(),
+                ));
+                lines
             }
         }
     }

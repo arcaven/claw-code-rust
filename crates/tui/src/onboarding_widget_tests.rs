@@ -16,6 +16,7 @@ use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::onboarding_widget::OnboardingResult;
+use crate::onboarding_widget::OnboardingTranscriptEvent;
 use crate::onboarding_widget::OnboardingWidget;
 use crate::render::renderable::Renderable;
 use crate::tui::frame_requester::FrameRequester;
@@ -272,6 +273,54 @@ fn onboarding_validation_failure_retry_still_validates() {
     assert_eq!(command.starts_with("onboard "), true);
     assert_eq!(command.starts_with("onboard-skip-validation "), false);
     assert_eq!(widget.take_result(), None);
+}
+
+#[test]
+fn onboarding_settings_summary_masks_entered_api_key() {
+    let models = vec![deepseek_model()];
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    let mut widget = OnboardingWidget::new(
+        &models,
+        AppEventSender::new(app_event_tx),
+        FrameRequester::test_dummy(),
+        true,
+    );
+    assert_eq!(
+        next_shell_command(&mut app_event_rx),
+        "provider list".to_string()
+    );
+    widget.on_provider_vendors_listed(Vec::new());
+
+    widget.handle_key_event(press(KeyCode::Enter));
+    let _ = widget.take_transcript_events();
+    widget.handle_key_event(press(KeyCode::Enter));
+    let _ = widget.take_transcript_events();
+
+    type_text(&mut widget, "Deepseek");
+    widget.handle_key_event(press(KeyCode::Enter));
+    type_text(&mut widget, "https://api.deepseek.com");
+    widget.handle_key_event(press(KeyCode::Enter));
+    type_text(&mut widget, "secret-key");
+    widget.handle_key_event(press(KeyCode::Enter));
+    widget.handle_key_event(press(KeyCode::Enter));
+    widget.handle_key_event(press(KeyCode::Enter));
+    widget.handle_key_event(press(KeyCode::Enter));
+    widget.handle_key_event(press(KeyCode::Enter));
+
+    let events = widget.take_transcript_events();
+    assert_eq!(
+        events,
+        vec![OnboardingTranscriptEvent::SettingsConfirmed {
+            provider_name: "Deepseek".to_string(),
+            base_url: Some("https://api.deepseek.com".to_string()),
+            model_name: "deepseek-v4-flash".to_string(),
+            display_name: "Deepseek V4 Flash".to_string(),
+            invocation_method: ProviderWireApi::OpenAIChatCompletions,
+            default_reasoning_effort: Some("high".to_string()),
+            credential_summary: "new API key entered".to_string(),
+        }]
+    );
+    assert!(!format!("{events:?}").contains("secret-key"));
 }
 
 #[test]

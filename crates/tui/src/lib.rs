@@ -23,6 +23,8 @@ mod exec_command;
 mod get_git_diff;
 mod history_cell;
 mod host_overlay;
+#[cfg(test)]
+mod inline_onboarding_tests;
 mod insert_history;
 mod interactive;
 mod key_hint;
@@ -45,6 +47,7 @@ mod render;
 mod shimmer;
 mod slash_command;
 mod startup_header;
+mod startup_logo_cell;
 mod state;
 mod status_indicator_widget;
 mod streaming;

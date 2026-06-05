@@ -105,7 +105,9 @@ impl ChatWidget {
         {
             model.display_name = display_name.to_string();
         }
-        self.refresh_header_box();
+        if self.onboarding.is_none() {
+            self.refresh_header_box();
+        }
         self.sync_bottom_pane_summary();
         self.frame_requester.schedule_frame();
     }
