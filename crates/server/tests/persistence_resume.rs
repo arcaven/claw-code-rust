@@ -661,7 +661,7 @@ async fn resume_normalizes_historical_default_reasoning_effort() -> Result<()> {
         let rollout_path =
             rollout_dir.join(format!("rollout-2026-06-07T00-00-00-{session_id}.jsonl"));
         let session = SessionRecord {
-            id: session_id.clone(),
+            id: *session_id,
             rollout_path: rollout_path.clone(),
             created_at: now,
             updated_at: now,
@@ -693,7 +693,7 @@ async fn resume_normalizes_historical_default_reasoning_effort() -> Result<()> {
         };
         let turn = TurnRecord {
             id: devo_protocol::TurnId::new(),
-            session_id: session_id.clone(),
+            session_id: *session_id,
             sequence: 1,
             started_at: now,
             completed_at: Some(now),
