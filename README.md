@@ -6,9 +6,7 @@
 
 <div align="center">
 
-**A model-neutral, lightweight coding agent with a single-binary Rust core,
-designed to spend fewer tokens on code search than grep-first agents such as
-Claude Code.**
+**A lightweight, model-neutral coding agent that runs as a single binary. Fast, token-efficient, and highly customizable.**
 
 [![Stars](https://img.shields.io/github/stars/7df-lab/devo?style=flat-square)](https://github.com/7df-lab/devo/stargazers)
 [![Language](https://img.shields.io/badge/language-Rust-E57324?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
