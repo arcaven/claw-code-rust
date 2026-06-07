@@ -231,16 +231,20 @@ fn spec(name: &str, description: &str, schema: JsonSchema) -> ToolSpec {
 fn spawn_spec() -> ToolSpec {
     spec(
         "spawn_agent",
-        "Create a child agent for a bounded delegated task.",
+        "Create a child agent for a bounded delegated task. Use this from a parent session to parallelize independent work, then use wait_agent to poll the generated child path or nickname for output.",
         JsonSchema::object(
             BTreeMap::from([
                 (
                     "message".to_string(),
-                    JsonSchema::string(Some("Initial task message for the child agent")),
+                    JsonSchema::string(Some(
+                        "Initial task message for the child agent. Include the goal, scope, files or subsystems to inspect, and the expected result.",
+                    )),
                 ),
                 (
                     "fork_turns".to_string(),
-                    JsonSchema::string(Some("History fork mode: none or all")),
+                    JsonSchema::string(Some(
+                        "Optional history fork mode. Use \"all\" (default) when the child needs stable completed parent history; it excludes the active parent turn. Use \"none\" for a clean child context containing only the task message.",
+                    )),
                 ),
             ]),
             Some(vec!["message".to_string()]),
@@ -252,7 +256,7 @@ fn spawn_spec() -> ToolSpec {
 fn send_message_spec() -> ToolSpec {
     spec(
         "send_message",
-        "Send a queued message to an existing child agent without starting a turn.",
+        "Parent-only tool that sends additional user input to an existing child agent. If the child is idle, the message starts a child turn; if active, it queues for the next turn.",
         message_schema(),
     )
 }
@@ -260,20 +264,26 @@ fn send_message_spec() -> ToolSpec {
 fn wait_agent_spec() -> ToolSpec {
     spec(
         "wait_agent",
-        "Poll child agent output events or wait for new output.",
+        "Parent-only tool that polls child assistant output and terminal status events. Use after spawn_agent or send_message to collect incremental child results.",
         JsonSchema::object(
             BTreeMap::from([
                 (
                     "target".to_string(),
-                    JsonSchema::string(Some("Optional child agent path or session id")),
+                    JsonSchema::string(Some(
+                        "Optional child agent path, generated nickname, or session id. Omit to poll all direct children.",
+                    )),
                 ),
                 (
                     "after_sequence".to_string(),
-                    JsonSchema::integer(Some("Only return output events after this sequence")),
+                    JsonSchema::integer(Some(
+                        "Only return output events after this sequence. Use the previous next_sequence value to poll incrementally.",
+                    )),
                 ),
                 (
                     "timeout_ms".to_string(),
-                    JsonSchema::integer(Some("Optional wait timeout in milliseconds")),
+                    JsonSchema::integer(Some(
+                        "Optional wait timeout in milliseconds. If no newer output exists, wait up to this timeout before returning timed_out.",
+                    )),
                 ),
             ]),
             None,
@@ -285,11 +295,11 @@ fn wait_agent_spec() -> ToolSpec {
 fn list_agents_spec() -> ToolSpec {
     spec(
         "list_agents",
-        "List child agents for the current session.",
+        "Parent-only tool that lists child agents for the current session, including generated path, nickname, status, and last task message.",
         JsonSchema::object(
             BTreeMap::from([(
                 "path_prefix".to_string(),
-                JsonSchema::string(Some("Optional path prefix filter")),
+                JsonSchema::string(Some("Optional generated child path or path prefix filter.")),
             )]),
             None,
             Some(false),
@@ -300,11 +310,13 @@ fn list_agents_spec() -> ToolSpec {
 fn close_agent_spec() -> ToolSpec {
     spec(
         "close_agent",
-        "Close an existing child agent and notify the parent.",
+        "Parent-only tool that closes an existing child agent, interrupts active work if needed, and records a terminal output event.",
         JsonSchema::object(
             BTreeMap::from([(
                 "target".to_string(),
-                JsonSchema::string(Some("Target child agent path or session id")),
+                JsonSchema::string(Some(
+                    "Target child agent path, generated nickname, or session id.",
+                )),
             )]),
             Some(vec!["target".to_string()]),
             Some(false),
@@ -317,11 +329,15 @@ fn message_schema() -> JsonSchema {
         BTreeMap::from([
             (
                 "target".to_string(),
-                JsonSchema::string(Some("Target child agent path or session id")),
+                JsonSchema::string(Some(
+                    "Target child agent path, generated nickname, or session id.",
+                )),
             ),
             (
                 "message".to_string(),
-                JsonSchema::string(Some("Message content")),
+                JsonSchema::string(Some(
+                    "Additional task input to deliver to the child as user text.",
+                )),
             ),
         ]),
         Some(vec!["target".to_string(), "message".to_string()]),
@@ -465,6 +481,38 @@ mod tests {
                 message: "review this".to_string(),
                 fork_turns: Some("all".to_string()),
             }]
+        );
+    }
+
+    #[test]
+    fn agent_tool_schemas_explain_subagent_workflow() {
+        let spawn = spawn_spec();
+        let schema = spawn.input_schema.to_json_value();
+        let fork_description = schema["properties"]["fork_turns"]["description"]
+            .as_str()
+            .expect("fork_turns description");
+
+        assert!(spawn.description.contains("wait_agent"));
+        assert!(fork_description.contains("\"all\" (default)"));
+        assert!(fork_description.contains("stable completed parent history"));
+        assert!(fork_description.contains("excludes the active parent turn"));
+        assert!(fork_description.contains("\"none\""));
+        assert!(send_message_spec().description.contains("Parent-only"));
+        assert!(
+            send_message_spec()
+                .description
+                .contains("queues for the next turn")
+        );
+        assert!(
+            wait_agent_spec()
+                .description
+                .contains("polls child assistant output")
+        );
+        assert!(list_agents_spec().description.contains("generated path"));
+        assert!(
+            close_agent_spec()
+                .description
+                .contains("terminal output event")
         );
     }
 

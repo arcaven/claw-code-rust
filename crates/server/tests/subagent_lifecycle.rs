@@ -7,6 +7,7 @@ use devo_protocol::AgentInfo;
 use devo_protocol::AgentMessageResult;
 use devo_protocol::AgentOutputEvent;
 use devo_protocol::ErrorResponse;
+use devo_protocol::ModelRequest;
 use devo_protocol::ProtocolErrorCode;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -640,6 +641,7 @@ async fn fork_all_inherits_stable_parent_context() -> Result<()> {
     let requests = provider.requests();
     assert_eq!(requests.len(), 4);
     let completed_child_texts = message_texts(&requests[1]);
+    assert_subagent_request_hides_agent_tools(&requests[1]);
     assert!(
         completed_child_texts
             .iter()
@@ -658,8 +660,15 @@ async fn fork_all_inherits_stable_parent_context() -> Result<()> {
             .any(|text| text.contains("use inherited context")),
         "child request should include child task input: {completed_child_texts:?}"
     );
+    assert_text_order(
+        &completed_child_texts,
+        "stable assistant answer",
+        "You are running as a sub-agent",
+    );
+    assert_subagent_reminder_before_task(&completed_child_texts, "use inherited context");
 
     let active_child_texts = message_texts(&requests[3]);
+    assert_subagent_request_hides_agent_tools(&requests[3]);
     assert!(
         active_child_texts
             .iter()
@@ -678,6 +687,12 @@ async fn fork_all_inherits_stable_parent_context() -> Result<()> {
             .any(|text| text.contains("fork while parent active")),
         "active fork should include child task input: {active_child_texts:?}"
     );
+    assert_text_order(
+        &active_child_texts,
+        "remember stable context",
+        "You are running as a sub-agent",
+    );
+    assert_subagent_reminder_before_task(&active_child_texts, "fork while parent active");
 
     request_agent_close(
         &runtime,
@@ -690,10 +705,125 @@ async fn fork_all_inherits_stable_parent_context() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn fork_none_omits_parent_context_and_places_reminder_before_task() -> Result<()> {
+    let data_root = TempDir::new()?;
+    let provider = Arc::new(ScriptedProvider::new([
+        ScriptedProvider::completed("stable assistant answer"),
+        StreamScript::Pending,
+    ]));
+    let runtime = build_runtime(data_root.path(), Arc::clone(&provider) as _)?;
+    let (connection_id, mut notifications_rx) = initialize_connection(&runtime).await?;
+    let parent_session_id = start_parent_session(&runtime, connection_id, data_root.path()).await?;
+
+    let _ = start_turn(
+        &runtime,
+        connection_id,
+        parent_session_id,
+        "remember stable context",
+    )
+    .await?;
+    wait_for_parent_turn_completed(&mut notifications_rx, parent_session_id).await?;
+
+    let child = spawn_child_with(
+        &runtime,
+        connection_id,
+        parent_session_id,
+        "clean child task",
+        Some("none"),
+    )
+    .await?;
+    wait_for_child_turn_started(&mut notifications_rx, child.child_session_id).await?;
+
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    let child_texts = message_texts(&requests[1]);
+    assert_subagent_request_hides_agent_tools(&requests[1]);
+    assert!(
+        !child_texts
+            .iter()
+            .any(|text| text.contains("remember stable context")),
+        "fork none should exclude parent user context: {child_texts:?}"
+    );
+    assert!(
+        !child_texts
+            .iter()
+            .any(|text| text.contains("stable assistant answer")),
+        "fork none should exclude parent assistant context: {child_texts:?}"
+    );
+    assert_subagent_reminder_before_task(&child_texts, "clean child task");
+
+    request_agent_close(
+        &runtime,
+        connection_id,
+        parent_session_id,
+        child.child_session_id,
+    )
+    .await?;
+
+    Ok(())
+}
+
 fn assert_generated_name(name: &str) {
     let Some((adjective, noun)) = name.split_once('-') else {
         panic!("generated name should be adjective-noun: {name}");
     };
     assert!(ADJECTIVES.contains(&adjective));
     assert!(NOUNS.contains(&noun));
+}
+
+fn assert_subagent_request_hides_agent_tools(request: &ModelRequest) {
+    let tools = request.tools.as_ref().expect("child request tools");
+    for name in [
+        "spawn_agent",
+        "send_message",
+        "wait_agent",
+        "list_agents",
+        "close_agent",
+    ] {
+        assert!(
+            tools.iter().all(|tool| tool.name != name),
+            "child request should not expose {name}: {:?}",
+            tools.iter().map(|tool| &tool.name).collect::<Vec<_>>()
+        );
+        assert!(
+            !request.system.as_deref().unwrap_or_default().contains(name),
+            "child request system prompt should not mention hidden agent tool {name}"
+        );
+    }
+
+    let system = request.system.as_deref().unwrap_or_default();
+    assert!(
+        !system.contains("<system-reminder>"),
+        "child request system prompt should remain base-only"
+    );
+    assert!(
+        !system.contains("You are running as a sub-agent"),
+        "child request system prompt should not include request-only reminders"
+    );
+}
+
+fn assert_subagent_reminder_before_task(texts: &[String], task: &str) {
+    assert_text_order(texts, "You are running as a sub-agent", task);
+    assert_text_order(
+        texts,
+        "Do not call agent coordination tools such as spawn_agent",
+        task,
+    );
+}
+
+fn assert_text_order(texts: &[String], before: &str, after: &str) {
+    let before_index = text_index_containing(texts, before);
+    let after_index = text_index_containing(texts, after);
+    assert!(
+        before_index < after_index,
+        "expected {before:?} before {after:?}: {texts:?}"
+    );
+}
+
+fn text_index_containing(texts: &[String], needle: &str) -> usize {
+    texts
+        .iter()
+        .position(|text| text.contains(needle))
+        .unwrap_or_else(|| panic!("expected text containing {needle:?}: {texts:?}"))
 }

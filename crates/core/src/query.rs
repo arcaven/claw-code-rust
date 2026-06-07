@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use devo_protocol::ModelRequest;
+use devo_protocol::RequestContent;
+use devo_protocol::RequestMessage;
 use devo_protocol::ResolvedThinkingRequest;
 use devo_protocol::ResponseContent;
 use devo_protocol::ResponseExtra;
@@ -50,7 +52,9 @@ use crate::response_item::ResponseItem;
 use crate::response_item::message_to_response_items;
 use crate::tool_prompt::build_deferred_tool_prompt_surface;
 use crate::tools::DeferredLoadingConfig;
-use crate::tools::hide_subagent_agent_spawn_tools;
+use crate::tools::hide_subagent_agent_coordination_tools;
+
+const SUBAGENT_MODE_REMINDER: &str = "<system-reminder>\nYou are running as a sub-agent. Complete the delegated task using the available non-agent tools. Do not call agent coordination tools such as spawn_agent, send_message, wait_agent, list_agents, or close_agent; report progress and final results through assistant output.\n</system-reminder>";
 
 fn estimate_request_prompt_tokens(request: &ModelRequest) -> usize {
     let system_bytes = request.system.as_ref().map_or(0, String::len);
@@ -329,6 +333,38 @@ fn preserve_full_tool_result(tool_name: Option<&str>) -> bool {
     matches!(tool_name, Some("wait_agent" | "subagent_result"))
 }
 
+fn insert_subagent_request_reminders(
+    messages: &mut Vec<RequestMessage>,
+    deferred_reminder: Option<&str>,
+) {
+    let mut reminders = Vec::new();
+    if let Some(reminder) = deferred_reminder.filter(|text| !text.trim().is_empty()) {
+        reminders.push(request_text_message(reminder.to_string()));
+    }
+    reminders.push(request_text_message(SUBAGENT_MODE_REMINDER.to_string()));
+
+    let insert_at = messages
+        .iter()
+        .rposition(is_user_text_message)
+        .unwrap_or(messages.len());
+    messages.splice(insert_at..insert_at, reminders);
+}
+
+fn request_text_message(text: String) -> RequestMessage {
+    RequestMessage {
+        role: Role::User.as_str().to_string(),
+        content: vec![RequestContent::Text { text }],
+    }
+}
+
+fn is_user_text_message(message: &RequestMessage) -> bool {
+    message.role == Role::User.as_str()
+        && message
+            .content
+            .iter()
+            .any(|content| matches!(content, RequestContent::Text { .. }))
+}
+
 fn compact_tool_content(content: ToolContent) -> ToolContent {
     match content {
         ToolContent::Text(text) => ToolContent::Text(micro_compact(text)),
@@ -519,9 +555,10 @@ pub async fn query(
 
         // Build model request from the session-locked prefix.
         let base_system = session_context.build_system_prompt();
+        let agent_scope = runtime.agent_scope();
         let mut deferred_config = DeferredLoadingConfig::default();
-        if runtime.agent_scope() == ToolAgentScope::Subagent {
-            hide_subagent_agent_spawn_tools(&mut deferred_config);
+        if agent_scope == ToolAgentScope::Subagent {
+            hide_subagent_agent_coordination_tools(&mut deferred_config);
         }
         let loaded_deferred_tools = registry.loaded_deferred_tools();
         let prompt_surface = {
@@ -529,7 +566,7 @@ pub async fn query(
                 AgentError::Provider(anyhow::anyhow!("loaded deferred tool state lock poisoned"))
             })?;
             build_deferred_tool_prompt_surface(
-                Some(base_system),
+                Some(base_system.clone()),
                 &registry,
                 &session.id,
                 &loaded_deferred_tools,
@@ -539,6 +576,11 @@ pub async fn query(
         let tool_prompt_metrics = prompt_surface.metrics.clone();
         let deferred_tool_count = prompt_surface.deferred_tool_names.len();
         let loaded_deferred_tool_count = prompt_surface.loaded_deferred_tool_names.len();
+        let request_system = if agent_scope == ToolAgentScope::Subagent {
+            (!base_system.is_empty()).then_some(base_system)
+        } else {
+            prompt_surface.system.clone()
+        };
 
         // resolve thinking request parameter
         let ResolvedThinkingRequest {
@@ -576,12 +618,18 @@ pub async fn query(
                 session_context.environment.cwd.display().to_string(),
             ),
         };
-        let messages = history
+        let mut messages = history
             .for_prompt_with_prefix(&prefetched_user_inputs, &turn_config.model.input_modalities);
+        if agent_scope == ToolAgentScope::Subagent {
+            insert_subagent_request_reminders(
+                &mut messages,
+                prompt_surface.deferred_reminder.as_deref(),
+            );
+        }
 
         let request = ModelRequest {
             model: provider_request_model,
-            system: prompt_surface.system,
+            system: request_system,
             messages,
             max_tokens: turn_config
                 .model
@@ -1103,6 +1151,8 @@ mod tests {
     use async_trait::async_trait;
     use devo_protocol::ModelRequest;
     use devo_protocol::ModelResponse;
+    use devo_protocol::RequestContent;
+    use devo_protocol::RequestMessage;
     use devo_protocol::ResponseContent;
     use devo_protocol::ResponseExtra;
     use devo_protocol::ResponseMetadata;
@@ -1116,6 +1166,7 @@ mod tests {
     use serde_json::json;
 
     use super::QueryEvent;
+    use super::insert_subagent_request_reminders;
     use super::query;
     use super::test_model_connection;
     use crate::ContentBlock;
@@ -1686,7 +1737,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_hides_spawn_agent_from_subagent_tool_surface() {
+    async fn query_hides_agent_coordination_tools_and_appends_subagent_warning() {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let provider: Arc<dyn ModelProviderSDK> = Arc::new(CapturingProvider {
             requests: Arc::clone(&requests),
@@ -1702,20 +1753,28 @@ mod tests {
         );
         builder.push_spec_with_exposure(
             ToolSpec::new(
-                "spawn_agent",
-                "Create a child agent.",
+                "web_search",
+                "Search the web.",
                 JsonSchema::object(Default::default(), None, None),
             ),
             ToolExposure::Deferred,
         );
-        builder.push_spec_with_exposure(
-            ToolSpec::new(
-                "send_message",
-                "Send input to a child agent.",
-                JsonSchema::object(Default::default(), None, None),
-            ),
-            ToolExposure::Deferred,
-        );
+        for (name, description) in [
+            ("spawn_agent", "Create a child agent."),
+            ("send_message", "Send input to a child agent."),
+            ("wait_agent", "Poll child output."),
+            ("list_agents", "List child agents."),
+            ("close_agent", "Close a child agent."),
+        ] {
+            builder.push_spec_with_exposure(
+                ToolSpec::new(
+                    name,
+                    description,
+                    JsonSchema::object(Default::default(), None, None),
+                ),
+                ToolExposure::Deferred,
+            );
+        }
         let registry = Arc::new(builder.build());
         let runtime = ToolRuntime::new_with_context(
             Arc::clone(&registry),
@@ -1727,10 +1786,29 @@ mod tests {
         );
         let mut session = SessionState::new(SessionConfig::default(), std::env::temp_dir());
         session.push_message(Message::user("work on the delegated task"));
+        {
+            let loaded_deferred_tools = registry.loaded_deferred_tools();
+            let mut loaded_deferred_tools = loaded_deferred_tools.lock().expect("loaded tools");
+            for name in [
+                "spawn_agent",
+                "send_message",
+                "wait_agent",
+                "list_agents",
+                "close_agent",
+            ] {
+                loaded_deferred_tools.mark_loaded(&session.id, name);
+            }
+        }
 
         query(
             &mut session,
-            &TurnConfig::new(Model::default(), None),
+            &TurnConfig::new(
+                Model {
+                    base_instructions: "base system".to_string(),
+                    ..Model::default()
+                },
+                None,
+            ),
             provider,
             registry,
             &runtime,
@@ -1741,7 +1819,8 @@ mod tests {
 
         let captured = requests.lock().expect("lock requests");
         assert_eq!(captured.len(), 1);
-        let tool_names = captured[0]
+        let request = &captured[0];
+        let tool_names = request
             .tools
             .as_ref()
             .expect("tools should be present")
@@ -1749,7 +1828,100 @@ mod tests {
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(tool_names, vec!["ToolSearch"]);
-        assert!(captured[0].system.is_none());
+        assert_eq!(request.system.as_deref(), Some("base system"));
+        assert!(
+            !request
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("web_search")
+        );
+        assert!(
+            !request
+                .system
+                .as_deref()
+                .unwrap_or_default()
+                .contains("spawn_agent")
+        );
+
+        let deferred_reminder_index =
+            request_message_index_containing(request, "web_search: Search the web.");
+        let subagent_reminder_index =
+            request_message_index_containing(request, "You are running as a sub-agent");
+        let task_index = request_message_index_containing(request, "work on the delegated task");
+        assert!(deferred_reminder_index < subagent_reminder_index);
+        assert!(subagent_reminder_index < task_index);
+        let deferred_reminder = &request.messages[deferred_reminder_index];
+        assert!(!message_contains(deferred_reminder, "spawn_agent"));
+        assert_eq!(
+            session.messages,
+            vec![
+                Message::user("work on the delegated task"),
+                Message::assistant_text("done"),
+            ]
+        );
+    }
+
+    #[test]
+    fn subagent_reminder_insertion_preserves_tool_result_adjacency() {
+        let mut messages = vec![
+            RequestMessage {
+                role: Role::User.as_str().to_string(),
+                content: vec![RequestContent::Text {
+                    text: "child task input".to_string(),
+                }],
+            },
+            RequestMessage {
+                role: Role::Assistant.as_str().to_string(),
+                content: vec![RequestContent::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "read".to_string(),
+                    input: json!({}),
+                }],
+            },
+            RequestMessage {
+                role: Role::User.as_str().to_string(),
+                content: vec![RequestContent::ToolResult {
+                    tool_use_id: "tool-1".to_string(),
+                    content: "tool output".to_string(),
+                    is_error: None,
+                }],
+            },
+        ];
+
+        insert_subagent_request_reminders(
+            &mut messages,
+            Some("<system-reminder>deferred</system-reminder>"),
+        );
+
+        assert!(message_contains(&messages[0], "deferred"));
+        assert!(message_contains(
+            &messages[1],
+            "You are running as a sub-agent"
+        ));
+        assert!(message_contains(&messages[2], "child task input"));
+        assert!(
+            matches!(messages[3].content.as_slice(), [RequestContent::ToolUse { id, .. }] if id == "tool-1")
+        );
+        assert!(
+            matches!(messages[4].content.as_slice(), [RequestContent::ToolResult { tool_use_id, .. }] if tool_use_id == "tool-1")
+        );
+    }
+
+    fn request_message_index_containing(request: &ModelRequest, needle: &str) -> usize {
+        request
+            .messages
+            .iter()
+            .position(|message| message_contains(message, needle))
+            .unwrap_or_else(|| {
+                panic!("expected request message containing {needle:?}: {request:?}")
+            })
+    }
+
+    fn message_contains(message: &RequestMessage, needle: &str) -> bool {
+        message.content.iter().any(
+            |content| matches!(content, RequestContent::Text { text } if text.contains(needle)),
+        )
     }
 
     #[tokio::test]

@@ -31,7 +31,7 @@ pub enum ToolAgentScope {
     /// A normal top-level session, allowed to use all configured tools.
     #[default]
     Parent,
-    /// A child agent session. These sessions may communicate upward but cannot spawn children.
+    /// A child agent session. These sessions report through assistant output and cannot use agent coordination tools.
     Subagent,
 }
 

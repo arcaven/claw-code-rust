@@ -16,7 +16,7 @@ use tracing::warn;
 use crate::invocation::ToolContent;
 use crate::registry::ToolRegistry;
 use crate::tool_spec::ToolCapabilityTag;
-use crate::tools::deferred_loading::is_subagent_agent_spawn_tool;
+use crate::tools::deferred_loading::is_subagent_agent_coordination_tool;
 use devo_tools::AgentToolCoordinator;
 use devo_tools::ToolAgentScope;
 use tokio_util::sync::CancellationToken;
@@ -218,7 +218,8 @@ impl ToolRuntime {
     ) -> ToolCallResult {
         let tool_name = canonical_tool_name(&self.registry, &call.name);
         if self.context.agent_scope == ToolAgentScope::Subagent
-            && (is_subagent_agent_spawn_tool(&call.name) || is_subagent_agent_spawn_tool(tool_name))
+            && (is_subagent_agent_coordination_tool(&call.name)
+                || is_subagent_agent_coordination_tool(tool_name))
         {
             return ToolCallResult::error(
                 &call.id,
@@ -868,11 +869,26 @@ mod tests {
             "spawn-agent",
             "spawnagent",
             "spawn_subagent",
+            "spawn-subagent",
             "subagent",
+            "sub_agent",
             "delegate",
             "send_message",
             "send-message",
             "sendmessage",
+            "wait_agent",
+            "wait-agent",
+            "waitagent",
+            "subagent_result",
+            "subagent-result",
+            "list_agents",
+            "list-agents",
+            "listagents",
+            "subagent_status",
+            "subagent-status",
+            "close_agent",
+            "close-agent",
+            "closeagent",
         ] {
             let call = ToolCall {
                 id: format!("call-{name}"),

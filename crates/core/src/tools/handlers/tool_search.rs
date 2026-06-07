@@ -18,7 +18,7 @@ use crate::deferred_loading::DeferredLoadingConfig;
 use crate::deferred_loading::LoadedDeferredTools;
 use crate::deferred_loading::PromptLoadingPolicy;
 use crate::deferred_loading::execute_tool_search;
-use crate::deferred_loading::hide_subagent_agent_spawn_tools;
+use crate::deferred_loading::hide_subagent_agent_coordination_tools;
 use crate::deferred_loading::resolve_tool_policy;
 use crate::json_schema::JsonSchema;
 use crate::tool_handler::ToolHandler;
@@ -115,7 +115,7 @@ impl ToolHandler for ToolSearchHandler {
 
         let mut config = self.config.clone();
         if ctx.agent_scope == ToolAgentScope::Subagent {
-            hide_subagent_agent_spawn_tools(&mut config);
+            hide_subagent_agent_coordination_tools(&mut config);
         }
 
         let selection = if is_select_query(query) {
@@ -300,6 +300,30 @@ mod tests {
                     ),
                     None,
                 ),
+                (
+                    definition(
+                        "wait_agent",
+                        "Poll child output",
+                        serde_json::json!({"type": "object"}),
+                    ),
+                    None,
+                ),
+                (
+                    definition(
+                        "list_agents",
+                        "List child agents",
+                        serde_json::json!({"type": "object"}),
+                    ),
+                    None,
+                ),
+                (
+                    definition(
+                        "close_agent",
+                        "Close a child agent",
+                        serde_json::json!({"type": "object"}),
+                    ),
+                    None,
+                ),
             ],
             Arc::clone(&loaded_tools),
             DeferredLoadingConfig::default(),
@@ -314,6 +338,19 @@ mod tests {
             "send_message",
             "send-message",
             "sendmessage",
+            "wait_agent",
+            "wait-agent",
+            "waitagent",
+            "subagent_result",
+            "subagent-result",
+            "list_agents",
+            "list-agents",
+            "listagents",
+            "subagent_status",
+            "subagent-status",
+            "close_agent",
+            "close-agent",
+            "closeagent",
         ] {
             let err = handler
                 .handle(
@@ -345,5 +382,8 @@ mod tests {
         let loaded_tools = loaded_tools.lock().expect("loaded tools");
         assert!(!loaded_tools.is_loaded("session-1", "spawn_agent"));
         assert!(!loaded_tools.is_loaded("session-1", "send_message"));
+        assert!(!loaded_tools.is_loaded("session-1", "wait_agent"));
+        assert!(!loaded_tools.is_loaded("session-1", "list_agents"));
+        assert!(!loaded_tools.is_loaded("session-1", "close_agent"));
     }
 }

@@ -19,16 +19,16 @@ Define the architecture for spawning, coordinating, and integrating subagents �
 
 This document covers:
 - Agent tree model and generated hierarchical naming
-- Agent roles and their configuration
+- Default child role metadata and parent config inheritance
 - Spawn lifecycle (slot reservation, config inheritance, fork modes, initial message delivery)
 - Parent-to-child input delivery through child mailboxes
 - Child assistant-output buffering and parent polling
 - Agent status lifecycle
-- Subagent tool surface (spawn, send message, wait, list, close)
+- Parent-only subagent tool surface (spawn, send message, wait, list, close)
 - Depth and concurrency limits
 - Persistence of spawn-tree edges for session resumption
 - Safety, permission, and approval boundaries for subagents
-- Orchestration prompt instructions injected into the model context
+- Orchestration prompt instructions and subagent-mode tool visibility
 
 This document does **not** cover:
 - Session forking implementation details (see L2-DES-CONV-001)
@@ -49,11 +49,11 @@ Flat UUIDs are hard for both humans and models to reason about. A tree-structure
 
 **Decision**: Every agent is assigned a canonical `AgentPath` — a slash-separated hierarchical path rooted at `/root`. The parent does not provide the child name. At spawn time, the runtime generates a unique adjective-noun nickname under the parent and joins it to the parent path. Paths remain stable for the agent's lifetime.
 
-### DD-3: Agent roles are configurable composable layers
+### DD-3: Child sessions inherit parent configuration in the current baseline
 
-Different delegated tasks call for different agent configurations — a codebase explorer needs different instructions and model settings than an implementation worker. Hardcoding these differences into the spawn tool would be brittle.
+The current public spawn tool intentionally keeps configuration simple. A child session inherits the parent's effective model, provider, workspace, permissions, shell environment, and safety posture. The runtime records a role label for metadata, but the model-facing spawn API does not accept role, model, or reasoning overrides in this baseline.
 
-**Decision**: Agent roles are named configuration layers (`default`, `explorer`, `worker`, plus user-defined roles). Each role specifies optional overrides for model, reasoning effort, system instructions, and other config knobs. Roles are applied as a high-precedence config layer layered over the parent's effective config at spawn time, preserving the parent's permission profile and provider unless the role explicitly takes ownership.
+**Decision**: Spawned children use the generated identity plus `agent_role = "default"` metadata and inherit parent configuration. Role-specific configuration can be added later as a new design revision when the public API and safety rules are defined.
 
 ### DD-4: Parent-to-child messages are delivered as child user input
 
@@ -96,7 +96,7 @@ Each agent has three identification dimensions:
 |------------|------|-----------|---------|
 | `session_id` | `SessionId` (UUID) | Stable for lifetime | Internal routing, persistence |
 | `agent_path` | `AgentPath` | Stable for lifetime | Human/model-facing identity, inter-agent addressing |
-| `agent_nickname` | String | Stable for lifetime | Friendly display name (e.g. "Scout", "Atlas") |
+| `agent_nickname` | String | Stable for lifetime | Generated friendly display name (e.g. `brave-apple`) |
 
 #### Agent Metadata
 
@@ -116,44 +116,11 @@ These fields correspond to the existing `SessionRecord` columns: `agent_nickname
 
 #### Nickname Pools
 
-Agent nicknames are drawn from a pool of candidate names (e.g. "Scout", "Atlas", "Echo", "Falcon"). The default pool contains a curated list of short, friendly names. Roles may specify their own nickname pools. The registry tracks used nicknames to avoid duplicates. When the pool is exhausted, it resets with a generation suffix (e.g., "Scout the 2nd").
+Agent nicknames are generated from a fixed ASCII adjective-noun pool. The registry tracks used names under each parent to avoid duplicates. When the pool is exhausted, spawn fails with deterministic invalid input rather than reusing a name.
 
 ### Agent Roles
 
-An agent role is a named configuration profile applied to a subagent at spawn time. Roles are defined either as built-in definitions shipped with the program, or as user-defined entries in config.
-
-#### Built-in Roles
-
-| Role | Purpose | Overrides |
-|------|---------|-----------|
-| `default` | General-purpose agent | None (inherits parent config entirely) |
-| `explorer` | Fast, read-only codebase investigation | May specify a fast model, low reasoning effort, exploration-focused instructions |
-| `worker` | Implementation and production work | May specify instructions emphasizing file ownership and peer awareness |
-
-Additional built-in roles may be added as the system matures (e.g., `awaiter` for long-running command monitoring).
-
-#### User-Defined Roles
-
-Users may define custom roles in config:
-
-```toml
-[agent_roles.code-reviewer]
-description = "Specialized code reviewer that identifies bugs and risks"
-config_file = "~/.config/devo/roles/code-reviewer.toml"
-nickname_candidates = ["Eagle", "Hawk"]
-```
-
-The `config_file` is a standard config TOML fragment containing the role's overrides (model, instructions, etc.). It is loaded as a high-precedence config layer.
-
-#### Role Application Order
-
-When a subagent is spawned:
-
-1. The parent's effective config is cloned as the base.
-2. Runtime fields from the current turn (model selection, reasoning effort, developer instructions, approval policy, cwd, permission profile) are applied.
-3. The role config layer, if specified, is applied at session-flag precedence.
-4. The parent's `profile` and `model_provider` are preserved unless the role explicitly overrides them.
-5. Depth-dependent overrides are applied (e.g., disabling further multi-agent features at max depth).
+The current baseline records `agent_role = "default"` for each child. It does not expose role selection to the model, and it does not support model or reasoning overrides in `spawn_agent`.
 
 ### Spawn Lifecycle
 
@@ -161,9 +128,6 @@ When a subagent is spawned:
 
 The model calls the `spawn_agent` tool with:
 - `message`: The initial task description for the new agent
-- `agent_type` (optional): Role name (`"default"`, `"explorer"`, `"worker"`, or user-defined)
-- `model` (optional): Override model selection
-- `reasoning_effort` (optional): Override reasoning effort
 - `fork_turns` (optional): `"none"` (no history) or `"all"` (full history)
 
 #### Step 2: Slot Reservation
@@ -176,7 +140,7 @@ The runtime generates a unique adjective-noun nickname under the parent registry
 
 #### Step 4: Config Construction
 
-The child session's config is built from the parent's effective config, with runtime turn-state overrides applied. If a role is specified, the role config layer is applied on top. If `fork_turns` is set to `"all"`, the child inherits the parent's model when forking full history.
+The child session's config is built from the parent's effective config, with runtime turn-state settings applied. The child inherits the parent's model, provider, permissions, shell environment, and cwd.
 
 #### Step 5: Child Session Creation
 
@@ -190,7 +154,7 @@ The child session's `SessionRecord` stores `parent_session_id`, `agent_path`, `a
 
 #### Step 6: Message Delivery
 
-The initial task message is submitted as the child session's first user turn.
+The initial task message is submitted as the child session's first user turn. During model request assembly, request-only subagent reminders are inserted before this task input and are not persisted into the child transcript.
 
 #### Step 7: Spawn-Edge Persistence
 
@@ -353,17 +317,13 @@ Creates a new subagent (child session) and sends an initial task message.
 | Parameter | Required | Type | Description |
 |-----------|----------|------|-------------|
 | `message` | Yes | string | Initial task description |
-| `agent_type` | No | string | Role name: `"default"`, `"explorer"`, `"worker"`, or user-defined |
-| `model` | No | string | Override model for this agent |
-| `reasoning_effort` | No | string | Override reasoning effort |
-| `fork_turns` | No | string | `"none"` or `"all"` |
+| `fork_turns` | No | string | `"all"` (default stable-history fork excluding the active parent turn) or `"none"` (clean child context) |
 
 **Output**: Child session id, generated agent path, generated nickname, and current status.
 
 **Errors**:
 - `AgentLimitReached`: Concurrent agent limit exceeded
 - Generated name pool exhausted
-- Invalid role name
 - Invalid fork_turns value
 
 #### `send_message`
@@ -407,7 +367,7 @@ The root agent is always included when no prefix or a matching prefix is specifi
 
 #### `close_agent`
 
-Shuts down an agent and all of its live descendants, marking the spawn edge as closed.
+Closes a direct child agent and records terminal status for parent polling.
 
 | Parameter | Required | Type | Description |
 |-----------|----------|------|-------------|
@@ -418,9 +378,9 @@ Shuts down an agent and all of its live descendants, marking the spawn edge as c
 **Errors**: Target not found.
 
 **Behavior**:
-1. Persists the spawn edge status as `Closed`.
-2. Shuts down the target agent session.
-3. Recursively shuts down all live descendants in the spawn tree.
+1. Marks the target child as close-requested.
+2. Interrupts active target work if needed.
+3. Records one terminal `closed` status event for parent polling.
 
 ### Depth and Concurrency Limits
 
@@ -464,7 +424,7 @@ The agent registry is rebuilt in-memory from the persisted edges. Resume is recu
 | State | Meaning |
 |-------|---------|
 | `Open` | Agent was spawned and may still be active or resumable |
-| `Closed` | Agent was explicitly closed via `close_agent` and its descendants were shut down |
+| `Closed` | Agent was explicitly closed via `close_agent` |
 
 Closing an edge does not delete the child's transcript — closed agents remain in the session history for audit and review.
 
@@ -507,8 +467,8 @@ When the agent's environment context is assembled, live child subagents are list
 ```
 <environment_context>
 Sub-agents:
-  /root/researcher (Scout) — Investigating authentication module
-  /root/implementer (Atlas) — Implementing database migration
+  /root/brave-apple (brave-apple) — Investigating authentication module
+  /root/calm-fox (calm-fox) — Implementing database migration
 </environment_context>
 ```
 
@@ -527,18 +487,15 @@ When multi-agent features are enabled, a dedicated set of instructions is inject
 - **Use `wait_agent`** to poll child output and terminal status events, with an appropriate timeout.
 - **Close sub-agents when done** to free resources and prevent stale agents from consuming limits.
 
-These instructions adapt to the active configuration: if model selection is hidden from the spawn tool, model descriptions are omitted; if spawn metadata is hidden, nicknames are suppressed from output.
+These instructions adapt to the active tool surface. Parent sessions can see the agent coordination tools and their schema descriptions. Subagent sessions cannot see or load agent coordination tools, even when the parent used `fork_turns = "all"`.
 
-#### Subagent Usage Hints
+#### Subagent Mode Reminder
 
-Configurable usage hint text can customize the instructions injected for both the root agent and subagents:
+Subagent `ModelRequest.system` contains only the inherited base instructions; deferred-tool reminders and subagent-mode reminders are not appended to the system prompt in subagent mode. Each subagent model request receives request-only reminder user messages after any prefix/environment and inherited stable parent history, but before the current child task input. For `fork_turns = "all"`, this yields stable parent history followed by request-only reminders and then the child task. For `fork_turns = "none"`, this yields prefix/environment, request-only reminders, and then the child task. The reminder states that the model is running as a subagent, must not call agent coordination tools such as `spawn_agent`, and should report results through normal assistant output. These reminders are not persisted into the child transcript, preserving context-prefix stability for full-history forks.
 
-| Config Key | Default | Applied To |
-|------------|---------|------------|
-| `root_agent_usage_hint_text` | (built-in orchestration rules) | Root agent |
-| `subagent_usage_hint_text` | (built-in subagent rules) | All subagents |
+#### Tool Visibility
 
-These are injected as developer messages at child session start and are stripped when history is forked (the child gets fresh hints matching its own role).
+In subagent mode, `spawn_agent`, `send_message`, `wait_agent`, `list_agents`, `close_agent`, and their aliases are hidden from model tool schemas, deferred tool reminders, and `ToolSearch` selection. Runtime dispatch still rejects those calls as defense-in-depth if a model attempts one from inherited context or hallucination.
 
 ## Traceability
 
