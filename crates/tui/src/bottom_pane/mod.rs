@@ -5,7 +5,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use devo_protocol::InteractionMode;
+use devo_protocol::CollaborationMode;
 use devo_protocol::ReferenceSearchSnapshot;
 use devo_protocol::RequestUserInputQuestion;
 use devo_protocol::SessionId;
@@ -171,7 +171,7 @@ pub(crate) enum InputResult {
         text_elements: Vec<TextElement>,
         local_images: Vec<LocalImageAttachment>,
         mention_bindings: Vec<MentionBinding>,
-        interaction_mode: InteractionMode,
+        collaboration_mode: CollaborationMode,
     },
     ShellCommand {
         command: String,
@@ -364,7 +364,7 @@ impl BottomPane {
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
                 mention_bindings: Vec::new(),
-                interaction_mode: InteractionMode::Build,
+                collaboration_mode: CollaborationMode::Build,
             };
         }
 
@@ -790,9 +790,9 @@ impl BottomPane {
             text_elements,
             local_images,
             mention_bindings,
-            interaction_mode: match self.input_mode {
-                InputMode::Build | InputMode::Shell => InteractionMode::Build,
-                InputMode::Plan => InteractionMode::Plan,
+            collaboration_mode: match self.input_mode {
+                InputMode::Build | InputMode::Shell => CollaborationMode::Build,
+                InputMode::Plan => CollaborationMode::Plan,
             },
         }
     }

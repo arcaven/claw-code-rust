@@ -450,7 +450,7 @@ impl ServerRuntime {
                     turn_config_for_task,
                     display_input,
                     input_text,
-                    devo_protocol::InteractionMode::Build,
+                    devo_protocol::CollaborationMode::Build,
                     TurnInputMode::VisibleUserMessage,
                 )
                 .await;

@@ -593,7 +593,7 @@ pub async fn prepare_model_invocation(
         &tool_schemas,
         &[],  // prior_transcript (empty for now; populated by replay)
         None, // persona
-        None, // interaction_mode
+        None, // collaboration_mode
         project_instructions,
         active_skills,
         memory_context,

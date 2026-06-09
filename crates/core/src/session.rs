@@ -9,6 +9,7 @@ use devo_safety::PermissionMode;
 use devo_safety::PermissionPreset;
 use devo_safety::RuntimePermissionProfile;
 
+use devo_protocol::CollaborationMode;
 use devo_protocol::PendingInputItem;
 use devo_protocol::TurnKind;
 
@@ -156,6 +157,7 @@ pub struct SessionState {
     pub prompt_messages: Option<Vec<Message>>,
     pub session_context: Option<SessionContext>,
     pub latest_turn_context: Option<TurnContext>,
+    pub collaboration_mode: CollaborationMode,
     pub cwd: PathBuf,
     pub turn_count: usize,
     pub total_input_tokens: usize,
@@ -188,6 +190,7 @@ impl SessionState {
             prompt_messages: None,
             session_context: None,
             latest_turn_context: None,
+            collaboration_mode: CollaborationMode::Build,
             cwd,
             turn_count: 0,
             total_input_tokens: 0,

@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use devo_protocol::InteractionMode;
 use devo_protocol::ModelRequest;
 use devo_protocol::RequestContent;
 use devo_protocol::RequestMessage;
@@ -56,155 +55,6 @@ use crate::tools::DeferredLoadingConfig;
 use crate::tools::hide_subagent_agent_coordination_tools;
 
 const SUBAGENT_MODE_REMINDER: &str = "<system-reminder>\nYou are running as a sub-agent. Complete the delegated task using the available non-agent tools. Do not call agent coordination tools such as spawn_agent, send_message, wait_agent, list_agents, or close_agent; report progress and final results through assistant output.\n</system-reminder>";
-const PLAN_MODE_REMINDER: &str = r#"<system-reminder>
-You are now in Plan Mode.
-
-# Plan Mode (Conversational)
-
-You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed—intent- and implementation-wise—so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
-
-## Mode rules (strict)
-
-You are in **Plan Mode** until a developer message explicitly ends it.
-
-Plan Mode is not changed by user intent, tone, or imperative language. If a user asks for execution while still in Plan Mode, treat it as a request to **plan the execution**, not perform it.
-
-## Plan Mode vs update_plan tool
-
-Plan Mode is a collaboration mode that can involve requesting user input and eventually issuing a `<proposed_plan>` block.
-
-Separately, `update_plan` is a checklist/progress/TODOs tool; it does not enter or exit Plan Mode. Do not confuse it with Plan mode or try to use it while in Plan mode. If you try to use `update_plan` in Plan mode, it will return an error.
-
-## Execution vs. mutation in Plan Mode
-
-You may explore and execute **non-mutating** actions that improve the plan. You must not perform **mutating** actions.
-
-### Allowed (non-mutating, plan-improving)
-
-Actions that gather truth, reduce ambiguity, or validate feasibility without changing repo-tracked state. Examples:
-
-* Reading or searching files, configs, schemas, types, manifests, and docs
-* Static analysis, inspection, and repo exploration
-* Dry-run style commands when they do not edit repo-tracked files
-* Tests, builds, or checks that may write to caches or build artifacts (for example, `target/`, `.cache/`, or snapshots) so long as they do not edit repo-tracked files
-
-### Not allowed (mutating, plan-executing)
-
-Actions that implement the plan or change repo-tracked state. Examples:
-
-* Editing or writing files
-* Running formatters or linters that rewrite files
-* Applying patches, migrations, or codegen that updates repo-tracked files
-* Side-effectful commands whose purpose is to carry out the plan rather than refine it
-
-When in doubt: if the action would reasonably be described as "doing the work" rather than "planning the work," do not do it.
-
-## PHASE 1 — Ground in the environment (explore first, ask second)
-
-Begin by grounding yourself in the actual environment. Eliminate unknowns in the prompt by discovering facts, not by asking the user. Resolve all questions that can be answered through exploration or inspection. Identify missing or ambiguous details only if they cannot be derived from the environment. Silent exploration between turns is allowed and encouraged.
-
-Before asking the user any question, perform at least one targeted non-mutating exploration pass (for example: search relevant files, inspect likely entrypoints/configs, confirm current implementation shape), unless no local environment/repo is available.
-
-Exception: you may ask clarifying questions about the user's prompt before exploring, ONLY if there are obvious ambiguities or contradictions in the prompt itself. However, if ambiguity might be resolved by exploring, always prefer exploring first.
-
-Do not ask questions that can be answered from the repo or system (for example, "where is this struct?" or "which UI component should we use?" when exploration can make it clear). Only ask once you have exhausted reasonable non-mutating exploration.
-
-## PHASE 2 — Intent chat (what they actually want)
-
-* Keep asking until you can clearly state: goal + success criteria, audience, in/out of scope, constraints, current state, and the key preferences/tradeoffs.
-* Bias toward questions over guessing: if any high-impact ambiguity remains, do NOT plan yet—ask.
-
-## PHASE 3 — Implementation chat (what/how we’ll build)
-
-* Once intent is stable, keep asking until the spec is decision complete: approach, interfaces (APIs/schemas/I/O), data flow, edge cases/failure modes, testing + acceptance criteria, rollout/monitoring, and any migrations/compat constraints.
-
-## Asking questions
-
-Critical rules:
-
-* Strongly prefer using the `request_user_input` tool to ask any questions.
-* Offer only meaningful multiple‑choice options; don’t include filler choices that are obviously wrong or irrelevant.
-* In rare cases where an unavoidable, important question can’t be expressed with reasonable multiple‑choice options (due to extreme ambiguity), you may ask it directly without the tool.
-
-You SHOULD ask many questions, but each question must:
-
-* materially change the spec/plan, OR
-* confirm/lock an assumption, OR
-* choose between meaningful tradeoffs.
-* not be answerable by non-mutating commands.
-
-Use the `request_user_input` tool only for decisions that materially change the plan, for confirming important assumptions, or for information that cannot be discovered via non-mutating exploration.
-
-## Two kinds of unknowns (treat differently)
-
-1. **Discoverable facts** (repo/system truth): explore first.
-
-   * Before asking, run targeted searches and check likely sources of truth (configs/manifests/entrypoints/schemas/types/constants).
-   * Ask only if: multiple plausible candidates; nothing found but you need a missing identifier/context; or ambiguity is actually product intent.
-   * If asking, present concrete candidates (paths/service names) + recommend one.
-   * Never ask questions you can answer from your environment (e.g., “where is this struct”).
-
-2. **Preferences/tradeoffs** (not discoverable): ask early.
-
-   * These are intent or implementation preferences that cannot be derived from exploration.
-   * Provide 2–4 mutually exclusive options + a recommended default.
-   * If unanswered, proceed with the recommended option and record it as an assumption in the final plan.
-
-## Finalization rule
-
-Only output the final plan when it is decision complete and leaves no decisions to the implementer.
-
-When you present the official plan, wrap it in a `<proposed_plan>` block so the client can render it specially:
-
-1) The opening tag must be on its own line.
-2) Start the plan content on the next line (no text on the same line as the tag).
-3) The closing tag must be on its own line.
-4) Use Markdown inside the block.
-5) Keep the tags exactly as `<proposed_plan>` and `</proposed_plan>` (do not translate or rename them), even if the plan content is in another language.
-
-Example:
-
-<proposed_plan>
-plan content
-</proposed_plan>
-
-plan content should be human and agent digestible. The final plan must be plan-only, concise by default, and include:
-
-* A clear title
-* A brief summary section
-* Important changes or additions to public APIs/interfaces/types
-* Test cases and scenarios
-* Explicit assumptions and defaults chosen where needed
-
-When possible, prefer a compact structure with 3-5 short sections, usually: Summary, Key Changes or Implementation Changes, Test Plan, and Assumptions. Do not include a separate Scope section unless scope boundaries are genuinely important to avoid mistakes.
-
-Prefer grouped implementation bullets by subsystem or behavior over file-by-file inventories. Mention files only when needed to disambiguate a non-obvious change, and avoid naming more than 3 paths unless extra specificity is necessary to prevent mistakes. Prefer behavior-level descriptions over symbol-by-symbol removal lists. For v1 feature-addition plans, do not invent detailed schema, validation, precedence, fallback, or wire-shape policy unless the request establishes it or it is needed to prevent a concrete implementation mistake; prefer the intended capability and minimum interface/behavior changes.
-
-Keep bullets short and avoid explanatory sub-bullets unless they are needed to prevent ambiguity. Prefer the minimum detail needed for implementation safety, not exhaustive coverage. Within each section, compress related changes into a few high-signal bullets and omit branch-by-branch logic, repeated invariants, and long lists of unaffected behavior unless they are necessary to prevent a likely implementation mistake. Avoid repeated repo facts and irrelevant edge-case or rollout detail. For straightforward refactors, keep the plan to a compact summary, key edits, tests, and assumptions. If the user asks for more detail, then expand.
-
-Do not ask "should I proceed?" in the final output. The user can easily switch out of Plan mode and request implementation if you have included a `<proposed_plan>` block in your response. Alternatively, they can decide to stay in Plan mode and continue refining the plan.
-
-Only produce at most one `<proposed_plan>` block per turn, and only when you are presenting a complete spec.
-
-If the user stays in Plan mode and asks for revisions after a prior `<proposed_plan>`, any new `<proposed_plan>` must be a complete replacement.
-</system-reminder>"#;
-
-fn with_interaction_mode_reminder(
-    system: Option<String>,
-    interaction_mode: InteractionMode,
-) -> Option<String> {
-    match interaction_mode {
-        InteractionMode::Build => system,
-        InteractionMode::Plan => Some(match system {
-            Some(system) if !system.is_empty() => format!(
-                "{system}
-
-{PLAN_MODE_REMINDER}"
-            ),
-            _ => PLAN_MODE_REMINDER.to_string(),
-        }),
-    }
-}
 
 fn estimate_request_prompt_tokens(request: &ModelRequest) -> usize {
     let system_bytes = request.system.as_ref().map_or(0, String::len);
@@ -581,28 +431,26 @@ pub async fn query(
     runtime: &ToolRuntime,
     on_event: Option<EventCallback>,
 ) -> Result<(), AgentError> {
-    query_with_interaction_mode(
+    query_with_goal_context(
         session,
         turn_config,
         provider,
         registry,
         runtime,
         on_event,
-        InteractionMode::Build,
         None,
     )
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn query_with_interaction_mode(
+pub async fn query_with_goal_context(
     session: &mut SessionState,
     turn_config: &TurnConfig,
     provider: Arc<dyn ModelProviderSDK>,
     registry: Arc<ToolRegistry>,
     runtime: &ToolRuntime,
     on_event: Option<EventCallback>,
-    interaction_mode: InteractionMode,
     goal_context: Option<&str>,
 ) -> Result<(), AgentError> {
     // emit is the event callback function.
@@ -623,12 +471,8 @@ pub async fn query_with_interaction_mode(
             current_agents_snapshot.clone(),
         ));
     }
-    let current_turn_context = TurnContext::capture(
-        &turn_config.model,
-        turn_config.thinking_selection.as_deref(),
-        &session.cwd,
-        current_agents_snapshot.clone(),
-    );
+    let current_turn_context =
+        TurnContext::capture(session, turn_config, current_agents_snapshot.clone());
     if let Some(diff) = session
         .latest_turn_context
         .as_ref()
@@ -644,7 +488,7 @@ pub async fn query_with_interaction_mode(
     {
         session.insert_context_message(AgentsMdDiffFragment::new(diff).to_message());
     }
-    session.latest_turn_context = Some(current_turn_context);
+    session.latest_turn_context = Some(current_turn_context.clone());
     let session_context = session
         .session_context
         .clone()
@@ -751,6 +595,7 @@ pub async fn query_with_interaction_mode(
             let loaded_deferred_tools = loaded_deferred_tools.lock().map_err(|_| {
                 AgentError::Provider(anyhow::anyhow!("loaded deferred tool state lock poisoned"))
             })?;
+            // TODO: deferred tool should be a normal tool, do not let it be a special tool.
             build_deferred_tool_prompt_surface(
                 Some(base_system.clone()),
                 &registry,
@@ -762,13 +607,12 @@ pub async fn query_with_interaction_mode(
         let tool_prompt_metrics = prompt_surface.metrics.clone();
         let deferred_tool_count = prompt_surface.deferred_tool_names.len();
         let loaded_deferred_tool_count = prompt_surface.loaded_deferred_tool_names.len();
-        let request_system = with_interaction_mode_reminder(
+        let request_system = current_turn_context.with_collaboration_mode_prompt(
             if agent_scope == ToolAgentScope::Subagent {
                 (!base_system.is_empty()).then_some(base_system)
             } else {
                 prompt_surface.system.clone()
             },
-            interaction_mode,
         );
 
         // resolve thinking request parameter
@@ -1328,7 +1172,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
-    use super::query_with_interaction_mode;
+    use super::query_with_goal_context;
     use crate::tools::ToolAgentScope;
     use crate::tools::ToolPreparationFeedback;
     use crate::tools::ToolRegistry;
@@ -1339,10 +1183,12 @@ mod tests {
     use crate::tools::registry::ToolRegistryBuilder;
     use crate::tools::router::PermissionChecker;
     use crate::tools::tool_handler::ToolHandler;
-    use crate::tools::tool_spec::{ToolExecutionMode, ToolOutputMode, ToolSpec};
+    use crate::tools::tool_spec::ToolExecutionMode;
+    use crate::tools::tool_spec::ToolOutputMode;
+    use crate::tools::tool_spec::ToolSpec;
     use anyhow::Result;
     use async_trait::async_trait;
-    use devo_protocol::InteractionMode;
+    use devo_protocol::CollaborationMode;
     use devo_protocol::ModelRequest;
     use devo_protocol::ModelResponse;
     use devo_protocol::RequestContent;
@@ -2022,7 +1868,11 @@ mod tests {
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(tool_names, vec!["ToolSearch"]);
-        assert_eq!(request.system.as_deref(), Some("base system"));
+        let system = request.system.as_deref().expect("system prompt");
+        let build_prompt =
+            crate::collaboration_mode_prompts::active_mode_prompt(CollaborationMode::Build);
+        assert!(system.contains("base system"));
+        assert!(system.contains(&build_prompt));
         assert!(
             !request
                 .system
@@ -2321,7 +2171,7 @@ mod tests {
     }
 
     /// Trace: L2-DES-CONTEXT-001
-    /// Verifies: Plan turns append the Plan Mode instruction to the provider system prompt.
+    /// Verifies: Plan turns append the active Plan collaboration prompt to the provider system prompt.
     #[tokio::test]
     async fn query_appends_plan_mode_reminder_to_system_prompt() {
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -2336,16 +2186,16 @@ mod tests {
             ..Model::default()
         };
         let mut session = SessionState::new(SessionConfig::default(), std::env::temp_dir());
+        session.collaboration_mode = CollaborationMode::Plan;
         session.push_message(Message::user("plan this"));
 
-        query_with_interaction_mode(
+        query_with_goal_context(
             &mut session,
             &TurnConfig::new(model, None),
             Arc::clone(&provider),
             registry,
             &runtime,
             None,
-            InteractionMode::Plan,
             None,
         )
         .await
@@ -2354,8 +2204,81 @@ mod tests {
         let captured = requests.lock().expect("lock requests");
         assert_eq!(captured.len(), 1);
         let system = captured[0].system.as_deref().expect("system prompt");
+        let plan_prompt =
+            crate::collaboration_mode_prompts::active_mode_prompt(CollaborationMode::Plan);
         assert!(system.contains("base instructions"));
-        assert!(system.contains("You are now in Plan Mode"));
+        assert!(system.contains(&plan_prompt));
+    }
+
+    /// Trace: L2-DES-CONTEXT-001
+    /// Verifies: Returning from Plan to Build uses Build system prompt and a lightweight mode diff.
+    #[tokio::test]
+    async fn query_inserts_mode_change_prompt_when_returning_to_build_mode() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let provider: Arc<dyn ModelProviderSDK> = Arc::new(CapturingProvider {
+            requests: Arc::clone(&requests),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let runtime = ToolRuntime::new_without_permissions(Arc::clone(&registry));
+        let model = Model {
+            slug: "model-a".into(),
+            base_instructions: "base instructions".into(),
+            ..Model::default()
+        };
+        let mut session = SessionState::new(SessionConfig::default(), std::env::temp_dir());
+        session.collaboration_mode = CollaborationMode::Plan;
+        session.push_message(Message::user("plan this"));
+
+        query_with_goal_context(
+            &mut session,
+            &TurnConfig::new(model.clone(), None),
+            Arc::clone(&provider),
+            Arc::clone(&registry),
+            &runtime,
+            None,
+            None,
+        )
+        .await
+        .expect("plan query should succeed");
+
+        session.collaboration_mode = CollaborationMode::Build;
+        session.push_message(Message::user("implement this"));
+        query_with_goal_context(
+            &mut session,
+            &TurnConfig::new(model, None),
+            Arc::clone(&provider),
+            registry,
+            &runtime,
+            None,
+            None,
+        )
+        .await
+        .expect("build query should succeed");
+
+        let captured = requests.lock().expect("lock requests");
+        assert_eq!(captured.len(), 2);
+        let system = captured[1].system.as_deref().expect("system prompt");
+        let build_prompt =
+            crate::collaboration_mode_prompts::active_mode_prompt(CollaborationMode::Build);
+        assert!(system.contains("base instructions"));
+        assert!(system.contains(&build_prompt));
+
+        let mode_change_index =
+            request_message_index_containing(&captured[1], "collaboration_mode: plan -> build");
+        let request_index = request_message_index_containing(&captured[1], "implement this");
+        assert!(mode_change_index < request_index);
+        assert!(message_contains(
+            &captured[1].messages[mode_change_index],
+            "any previous instructions for other modes (e.g. Plan mode) are no longer active."
+        ));
+        assert!(!message_contains(
+            &captured[1].messages[mode_change_index],
+            "<collaboration_mode_build>"
+        ));
+        assert!(!message_contains(
+            &captured[1].messages[mode_change_index],
+            "<collaboration_mode_plan>"
+        ));
     }
 
     #[tokio::test]
@@ -2374,14 +2297,13 @@ mod tests {
         let mut session = SessionState::new(SessionConfig::default(), std::env::temp_dir());
         session.push_message(Message::user("finish implementation"));
 
-        query_with_interaction_mode(
+        query_with_goal_context(
             &mut session,
             &TurnConfig::new(model, None),
             Arc::clone(&provider),
             registry,
             &runtime,
             None,
-            InteractionMode::Build,
             Some("<goal_context>ship /goal</goal_context>"),
         )
         .await
@@ -2425,14 +2347,13 @@ mod tests {
         session.push_message(Message::user("older user prompt"));
         session.push_message(Message::assistant_text("older assistant reply"));
 
-        query_with_interaction_mode(
+        query_with_goal_context(
             &mut session,
             &TurnConfig::new(model, None),
             Arc::clone(&provider),
             registry,
             &runtime,
             None,
-            InteractionMode::Build,
             Some("<goal_context>continue the active goal</goal_context>"),
         )
         .await
@@ -2504,8 +2425,17 @@ mod tests {
 
         let captured = requests.lock().expect("lock requests");
         assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0].system.as_deref(), Some("base-a"));
-        assert_eq!(captured[1].system.as_deref(), Some("base-a"));
+        let build_prompt =
+            crate::collaboration_mode_prompts::active_mode_prompt(CollaborationMode::Build);
+        let expected_system = format!("base-a\n\n{build_prompt}");
+        assert_eq!(
+            captured[0].system.as_deref(),
+            Some(expected_system.as_str())
+        );
+        assert_eq!(
+            captured[1].system.as_deref(),
+            Some(expected_system.as_str())
+        );
 
         let first_prefix = &captured[0].messages[0];
         let second_prefix = &captured[1].messages[0];

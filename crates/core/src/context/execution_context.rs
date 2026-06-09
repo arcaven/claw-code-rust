@@ -3,8 +3,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use devo_protocol::{Message, Model, ReasoningEffort, UserInput};
+use devo_protocol::{CollaborationMode, Message, Model, ReasoningEffort, UserInput};
 
+use crate::SessionState;
+use crate::TurnConfig;
 use crate::context::AgentsMdDiff;
 use crate::context::AgentsMdManager;
 use crate::context::AgentsMdSnapshot;
@@ -127,15 +129,20 @@ pub struct TurnContext {
     pub thinking_selection: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub observed_agents_snapshot: Option<AgentsMdSnapshot>,
+    #[serde(default)]
+    pub collaboration_mode: CollaborationMode,
 }
 
 impl TurnContext {
     pub fn capture(
-        model: &Model,
-        thinking_selection: Option<&str>,
-        cwd: &Path,
+        session: &SessionState,
+        turn_config: &TurnConfig,
         observed_agents_snapshot: Option<AgentsMdSnapshot>,
     ) -> Self {
+        let model = &turn_config.model;
+        let thinking_selection = turn_config.thinking_selection.as_deref();
+        let cwd = &session.cwd;
+        let collaboration_mode = session.collaboration_mode;
         let normalized_thinking_selection = model.normalize_thinking_selection(thinking_selection);
         let resolved = model.resolve_thinking_selection(normalized_thinking_selection.as_deref());
         Self {
@@ -145,6 +152,7 @@ impl TurnContext {
             thinking_selection: normalized_thinking_selection,
             reasoning_effort: resolved.effective_reasoning_effort,
             observed_agents_snapshot,
+            collaboration_mode,
         }
     }
 
@@ -201,12 +209,43 @@ impl TurnContext {
                 previous.reasoning_effort, self.reasoning_effort
             ));
         }
+        if self.collaboration_mode != previous.collaboration_mode {
+            changes.push(format!(
+                "collaboration_mode: {} -> {}",
+                collaboration_mode_label(previous.collaboration_mode),
+                collaboration_mode_label(self.collaboration_mode)
+            ));
+            changes.push(
+                "any previous instructions for other modes (e.g. Plan mode) are no longer active."
+                    .to_string(),
+            );
+        }
 
         if changes.is_empty() {
             return None;
         }
 
         Some(ContextDiffFragment { changes })
+    }
+
+    pub(crate) fn with_collaboration_mode_prompt(&self, system: Option<String>) -> Option<String> {
+        let mode_prompt =
+            crate::collaboration_mode_prompts::active_mode_prompt(self.collaboration_mode);
+        Some(match system {
+            Some(system) if !system.is_empty() => format!(
+                "{system}
+
+{mode_prompt}"
+            ),
+            _ => mode_prompt,
+        })
+    }
+}
+
+fn collaboration_mode_label(collaboration_mode: CollaborationMode) -> &'static str {
+    match collaboration_mode {
+        CollaborationMode::Build => "build",
+        CollaborationMode::Plan => "plan",
     }
 }
 
@@ -406,6 +445,7 @@ mod tests {
             thinking_selection: Some("enabled".into()),
             reasoning_effort: Some(ReasoningEffort::Medium),
             observed_agents_snapshot: None,
+            collaboration_mode: devo_protocol::CollaborationMode::Build,
         };
         let current = TurnContext {
             environment: EnvironmentContext {
@@ -423,6 +463,7 @@ mod tests {
             thinking_selection: Some("disabled".into()),
             reasoning_effort: None,
             observed_agents_snapshot: None,
+            collaboration_mode: devo_protocol::CollaborationMode::Build,
         };
 
         let diff = current.diff_since(&previous).expect("diff should exist");
@@ -442,5 +483,88 @@ mod tests {
         let message = fragment.to_message();
         assert_eq!(message.role, devo_protocol::Role::User);
         assert_eq!(message.content.len(), 1);
+    }
+
+    /// Trace: L2-DES-CONTEXT-001
+    /// Verifies: Turn context diffs include collaboration-mode changes without full mode prompts.
+    #[test]
+    fn turn_context_diff_reports_collaboration_mode_changes_without_prompt() {
+        let previous = TurnContext {
+            environment: EnvironmentContext {
+                cwd: PathBuf::from("/tmp/a"),
+                shell: "bash".into(),
+                current_date: "2026-04-27".into(),
+                timezone: "UTC".into(),
+            },
+            persona: super::Persona::Default,
+            model: Model {
+                slug: "model-a".into(),
+                ..Model::default()
+            },
+            thinking_selection: None,
+            reasoning_effort: None,
+            observed_agents_snapshot: None,
+            collaboration_mode: devo_protocol::CollaborationMode::Plan,
+        };
+        let current = TurnContext {
+            collaboration_mode: devo_protocol::CollaborationMode::Build,
+            ..previous.clone()
+        };
+
+        let diff = current.diff_since(&previous).expect("diff should exist");
+        let rendered = diff.render();
+
+        assert!(rendered.contains("collaboration_mode: plan -> build"));
+        assert!(rendered.contains(
+            "any previous instructions for other modes (e.g. Plan mode) are no longer active."
+        ));
+        assert!(!rendered.contains("<collaboration_mode_build>"));
+        assert!(!rendered.contains("<collaboration_mode_plan>"));
+    }
+
+    #[test]
+    fn turn_context_collaboration_mode_prompt_uses_active_mode() {
+        let context = TurnContext {
+            environment: EnvironmentContext {
+                cwd: PathBuf::from("/tmp/a"),
+                shell: "bash".into(),
+                current_date: "2026-04-27".into(),
+                timezone: "UTC".into(),
+            },
+            persona: super::Persona::Default,
+            model: Model {
+                slug: "model-a".into(),
+                ..Model::default()
+            },
+            thinking_selection: None,
+            reasoning_effort: None,
+            observed_agents_snapshot: None,
+            collaboration_mode: devo_protocol::CollaborationMode::Plan,
+        };
+
+        assert_eq!(
+            context.with_collaboration_mode_prompt(Some("base instructions".into())),
+            Some(format!(
+                "base instructions\n\n{}",
+                crate::collaboration_mode_prompts::active_mode_prompt(
+                    devo_protocol::CollaborationMode::Plan
+                )
+            ))
+        );
+
+        let context = TurnContext {
+            collaboration_mode: devo_protocol::CollaborationMode::Build,
+            ..context
+        };
+
+        assert_eq!(
+            context.with_collaboration_mode_prompt(Some("base instructions".into())),
+            Some(format!(
+                "base instructions\n\n{}",
+                crate::collaboration_mode_prompts::active_mode_prompt(
+                    devo_protocol::CollaborationMode::Build
+                )
+            ))
+        );
     }
 }

@@ -130,7 +130,7 @@ impl ServerRuntime {
                         task_turn_config,
                         String::new(),
                         String::new(),
-                        devo_protocol::InteractionMode::Build,
+                        devo_protocol::CollaborationMode::Build,
                         TurnInputMode::HiddenGoalContinuation { goal_context },
                     )
                     .await;

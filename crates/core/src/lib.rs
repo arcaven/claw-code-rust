@@ -1,3 +1,4 @@
+mod collaboration_mode_prompts;
 #[allow(dead_code)]
 mod config_resolution;
 mod context;

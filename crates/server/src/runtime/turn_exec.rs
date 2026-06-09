@@ -816,11 +816,15 @@ fn command_actions_from_tool_result(
     }
 }
 
-fn interaction_mode_from_pending_metadata(
+fn collaboration_mode_from_pending_metadata(
     metadata: Option<&serde_json::Value>,
-) -> devo_protocol::InteractionMode {
+) -> devo_protocol::CollaborationMode {
     metadata
-        .and_then(|metadata| metadata.get("interaction_mode"))
+        .and_then(|metadata| {
+            metadata
+                .get("collaboration_mode")
+                .or_else(|| metadata.get("interaction_mode"))
+        })
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default()
@@ -922,7 +926,7 @@ impl ServerRuntime {
                 turn_id: Some(turn.turn_id.to_string()),
                 cwd,
                 agent_scope: ToolAgentScope::Parent,
-                interaction_mode: devo_protocol::InteractionMode::Build,
+                collaboration_mode: devo_protocol::CollaborationMode::Build,
                 agent_coordinator: None,
             },
         );
@@ -1032,7 +1036,7 @@ impl ServerRuntime {
         turn_config: TurnConfig,
         display_input: String,
         input: String,
-        interaction_mode: devo_protocol::InteractionMode,
+        collaboration_mode: devo_protocol::CollaborationMode,
         input_mode: TurnInputMode,
     ) {
         if let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() {
@@ -1083,8 +1087,8 @@ impl ServerRuntime {
             let mut reasoning_text = String::new();
             let mut tool_names_by_id = HashMap::new();
             let mut pending_tool_calls: HashMap<String, PendingToolCall> = HashMap::new();
-            let mut proposed_plan_parser = (interaction_mode
-                == devo_protocol::InteractionMode::Plan)
+            let mut proposed_plan_parser = (collaboration_mode
+                == devo_protocol::CollaborationMode::Plan)
                 .then(ProposedPlanParser::default);
             let mut proposed_plan_item = ProposedPlanStreamItem::default();
             let mut proposed_plan_leading_normal = String::new();
@@ -1872,6 +1876,7 @@ impl ServerRuntime {
                 }
             };
             let mut core_session = core_session.lock().await;
+            core_session.collaboration_mode = collaboration_mode;
             if input_mode.emits_user_message() {
                 core_session.push_message(Message::user(input.clone()));
             }
@@ -1902,7 +1907,7 @@ impl ServerRuntime {
                     turn_id: Some(turn_for_events.turn_id.to_string()),
                     cwd: core_session.cwd.clone(),
                     agent_scope,
-                    interaction_mode,
+                    collaboration_mode,
                     agent_coordinator: Some(Arc::clone(&self) as Arc<dyn AgentToolCoordinator>),
                 },
                 ToolExecutionOptions {
@@ -1910,7 +1915,7 @@ impl ServerRuntime {
                     ..ToolExecutionOptions::default()
                 },
             );
-            let result = query_with_interaction_mode(
+            let result = query_with_goal_context(
                 &mut core_session,
                 &turn_config,
                 self.deps
@@ -1918,7 +1923,6 @@ impl ServerRuntime {
                 registry,
                 &runtime,
                 Some(callback),
-                interaction_mode,
                 goal_context.as_deref(),
             )
             .await;
@@ -2117,7 +2121,7 @@ impl ServerRuntime {
                 }) => Some((
                     text.clone(),
                     text,
-                    interaction_mode_from_pending_metadata(metadata.as_ref()),
+                    collaboration_mode_from_pending_metadata(metadata.as_ref()),
                 )),
                 Some(devo_core::PendingInputItem {
                     kind:
@@ -2131,12 +2135,12 @@ impl ServerRuntime {
                 }) => Some((
                     display_text,
                     prompt_text,
-                    interaction_mode_from_pending_metadata(metadata.as_ref()),
+                    collaboration_mode_from_pending_metadata(metadata.as_ref()),
                 )),
                 _ => None,
             }
         };
-        let Some((display_input, input_text, queued_interaction_mode)) = queued_input else {
+        let Some((display_input, input_text, queued_collaboration_mode)) = queued_input else {
             self.maybe_start_goal_continuation_turn(session_id).await;
             return;
         };
@@ -2210,7 +2214,7 @@ impl ServerRuntime {
             turn_config,
             display_input,
             input_text,
-            queued_interaction_mode,
+            queued_collaboration_mode,
             TurnInputMode::VisibleUserMessage,
         ))
         .await;
@@ -2221,7 +2225,7 @@ impl ServerRuntime {
     /// its response immediately.
     pub(super) async fn spawn_next_turn_from_queue(self: &Arc<Self>, session_id: SessionId) {
         // Pop one queued input.
-        let (display_input, input_text, queued_interaction_mode) = {
+        let (display_input, input_text, queued_collaboration_mode) = {
             let session_arc = match self.sessions.lock().await.get(&session_id).cloned() {
                 Some(s) => s,
                 None => return,
@@ -2241,7 +2245,7 @@ impl ServerRuntime {
                 }) => (
                     text.clone(),
                     text,
-                    interaction_mode_from_pending_metadata(metadata.as_ref()),
+                    collaboration_mode_from_pending_metadata(metadata.as_ref()),
                 ),
                 Some(devo_core::PendingInputItem {
                     kind:
@@ -2255,7 +2259,7 @@ impl ServerRuntime {
                 }) => (
                     display_text,
                     prompt_text,
-                    interaction_mode_from_pending_metadata(metadata.as_ref()),
+                    collaboration_mode_from_pending_metadata(metadata.as_ref()),
                 ),
                 _ => return,
             }
@@ -2333,7 +2337,7 @@ impl ServerRuntime {
                     turn_config,
                     display_input,
                     input_text,
-                    queued_interaction_mode,
+                    queued_collaboration_mode,
                     TurnInputMode::VisibleUserMessage,
                 )
                 .await;

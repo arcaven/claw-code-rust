@@ -245,7 +245,7 @@ async fn goal_set_does_not_start_continuation_while_user_input_is_pending() -> R
                     "sandbox": null,
                     "approval_policy": null,
                     "cwd": null,
-                    "interaction_mode": "plan"
+                    "collaboration_mode": "plan"
                 }
             }),
         )

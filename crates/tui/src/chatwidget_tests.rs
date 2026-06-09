@@ -1016,12 +1016,12 @@ fn shift_tab_plan_submission_marks_user_turn_plan_mode() {
     widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let AppEvent::Command(AppCommand::UserTurn {
-        interaction_mode, ..
+        collaboration_mode, ..
     }) = app_event_rx.try_recv().expect("user turn event")
     else {
         panic!("expected user turn command");
     };
-    assert_eq!(interaction_mode, devo_protocol::InteractionMode::Plan);
+    assert_eq!(collaboration_mode, devo_protocol::CollaborationMode::Plan);
 }
 
 fn status_row_starting_with(rows: &[String], mode: &str) -> String {
@@ -1163,7 +1163,7 @@ fn bang_command_from_build_submits_one_shot_shell_command() {
 
     let AppEvent::Command(AppCommand::UserTurn {
         input,
-        interaction_mode,
+        collaboration_mode,
         ..
     }) = app_event_rx.try_recv().expect("user turn event")
     else {
@@ -1175,7 +1175,7 @@ fn bang_command_from_build_submits_one_shot_shell_command() {
             text: "next task".to_string()
         }]
     );
-    assert_eq!(interaction_mode, devo_protocol::InteractionMode::Build);
+    assert_eq!(collaboration_mode, devo_protocol::CollaborationMode::Build);
 }
 
 /// Trace: L2-DES-TUI-003
@@ -1194,7 +1194,7 @@ fn escaped_bang_prefix_submits_normal_chat() {
 
     let AppEvent::Command(AppCommand::UserTurn {
         input,
-        interaction_mode,
+        collaboration_mode,
         ..
     }) = app_event_rx.try_recv().expect("user turn event")
     else {
@@ -1206,7 +1206,7 @@ fn escaped_bang_prefix_submits_normal_chat() {
             text: "!important".to_string()
         }]
     );
-    assert_eq!(interaction_mode, devo_protocol::InteractionMode::Build);
+    assert_eq!(collaboration_mode, devo_protocol::CollaborationMode::Build);
 }
 
 /// Trace: L2-DES-TUI-003
@@ -1225,7 +1225,7 @@ fn leading_space_before_bang_submits_normal_chat() {
 
     let AppEvent::Command(AppCommand::UserTurn {
         input,
-        interaction_mode,
+        collaboration_mode,
         ..
     }) = app_event_rx.try_recv().expect("user turn event")
     else {
@@ -1237,7 +1237,7 @@ fn leading_space_before_bang_submits_normal_chat() {
             text: "!pwd".to_string()
         }]
     );
-    assert_eq!(interaction_mode, devo_protocol::InteractionMode::Build);
+    assert_eq!(collaboration_mode, devo_protocol::CollaborationMode::Build);
 }
 
 #[test]
@@ -1573,7 +1573,7 @@ fn submit_text_emits_user_turn_with_model_and_thinking() {
             thinking: Some("disabled".to_string()),
             sandbox: None,
             approval_policy: Some("on-request".to_string()),
-            interaction_mode: devo_protocol::InteractionMode::Build,
+            collaboration_mode: devo_protocol::CollaborationMode::Build,
         })
     );
 }
@@ -1607,7 +1607,7 @@ fn typed_character_submits_after_paste_burst_flush() {
             thinking: None,
             sandbox: None,
             approval_policy: Some("on-request".to_string()),
-            interaction_mode: devo_protocol::InteractionMode::Build,
+            collaboration_mode: devo_protocol::CollaborationMode::Build,
         })
     );
 }
@@ -1716,7 +1716,7 @@ fn key_release_does_not_duplicate_text_input() {
             thinking: None,
             sandbox: None,
             approval_policy: Some("on-request".to_string()),
-            interaction_mode: devo_protocol::InteractionMode::Build,
+            collaboration_mode: devo_protocol::CollaborationMode::Build,
         })
     );
 }
@@ -4632,7 +4632,7 @@ fn model_selection_updates_session_projection_and_emits_context_override() {
             thinking: Some("high".to_string()),
             sandbox: None,
             approval_policy: Some("on-request".to_string()),
-            interaction_mode: devo_protocol::InteractionMode::Build,
+            collaboration_mode: devo_protocol::CollaborationMode::Build,
         })
     );
 }

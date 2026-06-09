@@ -24,7 +24,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::onboarding_widget::OnboardingResult;
 use crate::onboarding_widget::OnboardingTranscriptEvent;
 use crate::slash_command::SlashCommand;
-use devo_protocol::InteractionMode;
+use devo_protocol::CollaborationMode;
 
 use super::ChatWidget;
 use super::ExternalEditorState;
@@ -87,7 +87,7 @@ impl ChatWidget {
                 text_elements,
                 local_images,
                 mention_bindings,
-                interaction_mode,
+                collaboration_mode,
             } => {
                 let user_message = UserMessage {
                     text,
@@ -102,19 +102,22 @@ impl ChatWidget {
                         .push_pending_cell(user_message.text.clone());
                     self.queued_count += 1;
                     self.app_event_tx.send(AppEvent::Command(
-                        AppCommand::user_turn_with_interaction_mode(
+                        AppCommand::user_turn_with_collaboration_mode(
                             input_items_for_user_message(&user_message),
                             Some(self.session.cwd.clone()),
                             self.user_turn_model(),
                             self.thinking_selection.clone(),
                             /*sandbox*/ None,
                             Some("on-request".to_string()),
-                            interaction_mode,
+                            collaboration_mode,
                         ),
                     ));
                     self.set_status_message("Message queued");
                 } else {
-                    self.submit_user_message_with_interaction_mode(user_message, interaction_mode);
+                    self.submit_user_message_with_collaboration_mode(
+                        user_message,
+                        collaboration_mode,
+                    );
                 }
             }
             InputResult::ShellCommand { command } => {
@@ -282,13 +285,13 @@ impl ChatWidget {
     }
 
     pub(super) fn submit_user_message(&mut self, user_message: UserMessage) {
-        self.submit_user_message_with_interaction_mode(user_message, InteractionMode::Build);
+        self.submit_user_message_with_collaboration_mode(user_message, CollaborationMode::Build);
     }
 
-    pub(super) fn submit_user_message_with_interaction_mode(
+    pub(super) fn submit_user_message_with_collaboration_mode(
         &mut self,
         user_message: UserMessage,
-        interaction_mode: InteractionMode,
+        collaboration_mode: CollaborationMode,
     ) {
         if user_message.text.trim().is_empty() {
             return;
@@ -309,14 +312,14 @@ impl ChatWidget {
         ));
 
         self.app_event_tx.send(AppEvent::Command(
-            AppCommand::user_turn_with_interaction_mode(
+            AppCommand::user_turn_with_collaboration_mode(
                 input,
                 Some(self.session.cwd.clone()),
                 self.user_turn_model(),
                 self.thinking_selection.clone(),
                 /*sandbox*/ None,
                 Some("on-request".to_string()),
-                interaction_mode,
+                collaboration_mode,
             ),
         ));
         self.set_status_message("Submitted locally");

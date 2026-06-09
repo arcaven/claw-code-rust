@@ -63,7 +63,7 @@ impl ContextAssembler {
         tool_schemas: &[(String, serde_json::Value)],
         prior_transcript: &[(TurnId, ItemId)],
         persona: Option<&str>,
-        interaction_mode: Option<&str>,
+        collaboration_mode: Option<&str>,
         project_instructions: &[String],
         active_skills: &[String],
         memory_context: Option<&str>,
@@ -96,16 +96,16 @@ impl ContextAssembler {
             });
         }
 
-        // Step 4: Metadata-derived instructions (persona, interaction mode)
+        // Step 4: Metadata-derived instructions (persona, collaboration mode)
         if let Some(persona_text) = persona {
             entries.push(ContextEntry::InstructionRef {
                 source: InstructionSource::Persona("default".into()),
                 content: persona_text.to_string(),
             });
         }
-        if let Some(mode_text) = interaction_mode {
+        if let Some(mode_text) = collaboration_mode {
             entries.push(ContextEntry::InstructionRef {
-                source: InstructionSource::InteractionMode("default".into()),
+                source: InstructionSource::CollaborationMode("default".into()),
                 content: mode_text.to_string(),
             });
         }
@@ -231,7 +231,7 @@ pub enum InstructionSource {
     BaseInstruction,
     AgentMode(String),
     Persona(String),
-    InteractionMode(String),
+    CollaborationMode(String),
     ProjectInstruction(std::path::PathBuf),
     GlobalInstruction(std::path::PathBuf),
     SkillActivation(String),
@@ -661,7 +661,7 @@ mod tests {
             InstructionSource::BaseInstruction,
             InstructionSource::AgentMode("code-review".into()),
             InstructionSource::Persona("senior-engineer".into()),
-            InstructionSource::InteractionMode("plan".into()),
+            InstructionSource::CollaborationMode("plan".into()),
             InstructionSource::ProjectInstruction("/tmp/proj".into()),
             InstructionSource::GlobalInstruction("/home/user".into()),
             InstructionSource::SkillActivation("my-skill".into()),
