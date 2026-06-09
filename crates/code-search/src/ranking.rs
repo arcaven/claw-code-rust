@@ -97,7 +97,7 @@ fn rerank(
             if !all_files_unique {
                 score *= multi_chunk_file_boost(file_counts.get(&path).copied().unwrap_or(1));
             }
-            if symbol_query && contains_symbol_definition(&chunk.content, &symbol) {
+            if symbol_query && contains_symbol_definition(&chunk.content, symbol) {
                 score *= 1.35;
             }
             score *= path_keyword_boost(lowercase_path.as_ref(), &terms);
