@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use devo_protocol::parse_command::ParsedCommand;
 use devo_protocol::protocol::ExecCommandSource;
+use serde_json::Value;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CommandOutput {
@@ -30,6 +31,10 @@ pub(crate) struct ExecCall {
     pub(crate) start_time: Option<Instant>,
     pub(crate) duration: Option<Duration>,
     pub(crate) interaction_input: Option<String>,
+    pub(crate) tool_name: Option<String>,
+    pub(crate) tool_input: Option<Value>,
+    pub(crate) tool_output: Option<Value>,
+    pub(crate) tool_display_content: Option<String>,
 }
 
 #[derive(Debug)]
@@ -63,6 +68,10 @@ impl ExecCell {
             start_time: Some(Instant::now()),
             duration: None,
             interaction_input,
+            tool_name: None,
+            tool_input: None,
+            tool_output: None,
+            tool_display_content: None,
         };
         if self.is_exploring_cell() && Self::is_exploring_call(&call) {
             let mut calls = self.calls.clone();
@@ -177,6 +186,34 @@ impl ExecCell {
         true
     }
 
+    pub(crate) fn set_tool_io_input(
+        &mut self,
+        call_id: &str,
+        tool_name: String,
+        input: Value,
+    ) -> bool {
+        let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) else {
+            return false;
+        };
+        call.tool_name = Some(tool_name);
+        call.tool_input = Some(input);
+        true
+    }
+
+    pub(crate) fn complete_tool_io(
+        &mut self,
+        call_id: &str,
+        output: Value,
+        display_content: Option<String>,
+    ) -> bool {
+        let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) else {
+            return false;
+        };
+        call.tool_output = Some(output);
+        call.tool_display_content = display_content;
+        true
+    }
+
     pub(super) fn is_exploring_call(call: &ExecCall) -> bool {
         !matches!(call.source, ExecCommandSource::UserShell)
             && !call.parsed.is_empty()
@@ -225,6 +262,10 @@ mod tests {
             start_time: Some(Instant::now()),
             duration: None,
             interaction_input: None,
+            tool_name: None,
+            tool_input: None,
+            tool_output: None,
+            tool_display_content: None,
         }
     }
 
