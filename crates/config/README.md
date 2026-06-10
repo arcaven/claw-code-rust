@@ -84,7 +84,7 @@ without clearing every omitted provider field from user config.
 - `skills.include_instructions = true`
 - `skills.config = []`
 - `experimental.code_search = true`
-- `tools.web_search.mode = "disabled"`
+- `tools.web_search.mode = "provider"`
 - `updates.enabled = true`
 - `updates.check_on_startup = true`
 - `updates.check_interval_hours = 24`

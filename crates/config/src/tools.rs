@@ -24,8 +24,8 @@ impl ToolsConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchMode {
-    #[default]
     Disabled,
+    #[default]
     Provider,
     Local,
 }
@@ -43,7 +43,7 @@ pub struct WebSearchConfig {
 
 impl WebSearchConfig {
     pub fn is_default(&self) -> bool {
-        self.mode == WebSearchMode::Disabled
+        self.mode == WebSearchMode::Provider
             && self.local_provider.is_none()
             && self.local_providers.is_empty()
     }
@@ -164,7 +164,7 @@ fn resolve_local_web_search(
 }
 
 fn is_default_web_search_mode(mode: &WebSearchMode) -> bool {
-    *mode == WebSearchMode::Disabled
+    *mode == WebSearchMode::Provider
 }
 
 #[cfg(test)]
@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn default_mode_resolves_disabled() {
+    fn default_mode_resolves_provider() {
         let resolved = resolve_web_search_config(
             &WebSearchConfig::default(),
             None,
@@ -215,7 +215,7 @@ mod tests {
         )
         .expect("resolve web search");
 
-        assert_eq!(resolved, ResolvedWebSearchConfig::Disabled);
+        assert_eq!(resolved, ResolvedWebSearchConfig::Provider);
     }
 
     #[test]
