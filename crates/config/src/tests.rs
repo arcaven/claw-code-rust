@@ -297,6 +297,7 @@ invocation_method = "openai_responses"
                     headers: Some(r#"{"X-User":"yes"}"#.to_string()),
                     wire_apis: vec![ProviderWireApi::OpenAIResponses],
                     web_search: None,
+                    web_fetch: None,
                     enabled: true,
                 },
             )]),

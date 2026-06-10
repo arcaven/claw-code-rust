@@ -263,6 +263,7 @@ impl ToolRuntime {
             agent_scope: self.context.agent_scope,
             collaboration_mode: self.context.collaboration_mode,
             agent_coordinator: self.context.agent_coordinator.clone(),
+            network_proxy: self.context.network_proxy.clone(),
         };
 
         let (progress_sender, progress_task) = match on_progress {
@@ -393,6 +394,11 @@ fn canonical_tool_name<'a>(registry: &ToolRegistry, tool_name: &'a str) -> &'a s
         "bash" if registry.spec("shell_command").is_some() => "shell_command",
         "glob" if registry.spec("find").is_some() => "find",
         "websearch" | "web-search" if registry.spec("web_search").is_some() => "web_search",
+        "web_fetch" | "web-fetch" | "fetch_url" | "fetch-url"
+            if registry.spec("webfetch").is_some() =>
+        {
+            "webfetch"
+        }
         _ => tool_name,
     }
 }
@@ -430,6 +436,7 @@ pub struct ToolRuntimeContext {
     pub collaboration_mode: devo_protocol::CollaborationMode,
     pub agent_coordinator: Option<Arc<dyn AgentToolCoordinator>>,
     pub local_web_search: Option<ResolvedLocalWebSearchConfig>,
+    pub network_proxy: Option<String>,
 }
 
 impl std::fmt::Debug for ToolRuntimeContext {
@@ -450,6 +457,10 @@ impl std::fmt::Debug for ToolRuntimeContext {
                     .local_web_search
                     .as_ref()
                     .map(|config| &config.provider_id),
+            )
+            .field(
+                "network_proxy",
+                &self.network_proxy.as_ref().map(|_| "<configured>"),
             )
             .finish()
     }
@@ -544,7 +555,7 @@ fn path_for_tool_input(tool_name: &str, input: &serde_json::Value, cwd: &Path) -
 
 fn host_for_tool_input(tool_name: &str, input: &serde_json::Value) -> Option<String> {
     match tool_name {
-        "webfetch" => input
+        "webfetch" | "web_fetch" | "web-fetch" | "fetch_url" | "fetch-url" => input
             .get("url")
             .and_then(serde_json::Value::as_str)
             .and_then(host_from_url),
@@ -576,7 +587,7 @@ fn target_for_tool_input(tool_name: &str, input: &serde_json::Value) -> Option<S
             .or_else(|| input.get("command"))
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
-        "webfetch" => input
+        "webfetch" | "web_fetch" | "web-fetch" | "fetch_url" | "fetch-url" => input
             .get("url")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
@@ -1065,6 +1076,7 @@ mod tests {
                 collaboration_mode: devo_protocol::CollaborationMode::Build,
                 agent_coordinator: None,
                 local_web_search: None,
+                network_proxy: None,
             },
         );
         let call = ToolCall {

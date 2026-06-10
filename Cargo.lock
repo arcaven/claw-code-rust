@@ -1457,6 +1457,7 @@ dependencies = [
  "chrono",
  "devo-code-search",
  "devo-config",
+ "devo-network-proxy",
  "devo-protocol",
  "devo-provider",
  "devo-safety",
@@ -1524,6 +1525,17 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "devo-network-proxy"
+version = "0.1.13"
+dependencies = [
+ "anyhow",
+ "pretty_assertions",
+ "reqwest 0.12.28",
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

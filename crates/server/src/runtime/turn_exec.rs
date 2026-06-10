@@ -923,6 +923,15 @@ impl ServerRuntime {
                 core_session.config.permission_profile.clone(),
             )
         };
+        let network_proxy = self
+            .deps
+            .config_store
+            .lock()
+            .expect("app config store mutex should not be poisoned")
+            .effective_config()
+            .provider_http
+            .proxy_url
+            .clone();
         let runtime = ToolRuntime::new_with_context(
             Arc::clone(&self.deps.registry),
             self.build_permission_checker(
@@ -939,6 +948,7 @@ impl ServerRuntime {
                 collaboration_mode: devo_protocol::CollaborationMode::Build,
                 agent_coordinator: None,
                 local_web_search: None,
+                network_proxy,
             },
         );
         let result = runtime
@@ -1917,6 +1927,15 @@ impl ServerRuntime {
                 .get(&session_id)
                 .cloned()
                 .unwrap_or_else(CancellationToken::new);
+            let network_proxy = self
+                .deps
+                .config_store
+                .lock()
+                .expect("app config store mutex should not be poisoned")
+                .effective_config()
+                .provider_http
+                .proxy_url
+                .clone();
             let runtime = ToolRuntime::new_with_context_and_options(
                 Arc::clone(&registry),
                 self.build_permission_checker(
@@ -1937,6 +1956,7 @@ impl ServerRuntime {
                         devo_core::ResolvedWebSearchConfig::Disabled
                         | devo_core::ResolvedWebSearchConfig::Provider => None,
                     },
+                    network_proxy,
                 },
                 ToolExecutionOptions {
                     cancel_token: turn_cancel_token,

@@ -286,6 +286,7 @@ impl AppConfigStore {
                         .as_deref()
                         .and_then(non_empty_string),
                     web_search: None,
+                    web_fetch: None,
                     enabled: binding.enabled,
                 },
             );

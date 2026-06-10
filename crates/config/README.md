@@ -275,6 +275,26 @@ the provider default endpoint and result count. Compatibility aliases
 `websearch` and `web-search` route to `web_search`, but aliases are not exposed
 to the model.
 
+## Web Fetch
+
+`[tools.web_fetch]` controls whether a turn exposes URL fetching to the model.
+It resolves with the same priority as web search:
+
+1. `[model_bindings.<id>.web_fetch]`
+2. `[providers.<id>.web_fetch]`
+3. `[tools.web_fetch]`
+
+Supported modes:
+
+- `disabled`: do not provide provider-hosted web fetch and do not expose the
+  local `webfetch` function tool.
+- `provider`: let the active provider adapter inject provider-hosted fetch into
+  the request. OpenAI Responses uses hosted tool `{"type":"web_fetch"}`;
+  OpenAI Chat Completions uses `web_fetch_options`; Anthropic Messages uses
+  server tool `{"type":"web_fetch_20250910","name":"web_fetch"}`.
+- `local`: expose the existing local `webfetch` function tool. This is the
+  default to preserve the existing local fetch behavior.
+
 ## Provider Resolution
 
 `resolve_provider_settings_from_config_and_auth` chooses the active model
