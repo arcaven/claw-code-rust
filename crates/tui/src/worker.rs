@@ -3099,10 +3099,7 @@ fn summarize_tool_call(payload: &ToolCallPayload) -> String {
     if is_web_search_tool_name(&payload.tool_name)
         && let Some(query) = web_search_query(&payload.parameters)
     {
-        return format!(
-            "Web Search({})",
-            serde_json::Value::String(query).to_string()
-        );
+        return format!("Web Search({})", serde_json::Value::String(query));
     }
 
     let detail = summarize_tool_input(&payload.tool_name, &payload.parameters);

@@ -21,9 +21,7 @@ pub(crate) fn apply_openai_chat_completions_hosted_tools(
     root: &mut Value,
     hosted_tools: &[HostedToolDefinition],
 ) {
-    if let Some(options) = hosted_tools.iter().find_map(|tool| match tool {
-        HostedToolDefinition::WebSearch(options) => Some(options),
-    }) {
+    if let Some(HostedToolDefinition::WebSearch(options)) = hosted_tools.iter().next() {
         let mut value = Map::new();
         if let Some(search_context_size) = &options.search_context_size {
             value.insert(

@@ -472,18 +472,29 @@ fn emit_hosted_tool_start<F>(
     }
 }
 
+struct HostedToolResultEvent<'a> {
+    id: &'a str,
+    name: &'a str,
+    input: &'a serde_json::Value,
+    output: Option<serde_json::Value>,
+    status: Option<String>,
+}
+
 fn emit_hosted_tool_result<F>(
     emit: &F,
     emitted_tool_results: &mut HashSet<String>,
     session_cwd: &std::path::Path,
-    id: &str,
-    name: &str,
-    input: &serde_json::Value,
-    output: Option<serde_json::Value>,
-    status: Option<String>,
+    event: HostedToolResultEvent<'_>,
 ) where
     F: Fn(QueryEvent),
 {
+    let HostedToolResultEvent {
+        id,
+        name,
+        input,
+        output,
+        status,
+    } = event;
     if !emitted_tool_results.insert(id.to_string()) {
         return;
     }
@@ -901,11 +912,13 @@ pub async fn query(
                         &emit,
                         &mut emitted_hosted_tool_results,
                         &session.cwd,
-                        &id,
-                        &name,
-                        &input,
-                        output,
-                        status,
+                        HostedToolResultEvent {
+                            id: &id,
+                            name: &name,
+                            input: &input,
+                            output,
+                            status,
+                        },
                     );
                 }
                 Ok(StreamEvent::ToolCallInputDelta {
@@ -1059,11 +1072,13 @@ pub async fn query(
                             &emit,
                             &mut emitted_hosted_tool_results,
                             &session.cwd,
-                            &id,
-                            &name,
-                            &input,
-                            output.clone(),
-                            status.clone(),
+                            HostedToolResultEvent {
+                                id: &id,
+                                name: &name,
+                                input: &input,
+                                output: output.clone(),
+                                status: status.clone(),
+                            },
                         );
                     }
                 }
@@ -1095,11 +1110,13 @@ pub async fn query(
                 &emit,
                 &mut emitted_hosted_tool_results,
                 &session.cwd,
-                &id,
-                &name,
-                &input,
-                None,
-                Some("completed".to_string()),
+                HostedToolResultEvent {
+                    id: &id,
+                    name: &name,
+                    input: &input,
+                    output: None,
+                    status: Some("completed".to_string()),
+                },
             );
         }
 
