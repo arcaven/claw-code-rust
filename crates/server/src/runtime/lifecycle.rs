@@ -118,18 +118,18 @@ impl ServerRuntime {
             drop(session);
             match self.goal_durable_store.replay_goal_store(*session_id).await {
                 Ok(Some(goal_store)) => {
-                    if let Some(goal) = goal_store.get() {
-                        if goal.status == crate::goal::GoalStatus::Active {
-                            active_goal_sessions.push(*session_id);
-                            let core_session = {
-                                let session = session_arc.lock().await;
-                                Arc::clone(&session.core_session)
-                            };
-                            core_session
-                                .lock()
-                                .await
-                                .set_active_goal(goal.to_thread_goal());
-                        }
+                    if let Some(goal) = goal_store.get()
+                        && goal.status == crate::goal::GoalStatus::Active
+                    {
+                        active_goal_sessions.push(*session_id);
+                        let core_session = {
+                            let session = session_arc.lock().await;
+                            Arc::clone(&session.core_session)
+                        };
+                        core_session
+                            .lock()
+                            .await
+                            .set_active_goal(goal.to_thread_goal());
                     }
                     restored_goal_stores.insert(*session_id, goal_store);
                 }

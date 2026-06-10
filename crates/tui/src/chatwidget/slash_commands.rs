@@ -220,6 +220,14 @@ impl ChatWidget {
             return;
         }
 
+        self.add_to_history(history_cell::new_user_prompt(
+            format!("/goal {trimmed}"),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            self.active_accent_color(),
+            self.current_turn_mode,
+        ));
         self.app_event_tx
             .send(AppEvent::Command(AppCommand::set_goal_objective(
                 trimmed.to_string(),

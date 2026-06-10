@@ -1682,6 +1682,17 @@ fn goal_slash_command_emits_set_goal_objective() {
     );
 
     widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(widget.composer_is_empty());
+    let rendered_after_submit = widget
+        .transcript_overlay_lines(100)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered_after_submit.contains("/goal improve benchmark coverage"),
+        "expected submitted /goal command in history:\n{rendered_after_submit}"
+    );
 
     assert_eq!(
         app_event_rx.try_recv().expect("goal command event"),

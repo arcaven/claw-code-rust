@@ -44,7 +44,7 @@ impl GoalDurableStore {
             turn_id: goal
                 .created_turn_id
                 .map(|turn_ref| turn_ref.turn_id)
-                .unwrap_or_else(TurnId::new),
+                .unwrap_or_default(),
             prompt: goal.prompt.clone(),
             description: goal.description.clone(),
             max_iterations: goal.budget.max_turns,
@@ -274,7 +274,7 @@ fn durable_budget_from_goal(budget: &GoalBudget) -> Option<devo_core::GoalBudget
     (budget.max_turns.is_some()
         || budget.max_tokens.is_some()
         || budget.max_duration_seconds.is_some())
-    .then(|| devo_core::GoalBudget {
+    .then_some(devo_core::GoalBudget {
         max_turns: budget.max_turns,
         max_tokens: budget.max_tokens,
         max_duration_seconds: budget.max_duration_seconds,

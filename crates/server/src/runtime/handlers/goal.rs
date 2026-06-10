@@ -159,9 +159,6 @@ impl GoalStore {
         let Some(goal) = self.active_goal.as_mut() else {
             return Err(GoalError::NotFound("current".to_string()));
         };
-        if goal.status.is_terminal() {
-            return Err(GoalError::InvalidTransition);
-        }
         goal.status = GoalStatus::from_thread_goal_status(status);
         goal.updated_at = chrono::Utc::now();
         Ok(goal.clone())
@@ -362,7 +359,7 @@ mod tests {
     }
 
     #[test]
-    fn set_status_cannot_reactivate_terminal_goal() {
+    fn set_status_can_update_terminal_goal() {
         // Trace: L2-DES-GOAL-001
         let mut store = GoalStore::new();
         let params = GoalCreateParams {
@@ -374,10 +371,12 @@ mod tests {
             .set_status(ThreadGoalStatus::Complete)
             .expect("complete");
 
-        let result = store.set_status(ThreadGoalStatus::Active);
+        let goal = store
+            .set_status(ThreadGoalStatus::Active)
+            .expect("reactivate");
 
-        assert!(result.is_err());
-        assert_eq!(store.get().unwrap().status, GoalStatus::Completed);
+        assert_eq!(goal.status, GoalStatus::Active);
+        assert_eq!(store.get(), Some(&goal));
     }
 
     #[test]

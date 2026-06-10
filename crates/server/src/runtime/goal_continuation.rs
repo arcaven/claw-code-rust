@@ -370,7 +370,7 @@ fn latest_failed_turn_error_message(
         return None;
     }
     items.iter().rev().find_map(|item| {
-        match (&item.turn_id == &latest_turn.turn_id, &item.turn_item) {
+        match (item.turn_id == latest_turn.turn_id, &item.turn_item) {
             (true, TurnItem::AgentMessage(TextItem { text })) if !text.trim().is_empty() => {
                 Some(text.clone())
             }
