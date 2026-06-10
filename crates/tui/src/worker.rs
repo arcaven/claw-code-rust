@@ -3235,7 +3235,7 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
             }
         }
         "code_search" => Some(code_search_summary_from_input(input)),
-        "webfetch" | "websearch" => input
+        "webfetch" | "web_search" | "websearch" | "web-search" => input
             .get("url")
             .and_then(serde_json::Value::as_str)
             .map(|s| s.to_string())

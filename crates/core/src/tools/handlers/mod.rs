@@ -156,11 +156,15 @@ fn build_registry_from_builder(
             ToolHandlerKind::Bash if name == "shell_command" => Some("bash"),
             ToolHandlerKind::Glob if name == "find" => Some("glob"),
             ToolHandlerKind::Question if name == "request_user_input" => Some("question"),
+            ToolHandlerKind::WebSearch if name == "web_search" => Some("websearch"),
             _ => None,
         };
         builder.register_handler(&name, Arc::clone(&handler));
         if let Some(alias) = legacy_alias {
-            builder.register_handler(alias, handler);
+            builder.register_handler(alias, Arc::clone(&handler));
+        }
+        if kind == ToolHandlerKind::WebSearch && name == "web_search" {
+            builder.register_handler("web-search", handler);
         }
     }
     for (name, handler) in mcp_handlers {

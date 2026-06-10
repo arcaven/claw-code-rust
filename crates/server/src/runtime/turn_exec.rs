@@ -938,6 +938,7 @@ impl ServerRuntime {
                 agent_scope: ToolAgentScope::Parent,
                 collaboration_mode: devo_protocol::CollaborationMode::Build,
                 agent_coordinator: None,
+                local_web_search: None,
             },
         );
         let result = runtime
@@ -1922,6 +1923,11 @@ impl ServerRuntime {
                     agent_scope,
                     collaboration_mode,
                     agent_coordinator: Some(Arc::clone(&self) as Arc<dyn AgentToolCoordinator>),
+                    local_web_search: match &turn_config.web_search {
+                        devo_core::ResolvedWebSearchConfig::Local(config) => Some(config.clone()),
+                        devo_core::ResolvedWebSearchConfig::Disabled
+                        | devo_core::ResolvedWebSearchConfig::Provider => None,
+                    },
                 },
                 ToolExecutionOptions {
                     cancel_token: turn_cancel_token,
