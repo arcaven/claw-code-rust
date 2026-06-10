@@ -31,6 +31,7 @@ use super::ChatWidget;
 use super::DotStatus;
 use super::PendingApprovalRequest;
 use super::SKILLS_TRANSCRIPT_TITLE;
+use super::session_header::is_web_search_title;
 use super::text_stream::ActiveTextItemId;
 
 impl ChatWidget {
@@ -283,11 +284,12 @@ impl ChatWidget {
                 } else {
                     self.active_tool_calls
                         .insert(tool_use_id.clone(), tool_call);
-                    let pending_title = if title.starts_with("Running ") {
-                        title
-                    } else {
-                        format!("Running {title}")
-                    };
+                    let pending_title =
+                        if title.starts_with("Running ") || is_web_search_title(&title) {
+                            title
+                        } else {
+                            format!("Running {title}")
+                        };
                     self.pending_tool_calls.push(ActiveToolCall {
                         tool_use_id,
                         tool_name: None,

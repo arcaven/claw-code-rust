@@ -293,7 +293,7 @@ fn response_text(response: &ModelResponse) -> String {
         .iter()
         .filter_map(|content| match content {
             ResponseContent::Text(text) => Some(text.as_str()),
-            ResponseContent::ToolUse { .. } => None,
+            ResponseContent::ToolUse { .. } | ResponseContent::HostedToolUse { .. } => None,
         })
         .collect::<Vec<_>>()
         .join("\n")

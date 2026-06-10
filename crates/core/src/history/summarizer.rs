@@ -104,7 +104,7 @@ impl HistorySummarizer for DefaultHistorySummarizer {
             .iter()
             .filter_map(|block| match block {
                 ResponseContent::Text(text) => Some(text.as_str()),
-                ResponseContent::ToolUse { .. } => None,
+                ResponseContent::ToolUse { .. } | ResponseContent::HostedToolUse { .. } => None,
             })
             .collect::<Vec<_>>()
             .join("\n");

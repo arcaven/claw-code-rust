@@ -3513,6 +3513,74 @@ fn tool_call_start_and_finish_are_both_visible_in_history() {
 }
 
 #[test]
+fn web_search_tool_call_renders_title_and_status_without_running_prefix() {
+    let cwd = std::env::current_dir().expect("current directory is available");
+    let model = Model {
+        slug: "test-model".to_string(),
+        display_name: "Test Model".to_string(),
+        ..Model::default()
+    };
+    let (mut widget, _app_event_rx) = widget_with_model(model, cwd);
+    let _ = widget.drain_scrollback_lines(80);
+
+    widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
+        model: "test-model".to_string(),
+        thinking: None,
+        reasoning_effort: None,
+        turn_id: Default::default(),
+    });
+    widget.handle_worker_event(crate::events::WorkerEvent::ToolCall {
+        tool_use_id: "tool-1".to_string(),
+        summary: "Web Search(\"latest OpenAI API docs\")".to_string(),
+        preparing: false,
+        parsed_commands: None,
+    });
+
+    let running = rendered_rows(&widget, 80, 12).join(
+        "
+",
+    );
+    assert!(
+        running.contains("Web Search(\"latest OpenAI API docs\")"),
+        "expected web search title, got:
+{running}"
+    );
+    assert!(
+        !running.contains("Running Web Search"),
+        "web search should not render a Running prefix, got:
+{running}"
+    );
+
+    widget.handle_worker_event(crate::events::WorkerEvent::ToolResult {
+        tool_use_id: "tool-1".to_string(),
+        title: "Web Search(\"latest OpenAI API docs\")".to_string(),
+        preview: "└ status: completed".to_string(),
+        is_error: false,
+        truncated: false,
+    });
+
+    let rendered = scrollback_plain_lines(&widget.drain_scrollback_lines(80)).join(
+        "
+",
+    );
+    assert!(
+        rendered.contains("Web Search(\"latest OpenAI API docs\")"),
+        "expected completed web search title, got:
+{rendered}"
+    );
+    assert!(
+        rendered.contains("└ status: completed"),
+        "expected completed status line, got:
+{rendered}"
+    );
+    assert!(
+        !rendered.contains("Ran Web Search") && !rendered.contains("Running Web Search"),
+        "web search should not render Ran/Running prefix, got:
+{rendered}"
+    );
+}
+
+#[test]
 fn preparing_write_tool_call_is_visible_before_result() {
     let cwd = std::env::current_dir().expect("current directory is available");
     let model = Model {

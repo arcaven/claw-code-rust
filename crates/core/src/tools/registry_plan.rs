@@ -10,6 +10,10 @@ use devo_config::AppConfig;
 
 const BASH_DESCRIPTION: &str = include_str!("bash.txt");
 const READ_DESCRIPTION: &str = include_str!("read.txt");
+const WRITE_DESCRIPTION: &str = include_str!("write.txt");
+const GLOB_DESCRIPTION: &str = include_str!("glob.txt");
+const GREP_DESCRIPTION: &str = include_str!("grep.txt");
+const WEBFETCH_DESCRIPTION: &str = include_str!("webfetch.txt");
 const APPLY_PATCH_DESCRIPTION: &str = include_str!("apply_patch.txt");
 
 #[derive(Debug, Clone)]
@@ -662,7 +666,7 @@ pub fn build_tool_registry_plan(config: &ToolPlanConfig) -> ToolRegistryPlan {
     plan.push(
         ToolSpec {
             name: "write".to_string(),
-            description: "Write content to a file. Creates the file if it does not exist, or overwrites the existing file.".to_string(),
+            description: WRITE_DESCRIPTION.to_string(),
             input_schema: write_schema(),
             output_mode: ToolOutputMode::Mixed,
             execution_mode: ToolExecutionMode::Mutating,
@@ -676,11 +680,7 @@ pub fn build_tool_registry_plan(config: &ToolPlanConfig) -> ToolRegistryPlan {
         ToolHandlerKind::Write,
     );
 
-    let find_description = if config.code_search {
-        "Fast filename and path search backed by ripgrep. Use only for literal file/path discovery; prefer code_search for codebase investigation."
-    } else {
-        "Fast filename and path search backed by ripgrep. Use only for literal file/path discovery."
-    };
+    let find_description = GLOB_DESCRIPTION;
 
     plan.push(
         ToolSpec {
@@ -699,11 +699,7 @@ pub fn build_tool_registry_plan(config: &ToolPlanConfig) -> ToolRegistryPlan {
         ToolHandlerKind::Glob,
     );
 
-    let grep_description = if config.code_search {
-        "Fast exact text and regex content search backed by ripgrep. Use grep for known strings or regexes; prefer code_search for codebase investigation."
-    } else {
-        "Fast exact text and regex content search backed by ripgrep. Use grep for known strings or regexes."
-    };
+    let grep_description = GREP_DESCRIPTION;
 
     plan.push(
         ToolSpec {
@@ -781,9 +777,7 @@ pub fn build_tool_registry_plan(config: &ToolPlanConfig) -> ToolRegistryPlan {
     plan.push(
         ToolSpec {
             name: "webfetch".to_string(),
-            description:
-                "Fetches content from a specified URL and returns it in the requested format."
-                    .to_string(),
+            description: WEBFETCH_DESCRIPTION.to_string(),
             input_schema: webfetch_schema(),
             output_mode: ToolOutputMode::Mixed,
             execution_mode: ToolExecutionMode::ReadOnly,

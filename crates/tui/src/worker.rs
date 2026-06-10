@@ -2938,6 +2938,15 @@ fn tool_call_started_event(payload: ToolCallPayload) -> WorkerEvent {
 }
 
 fn summarize_tool_call(payload: &ToolCallPayload) -> String {
+    if is_web_search_tool_name(&payload.tool_name)
+        && let Some(query) = web_search_query(&payload.parameters)
+    {
+        return format!(
+            "Web Search({})",
+            serde_json::Value::String(query).to_string()
+        );
+    }
+
     let detail = summarize_tool_input(&payload.tool_name, &payload.parameters);
     if detail.is_empty() {
         payload.tool_name.clone()
@@ -2946,6 +2955,18 @@ fn summarize_tool_call(payload: &ToolCallPayload) -> String {
     } else {
         format!("{} {detail}", payload.tool_name)
     }
+}
+
+fn is_web_search_tool_name(tool_name: &str) -> bool {
+    matches!(tool_name, "web_search" | "websearch" | "web-search")
+}
+
+fn web_search_query(input: &serde_json::Value) -> Option<String> {
+    input
+        .get("query")
+        .and_then(serde_json::Value::as_str)
+        .filter(|query| !query.is_empty())
+        .map(ToString::to_string)
 }
 
 fn summarize_tool_call_update(payload: &ToolCallPayload) -> String {
@@ -3239,12 +3260,7 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
             .get("url")
             .and_then(serde_json::Value::as_str)
             .map(|s| s.to_string())
-            .or_else(|| {
-                input
-                    .get("query")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|s| s.to_string())
-            }),
+            .or_else(|| web_search_query(input)),
         "lsp" => {
             let path = input
                 .get("filePath")
@@ -3640,6 +3656,23 @@ mod tests {
         assert_eq!(
             summarize_tool_call(&payload),
             "bash Get-Date -Format \"yyyy-MM-dd\""
+        );
+    }
+
+    #[test]
+    fn web_search_tool_summary_uses_query_text() {
+        let payload = ToolCallPayload {
+            tool_call_id: "call-1".to_string(),
+            tool_name: "web_search".to_string(),
+            parameters: serde_json::json!({
+                "query": "current Rust docs"
+            }),
+            command_actions: Vec::new(),
+        };
+
+        assert_eq!(
+            summarize_tool_call(&payload),
+            "Web Search(\"current Rust docs\")"
         );
     }
 
