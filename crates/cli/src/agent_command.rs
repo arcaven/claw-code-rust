@@ -161,12 +161,11 @@ fn saved_model_entries(app_config: &AppConfig) -> Vec<SavedModelEntry> {
                 .display_name
                 .clone()
                 .or_else(|| request_model.clone());
-            let provider_name = provider
-                .name
-                .trim()
-                .is_empty()
-                .then(|| binding.provider.clone())
-                .unwrap_or_else(|| provider.name.clone());
+            let provider_name = if provider.name.trim().is_empty() {
+                binding.provider.clone()
+            } else {
+                provider.name.clone()
+            };
             Some(SavedModelEntry {
                 binding_id: Some(binding_id.clone()),
                 model: binding.model_slug.clone(),
