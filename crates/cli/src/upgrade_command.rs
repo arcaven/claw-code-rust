@@ -15,6 +15,8 @@ pub fn run_upgrade() -> Result<()> {
 
 #[cfg(not(windows))]
 fn run_platform_upgrade() -> Result<()> {
+    println!("Downloading install.sh from {INSTALL_SH_URL} ...");
+
     let status = Command::new("sh")
         .arg("-c")
         .arg(unix_upgrade_script())
@@ -49,6 +51,7 @@ fn run_platform_upgrade() -> Result<()> {
     use std::process::Stdio;
 
     let parent_pid = std::process::id();
+    println!("Downloading install.ps1 from {INSTALL_PS1_URL} ...");
     Command::new("powershell.exe")
         .args([
             "-NoProfile",
