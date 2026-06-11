@@ -16,6 +16,7 @@ use devo_protocol::ResponseMetadata;
 use devo_protocol::StopReason;
 use devo_protocol::StreamEvent;
 use devo_protocol::Usage;
+use devo_protocol::normalize_tool_result_messages;
 use futures::Stream;
 use futures::StreamExt;
 use reqwest::Client;
@@ -757,15 +758,13 @@ impl ProviderAdapter for AnthropicProvider {
 ///   `metadata`, `service_tier`, `stop_sequences`, `top_k`, and `top_p`, are
 ///   not constructed directly here unless supplied through `extra_body`.
 fn build_request(request: &ModelRequest, stream: bool) -> Value {
+    let mut messages = request.messages.clone();
+    normalize_tool_result_messages(&mut messages);
     let body = AnthropicMessagesRequest {
         model: request.model.clone(),
         max_tokens: request.max_tokens,
         stream,
-        messages: request
-            .messages
-            .iter()
-            .map(build_message)
-            .collect::<Vec<_>>(),
+        messages: messages.iter().map(build_message).collect::<Vec<_>>(),
         system: request.system.clone(),
         tools: request.tools.as_ref().map(|tools| {
             tools

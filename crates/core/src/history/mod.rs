@@ -329,6 +329,7 @@ impl History {
                 }
             }
             merge_consecutive_assistant_messages(&mut messages);
+            devo_protocol::normalize_tool_result_messages(&mut messages);
             return messages;
         }
 
@@ -336,6 +337,7 @@ impl History {
         normalize::pair_tool_call_items(&mut items);
         let mut messages: Vec<RequestMessage> = items.into_iter().map(Into::into).collect();
         merge_consecutive_assistant_messages(&mut messages);
+        devo_protocol::normalize_tool_result_messages(&mut messages);
         messages
     }
 
@@ -709,7 +711,7 @@ mod tests {
     }
 
     #[test]
-    fn for_prompt_merges_consecutive_assistant_messages_only() {
+    fn for_prompt_merges_assistant_tool_calls_and_groups_tool_results() {
         let mut h = History::new(test_context());
 
         // User message
@@ -744,8 +746,8 @@ mod tests {
 
         let msgs = h.for_prompt(&[InputModality::Text]);
 
-        // Should produce: user, assistant(merged), user, user.
-        assert_eq!(msgs.len(), 4);
+        // Should produce: user, assistant(merged), user(grouped tool results).
+        assert_eq!(msgs.len(), 3);
 
         // Second message: assistant with text + both tool calls merged
         assert_eq!(msgs[1].role, "assistant");
@@ -758,16 +760,14 @@ mod tests {
             matches!(&msgs[1].content[2], RequestContent::ToolUse { id, .. } if id == "call-2")
         );
 
-        // Third and fourth messages: user tool results stay distinct.
+        // Third message: user tool results are grouped for provider adjacency.
         assert_eq!(msgs[2].role, "user");
-        assert_eq!(msgs[2].content.len(), 1);
+        assert_eq!(msgs[2].content.len(), 2);
         assert!(
             matches!(&msgs[2].content[0], RequestContent::ToolResult { tool_use_id, .. } if tool_use_id == "call-1")
         );
-        assert_eq!(msgs[3].role, "user");
-        assert_eq!(msgs[3].content.len(), 1);
         assert!(
-            matches!(&msgs[3].content[0], RequestContent::ToolResult { tool_use_id, .. } if tool_use_id == "call-2")
+            matches!(&msgs[2].content[1], RequestContent::ToolResult { tool_use_id, .. } if tool_use_id == "call-2")
         );
     }
 

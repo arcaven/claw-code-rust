@@ -122,6 +122,40 @@ async fn anthropic_messages_applies_custom_headers_after_builtin_headers() {
     assert_eq!(header_value(&request, "x-devo"), Some("yes"));
 }
 
+#[tokio::test]
+async fn anthropic_messages_groups_split_tool_results_before_send() {
+    let (base_url, capture) = spawn_json_server(anthropic_response()).await;
+    let provider = AnthropicProvider::new(base_url);
+
+    provider
+        .completion(anthropic_split_tool_result_request())
+        .await
+        .expect("provider response");
+    let request = capture.await.expect("capture request");
+    let body = request_body_json(&request);
+
+    assert_eq!(body["messages"][0]["role"], "assistant");
+    assert_eq!(body["messages"][0]["content"][0]["type"], "tool_use");
+    assert_eq!(body["messages"][0]["content"][1]["type"], "tool_use");
+    assert_eq!(body["messages"][1]["role"], "user");
+    assert_eq!(
+        body["messages"][1]["content"],
+        serde_json::json!([
+            {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": "first"
+            },
+            {
+                "type": "tool_result",
+                "tool_use_id": "call_2",
+                "content": "second"
+            }
+        ])
+    );
+    assert_eq!(body["messages"][2]["role"], "assistant");
+}
+
 /// Trace: L2-DES-APP-005, L2-DES-MODEL-001
 /// Verifies: provider proxy configuration routes OpenAI Chat Completions requests through the configured proxy.
 #[tokio::test]
@@ -215,7 +249,7 @@ async fn spawn_json_server(
     let addr = listener.local_addr().expect("local addr");
     let handle = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accept request");
-        let request = read_http_headers(&mut socket).await.expect("read request");
+        let request = read_http_request(&mut socket).await.expect("read request");
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             response_body.len(),
@@ -231,7 +265,7 @@ async fn spawn_json_server(
     (format!("http://{addr}"), handle)
 }
 
-async fn read_http_headers(socket: &mut tokio::net::TcpStream) -> io::Result<String> {
+async fn read_http_request(socket: &mut tokio::net::TcpStream) -> io::Result<String> {
     let mut bytes = Vec::new();
     let mut buffer = [0; 1024];
     loop {
@@ -244,6 +278,29 @@ async fn read_http_headers(socket: &mut tokio::net::TcpStream) -> io::Result<Str
             break;
         }
     }
+    let header_end = bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4);
+    if let Some(header_end) = header_end {
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0);
+        while bytes.len() < header_end + content_length {
+            let count = socket.read(&mut buffer).await?;
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+    }
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
 
@@ -252,6 +309,13 @@ fn header_value<'a>(request: &'a str, name: &str) -> Option<&'a str> {
         let (header_name, value) = line.split_once(':')?;
         header_name.eq_ignore_ascii_case(name).then(|| value.trim())
     })
+}
+
+fn request_body_json(request: &str) -> serde_json::Value {
+    let (_, body) = request
+        .split_once("\r\n\r\n")
+        .expect("request should include body separator");
+    serde_json::from_str(body).expect("request body should be JSON")
 }
 
 fn minimal_request() -> ModelRequest {
@@ -264,6 +328,59 @@ fn minimal_request() -> ModelRequest {
                 text: "Reply with OK only.".to_string(),
             }],
         }],
+        max_tokens: 16,
+        tools: None,
+        hosted_tools: Vec::new(),
+        sampling: Default::default(),
+        thinking: None,
+        reasoning_effort: None,
+        extra_body: None,
+    }
+}
+
+fn anthropic_split_tool_result_request() -> ModelRequest {
+    ModelRequest {
+        model: "test-model".to_string(),
+        system: None,
+        messages: vec![
+            RequestMessage {
+                role: "assistant".to_string(),
+                content: vec![
+                    RequestContent::ToolUse {
+                        id: "call_1".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({ "path": "a" }),
+                    },
+                    RequestContent::ToolUse {
+                        id: "call_2".to_string(),
+                        name: "read".to_string(),
+                        input: serde_json::json!({ "path": "b" }),
+                    },
+                ],
+            },
+            RequestMessage {
+                role: "user".to_string(),
+                content: vec![RequestContent::ToolResult {
+                    tool_use_id: "call_1".to_string(),
+                    content: "first".to_string(),
+                    is_error: None,
+                }],
+            },
+            RequestMessage {
+                role: "user".to_string(),
+                content: vec![RequestContent::ToolResult {
+                    tool_use_id: "call_2".to_string(),
+                    content: "second".to_string(),
+                    is_error: None,
+                }],
+            },
+            RequestMessage {
+                role: "assistant".to_string(),
+                content: vec![RequestContent::Text {
+                    text: "done".to_string(),
+                }],
+            },
+        ],
         max_tokens: 16,
         tools: None,
         hosted_tools: Vec::new(),
