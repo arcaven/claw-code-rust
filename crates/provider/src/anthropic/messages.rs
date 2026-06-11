@@ -1240,6 +1240,7 @@ mod tests {
             }],
             max_tokens: 1024,
             tools: None,
+            hosted_tools: Vec::new(),
             sampling: SamplingControls::default(),
             thinking: Some("enabled".to_string()),
             reasoning_effort: None,
