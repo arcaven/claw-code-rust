@@ -117,6 +117,15 @@ Windows:
 $env:DEVO_INSTALL_CODE_SEARCH_MODEL = "1"; irm 'https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1' | iex
 ```
 
+既存のインストールを最新 release にアップグレードするには:
+
+```bash
+devo upgrade
+```
+
+アップグレードコマンドは同じプラットフォーム用インストーラーを実行し、
+インストーラーは `Version: v0.1.12 -> v0.1.15` のようにバージョン遷移を表示します。
+
 <details>
 <summary>オフラインインストール</summary>
 

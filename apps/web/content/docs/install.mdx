@@ -31,6 +31,17 @@ Preinstall the local Hugging Face model used by semantic `code_search`:
 $env:DEVO_INSTALL_CODE_SEARCH_MODEL = "1"; irm https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1 | iex
 ```
 
+## Upgrade
+
+Upgrade an existing installation to the latest release:
+
+```bash
+devo upgrade
+```
+
+The upgrade command runs the same platform installer. The installer prints the
+version transition, for example `Version: v0.1.12 -> v0.1.15`.
+
 The model is installed under
 `<DEVO_HOME>/local-models/minishlab--potion-code-16M`.
 

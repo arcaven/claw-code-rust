@@ -12,9 +12,7 @@ use crate::UpdatesConfig;
 
 const RELEASES_LATEST_URL: &str = "https://api.github.com/repos/7df-lab/devo/releases/latest";
 const UPDATE_CACHE_FILE_NAME: &str = "update-check.json";
-const WINDOWS_UPGRADE_COMMAND: &str = "curl.exe -fsSL https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1 | powershell -NoProfile -ExecutionPolicy Bypass -Command -";
-const UNIX_UPGRADE_COMMAND: &str =
-    "curl -fsSL https://raw.githubusercontent.com/7df-lab/devo/main/install.sh | sh";
+const UPGRADE_COMMAND: &str = "devo upgrade";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateCheckOutcome {
@@ -163,18 +161,10 @@ fn cached_outcome(current_version: &str, cache: UpdateCheckCache) -> Option<Upda
             latest_version: cache.latest_version,
             release_url: cache.release_url,
             published_at: cache.published_at,
-            upgrade_command: upgrade_command_for_current_platform(),
+            upgrade_command: UPGRADE_COMMAND,
         }))
     } else {
         Some(UpdateCheckOutcome::UpToDate)
-    }
-}
-
-fn upgrade_command_for_current_platform() -> &'static str {
-    if cfg!(windows) {
-        WINDOWS_UPGRADE_COMMAND
-    } else {
-        UNIX_UPGRADE_COMMAND
     }
 }
 
@@ -288,7 +278,16 @@ mod tests {
         )
         .expect("cached outcome");
 
-        assert!(matches!(outcome, UpdateCheckOutcome::UpdateAvailable(_)));
+        assert_eq!(
+            outcome,
+            UpdateCheckOutcome::UpdateAvailable(super::UpdateNotification {
+                current_version: "0.1.3".into(),
+                latest_version: "v0.1.4".into(),
+                release_url: "https://github.com/7df-lab/devo/releases/tag/v0.1.4".into(),
+                published_at: None,
+                upgrade_command: "devo upgrade",
+            })
+        );
     }
 
     #[test]

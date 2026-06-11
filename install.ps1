@@ -146,10 +146,23 @@ function Resolve-GitHubLatestVersion {
 
 function Resolve-Version {
     if ($Version) {
-        return $Version
+        return Normalize-Version $Version
     }
 
-    return Resolve-GitHubLatestVersion -RepoName $Repo
+    return Normalize-Version (Resolve-GitHubLatestVersion -RepoName $Repo)
+}
+
+function Normalize-Version {
+    param(
+        [string]$Value
+    )
+
+    $normalized = $Value.Trim()
+    if ($normalized.StartsWith("v")) {
+        return $normalized
+    }
+
+    return "v$normalized"
 }
 
 function Test-Truthy {
@@ -170,6 +183,107 @@ function Get-DevoHome {
     }
 
     return Join-Path $HOME ".devo"
+}
+
+function Normalize-DevoVersionOutput {
+    param(
+        [string]$RawVersion
+    )
+
+    foreach ($part in ($RawVersion -split "\s+")) {
+        if ($part -match "^v\d+\.\d+\.\d+.*$") {
+            return $part
+        }
+        if ($part -match "^\d+\.\d+\.\d+.*$") {
+            return "v$part"
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RawVersion)) {
+        return $RawVersion.Trim()
+    }
+
+    return "unknown"
+}
+
+function Get-ExistingDevoPath {
+    param(
+        [string]$InstallDir
+    )
+
+    $installedTarget = Join-Path $InstallDir "devo.exe"
+    if (Test-Path $installedTarget) {
+        return $installedTarget
+    }
+
+    $command = Get-Command "devo.exe" -ErrorAction SilentlyContinue
+    if ($command) {
+        if ($command.Source) {
+            return $command.Source
+        }
+        return $command.Path
+    }
+
+    $command = Get-Command "devo" -ErrorAction SilentlyContinue
+    if ($command) {
+        if ($command.Source) {
+            return $command.Source
+        }
+        return $command.Path
+    }
+
+    return $null
+}
+
+function Get-InstalledDevoVersion {
+    param(
+        [string]$DevoPath
+    )
+
+    try {
+        $rawVersion = (& $DevoPath --version 2>$null) -join " "
+    } catch {
+        $rawVersion = ""
+    }
+
+    return Normalize-DevoVersionOutput $rawVersion
+}
+
+function Write-VersionTransition {
+    param(
+        [string]$InstallDir,
+        [string]$TargetVersion
+    )
+
+    $installedPath = Get-ExistingDevoPath -InstallDir $InstallDir
+    if ($installedPath) {
+        $currentVersion = Get-InstalledDevoVersion -DevoPath $installedPath
+    } else {
+        $currentVersion = "not installed"
+    }
+
+    Write-Host "Version: $currentVersion -> $TargetVersion"
+}
+
+function Test-DevoVersionInstalled {
+    param(
+        [string]$InstallDir,
+        [string]$ExpectedVersion
+    )
+
+    $installedPath = Get-ExistingDevoPath -InstallDir $InstallDir
+    if (-not $installedPath) {
+        return $false
+    }
+
+    $installedVersion = Get-InstalledDevoVersion -DevoPath $installedPath
+    if ($installedVersion -eq $ExpectedVersion) {
+        Write-Host "devo $ExpectedVersion is already installed at $installedPath"
+        return $true
+    }
+
+    Write-Host "Found existing devo at $installedPath ($installedVersion)"
+    return $false
 }
 
 # ── Banner ───────────────────────────────────────────────────────────────
@@ -436,23 +550,28 @@ function Main {
         } else {
             $target = Get-Target
             $version = Resolve-Version
-            $archiveUrl = "https://github.com/$Repo/releases/download/$version/devo-${version}-${target}.zip"
+            Write-VersionTransition -InstallDir $installDir -TargetVersion $version
 
-            Write-Host "Downloading devo $version for $target ..."
+            $skipAppInstall = Test-DevoVersionInstalled -InstallDir $installDir -ExpectedVersion $version
+            if (-not $skipAppInstall) {
+                $archiveUrl = "https://github.com/$Repo/releases/download/$version/devo-${version}-${target}.zip"
 
-            $zipPath = Join-Path $tmpDir "devo.zip"
-            Invoke-WebRequest -Uri $archiveUrl -OutFile $zipPath
+                Write-Host "Downloading devo $version for $target ..."
 
-            Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force
+                $zipPath = Join-Path $tmpDir "devo.zip"
+                Invoke-WebRequest -Uri $archiveUrl -OutFile $zipPath
 
-            # Locate devo.exe (it's inside a versioned subdirectory).
-            $exe = Get-ChildItem -Recurse -Filter "devo.exe" -Path $tmpDir | Select-Object -First 1
-            if (-not $exe) {
-                Write-Error "devo.exe not found in the archive"
+                Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force
+
+                # Locate devo.exe (it's inside a versioned subdirectory).
+                $exe = Get-ChildItem -Recurse -Filter "devo.exe" -Path $tmpDir | Select-Object -First 1
+                if (-not $exe) {
+                    Write-Error "devo.exe not found in the archive"
+                }
+
+                New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+                Copy-Item -Path $exe.FullName -Destination (Join-Path $installDir "devo.exe") -Force
             }
-
-            New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-            Copy-Item -Path $exe.FullName -Destination (Join-Path $installDir "devo.exe") -Force
             Install-RipgrepSidecar -InstallDir $installDir -TempRoot $tmpDir
             Install-CodeSearchModel -TempRoot $tmpDir
         }

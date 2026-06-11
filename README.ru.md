@@ -129,6 +129,15 @@ Windows:
 $env:DEVO_INSTALL_CODE_SEARCH_MODEL = "1"; irm 'https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1' | iex
 ```
 
+Обновление существующей установки до последнего release:
+
+```bash
+devo upgrade
+```
+
+Команда обновления запускает тот же установщик для текущей платформы, а
+установщик выводит переход версии, например `Version: v0.1.12 -> v0.1.15`.
+
 <details>
 <summary>Офлайн-установка</summary>
 

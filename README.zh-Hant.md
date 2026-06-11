@@ -115,6 +115,15 @@ Windows:
 $env:DEVO_INSTALL_CODE_SEARCH_MODEL = "1"; irm 'https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1' | iex
 ```
 
+將現有安裝升級到最新 release：
+
+```bash
+devo upgrade
+```
+
+升級命令會執行同一套平台安裝器，安裝器會列印版本變化，例如
+`Version: v0.1.12 -> v0.1.15`。
+
 <details>
 <summary>離線安裝</summary>
 

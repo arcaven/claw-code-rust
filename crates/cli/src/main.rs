@@ -21,11 +21,13 @@ use tracing_subscriber::filter::LevelFilter;
 mod agent_command;
 mod doctor_command;
 mod prompt_command;
+mod upgrade_command;
 
 use agent_command::run_agent;
 use doctor_command::run_doctor;
 use prompt_command::PromptOutputFormat;
 use prompt_command::run_prompt;
+use upgrade_command::run_upgrade;
 
 /// Top-level `devo` command that dispatches to interactive agent mode or one
 /// of the supporting runtime subcommands.
@@ -162,6 +164,7 @@ async fn run_cli() -> Result<()> {
             let _logging = install_logging(&cli)?;
             run_doctor().await
         }
+        Some(Command::Upgrade) => run_upgrade(),
         Some(Command::Resume { session_id }) => {
             maybe_print_startup_update(&cli).await;
             let _logging = install_logging(&cli)?;
@@ -225,6 +228,8 @@ enum Command {
     },
     /// Diagnose configuration, provider connectivity, and system health.
     Doctor,
+    /// Upgrade Devo to the latest released version.
+    Upgrade,
     /// Start the runtime server process.
     #[command(hide = true)]
     Server {
@@ -464,6 +469,16 @@ mod tests {
                 assert_eq!(format, PromptOutputFormat::Jsonl);
             }
             other => panic!("expected prompt command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_upgrade_subcommand() {
+        let cli = Cli::try_parse_from(["devo", "upgrade"]).expect("parse upgrade");
+
+        match cli.command {
+            Some(Command::Upgrade) => {}
+            other => panic!("expected upgrade command, got {other:?}"),
         }
     }
 

@@ -385,18 +385,68 @@ print_path_hint() {
     fi
 }
 
+existing_devo_path() {
+    if [ -x "${install_dir}/${APP}" ]; then
+        printf '%s\n' "${install_dir}/${APP}"
+        return 0
+    fi
+
+    command -v "$APP" 2>/dev/null || return 1
+}
+
+normalize_devo_version_output() {
+    raw_version="$1"
+
+    for part in $raw_version; do
+        case "$part" in
+            v[0-9]*.[0-9]*.[0-9]*)
+                printf '%s\n' "$part"
+                return
+                ;;
+            [0-9]*.[0-9]*.[0-9]*)
+                printf 'v%s\n' "$part"
+                return
+                ;;
+        esac
+    done
+
+    if [ -n "$raw_version" ]; then
+        printf '%s\n' "$raw_version"
+    else
+        printf 'unknown\n'
+    fi
+}
+
+installed_devo_version() {
+    installed_path="$1"
+    raw_version="$("$installed_path" --version 2>/dev/null || printf '')"
+    normalize_devo_version_output "$raw_version"
+}
+
+print_version_transition() {
+    target_version="$1"
+    installed_path="$(existing_devo_path || true)"
+
+    if [ -n "$installed_path" ]; then
+        current_version="$(installed_devo_version "$installed_path")"
+    else
+        current_version="not installed"
+    fi
+
+    print_message info "${MUTED}Version: ${NC}${current_version}${MUTED} -> ${NC}${target_version}"
+}
+
 check_version() {
     expected_version="$1"
+    installed_path="$(existing_devo_path || true)"
 
-    if ! command -v "$APP" >/dev/null 2>&1; then
+    if [ -z "$installed_path" ]; then
         return
     fi
 
-    installed_path="$(command -v "$APP")"
-    installed_version="$("$APP" --version 2>/dev/null || printf '')"
-    normalized_expected="${expected_version#v}"
+    installed_version="$(installed_devo_version "$installed_path")"
 
-    if printf '%s' "$installed_version" | grep -F "$normalized_expected" >/dev/null 2>&1; then
+    if [ "$installed_version" = "$expected_version" ]; then
         print_message info "${MUTED}${APP} ${NC}${expected_version}${MUTED} is already installed at ${NC}${installed_path}"
         skip_app_install="true"
         if [ "${DEVO_SKIP_RG_INSTALL:-}" = "1" ] || [ -x "${install_dir}/${RG_APP}" ]; then
@@ -745,6 +795,7 @@ main() {
             fi
         fi
 
+        print_version_transition "$version_tag"
         check_version "$version_tag"
         if [ "$skip_app_install" != "true" ]; then
             download_and_install "$target" "$version_tag"

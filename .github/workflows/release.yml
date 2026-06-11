@@ -120,37 +120,21 @@ jobs:
 
       - name: Generate release notes
         run: |
-          cat > release-notes.md <<- NOTES
+          cat > release-notes.md <<'NOTES'
           ## Install
 
-          ### Build from source
+          ### Linux / macOS
 
-          \`\`\`bash
-          git clone https://github.com/${{ github.repository }}.git
-          cd devo
-          cargo build --release
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/7df-lab/devo/main/install.sh | sh
+          ```
 
-          # Linux / macOS
-          ./target/release/devo onboard
+          ### Windows
 
-          # Windows
-          .\\target\\release\\devo onboard
-          \`\`\`
-
-          ### Prebuilt binary
-
-          Download the archive for your platform from the Assets section below, extract it, and place the \`devo\` (or \`devo.exe\` on Windows) binary somewhere in your \`PATH\`.
-
-          Supported platforms:
-          - Linux x86_64 (\`x86_64-unknown-linux-musl\`)
-          - Linux ARM64 (\`aarch64-unknown-linux-musl\`)
-          - macOS Intel (\`x86_64-apple-darwin\`)
-          - macOS Apple Silicon (\`aarch64-apple-darwin\`)
-          - Windows x86_64 (\`x86_64-pc-windows-msvc\`)
-
+          ```powershell
+          irm 'https://raw.githubusercontent.com/7df-lab/devo/main/install.ps1' | iex
+          ```
           ---
-
-          Full changelog at [commits](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}).
           NOTES
 
       - name: Create release
