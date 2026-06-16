@@ -885,6 +885,7 @@ fn handle_worker_event(
         | WorkerEvent::NewSessionPrepared { .. }
         | WorkerEvent::SessionRenamed { .. }
         | WorkerEvent::SessionTitleUpdated { .. }
+        | WorkerEvent::ContextCompactionCompleted { .. }
         | WorkerEvent::InputHistoryLoaded { .. }
         | WorkerEvent::InputQueueUpdated { .. }
         | WorkerEvent::ApprovalRequest { .. }
