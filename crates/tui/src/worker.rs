@@ -71,6 +71,7 @@ use devo_server::ToolResultPayload;
 use devo_server::TurnEventPayload;
 use devo_server::TurnInterruptParams;
 use devo_server::TurnStartParams;
+use devo_server::TurnStartResult;
 use devo_server::TurnSteerParams;
 
 use crate::app_command::GoalObjectiveMode;
@@ -836,7 +837,9 @@ async fn run_worker_inner(
                         }).await;
                         match start_result {
                             Ok(result) => {
-                                active_turn_id = Some(result.turn_id);
+                                if let TurnStartResult::Started { turn_id, .. } = result {
+                                    active_turn_id = Some(turn_id);
+                                }
                             }
                             Err(error) => {
                                 let _ = event_tx.send(WorkerEvent::TurnFailed {

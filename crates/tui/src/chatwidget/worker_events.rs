@@ -1219,6 +1219,9 @@ impl ChatWidget {
                 self.bottom_pane.restore_input_from_history(text);
             }
             WorkerEvent::InputQueueUpdated { pending_count, .. } => {
+                if self.queued_count > pending_count {
+                    self.commit_active_streams(DotStatus::Completed);
+                }
                 // If the queue shrunk, unqueue the oldest queued cells.
                 while self.queued_count > pending_count {
                     self.unqueue_oldest_pending();
