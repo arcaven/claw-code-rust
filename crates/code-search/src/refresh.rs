@@ -48,20 +48,18 @@ impl IndexRefresh {
                 .payload
                 .is_valid_for(root, content, provider.model_id())
         });
-        let previous_embeddings = previous_cache
-            .as_ref()
-            .map(|cache| cache.embeddings.clone())
-            .unwrap_or_else(EmbeddingMatrix::empty);
-        let mut previous_records = previous_cache
-            .map(|cache| {
+        let (previous_embeddings, mut previous_records) = match previous_cache {
+            Some(cache) => (
+                cache.embeddings,
                 cache
                     .payload
                     .files
                     .into_iter()
                     .map(|record| (record.manifest.path.clone(), record))
-                    .collect::<HashMap<_, _>>()
-            })
-            .unwrap_or_default();
+                    .collect::<HashMap<_, _>>(),
+            ),
+            None => (EmbeddingMatrix::empty(), HashMap::new()),
+        };
 
         let mut slots = Vec::with_capacity(files.len());
         let mut pending_files = Vec::new();
@@ -98,7 +96,7 @@ impl IndexRefresh {
             .collect::<Vec<_>>();
         let changed_embeddings =
             EmbeddingMatrix::from_vectors(embed_in_batches(provider, &texts)?)?;
-        let pending_by_slot = pending_records
+        let mut pending_by_slot = pending_records
             .into_iter()
             .collect::<HashMap<usize, PendingFileRecord>>();
         let reembedded_files = pending_by_slot.len();
@@ -131,22 +129,23 @@ impl IndexRefresh {
                     // Zero-chunk pending records are valid: empty and unreadable
                     // files still get manifests so the refresh can skip them
                     // until the file metadata changes.
-                    let pending = pending_by_slot.get(&slot_idx).ok_or_else(|| {
+                    let pending = pending_by_slot.remove(&slot_idx).ok_or_else(|| {
                         CodeSearchError::Index("missing pending file record".to_string())
                     })?;
+                    let embedding_count = pending.chunks.len();
                     let embedding_start = embeddings.row_count();
                     embeddings.extend_rows_from(
                         &changed_embeddings,
                         changed_cursor,
-                        pending.chunks.len(),
+                        embedding_count,
                     )?;
-                    changed_cursor += pending.chunks.len();
+                    changed_cursor += embedding_count;
                     records.push(CachedFileRecord::new(
-                        pending.manifest.clone(),
-                        pending.content_hash.clone(),
-                        pending.chunks.clone(),
+                        pending.manifest,
+                        pending.content_hash,
+                        pending.chunks,
                         embedding_start,
-                        pending.chunks.len(),
+                        embedding_count,
                     ));
                 }
             }

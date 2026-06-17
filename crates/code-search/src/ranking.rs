@@ -70,15 +70,25 @@ fn rerank(
     scores: HashMap<usize, f32>,
     top_k: usize,
 ) -> Vec<SearchResult> {
-    let mut file_counts = HashMap::<String, usize>::with_capacity(scores.len());
     let mut contexts = Vec::with_capacity(scores.len());
     for (chunk_id, base_score) in scores {
         if let Some(chunk) = index.chunk(chunk_id) {
             let path = normalized_path(&chunk.file_path);
-            *file_counts.entry(path.clone()).or_default() += 1;
             contexts.push((chunk_id, base_score, path, chunk));
         }
     }
+    let mut file_counts = HashMap::<&str, usize>::with_capacity(contexts.len());
+    for (_, _, path, _) in &contexts {
+        *file_counts.entry(path.as_str()).or_default() += 1;
+    }
+    let all_files_unique = file_counts.len() == contexts.len();
+    // `file_counts` borrows the path strings stored in `contexts`; materialize
+    // cheap counts before moving contexts into candidate tuples.
+    let context_counts = contexts
+        .iter()
+        .map(|(_, _, path, _)| file_counts.get(path.as_str()).copied().unwrap_or(1))
+        .collect::<Vec<_>>();
+    drop(file_counts);
 
     let symbol_query = is_symbol_query(query);
     let symbol = query
@@ -88,14 +98,14 @@ fn rerank(
         .next()
         .unwrap_or(query);
     let terms = query_terms(query);
-    let all_files_unique = file_counts.len() == contexts.len();
     let mut candidates = contexts
         .into_iter()
-        .map(|(chunk_id, base_score, path, chunk)| {
+        .zip(context_counts)
+        .map(|((chunk_id, base_score, path, chunk), file_count)| {
             let lowercase_path = lowercase_path(&path);
             let mut score = base_score;
             if !all_files_unique {
-                score *= multi_chunk_file_boost(file_counts.get(&path).copied().unwrap_or(1));
+                score *= multi_chunk_file_boost(file_count);
             }
             if symbol_query && contains_symbol_definition(&chunk.content, symbol) {
                 score *= 1.35;
