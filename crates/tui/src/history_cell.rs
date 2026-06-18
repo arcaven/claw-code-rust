@@ -344,28 +344,24 @@ impl HistoryCell for UserHistoryCell {
             user_message_style()
         };
         let element_style = style.fg(accent);
+        let slash_command_style = style.fg(accent);
         let prefix_style = Style::default().fg(mode_color);
         let blank_prefixed_line = || Line::from(Span::styled("  ", style)).style(style);
 
         let wrapped_message = if self.message.is_empty() && self.text_elements.is_empty() {
             None
-        } else if self.text_elements.is_empty() {
-            let message_without_trailing_newlines = self.message.trim_end_matches(['\r', '\n']);
-            let wrapped = adaptive_wrap_lines(
-                message_without_trailing_newlines
-                    .split('\n')
-                    .map(|line| Line::from(line).style(style)),
-                RtOptions::new(usize::from(wrap_width))
-                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-            );
-            let wrapped = trim_trailing_blank_lines(wrapped);
-            (!wrapped.is_empty()).then_some(wrapped)
         } else {
+            let message = if self.text_elements.is_empty() {
+                self.message.trim_end_matches(['\r', '\n'])
+            } else {
+                &self.message
+            };
             let raw_lines = build_user_message_lines_with_elements(
-                &self.message,
+                message,
                 &self.text_elements,
                 style,
                 element_style,
+                slash_command_style,
             );
             let wrapped = adaptive_wrap_lines(
                 raw_lines,
@@ -1725,9 +1721,40 @@ fn pluralize(count: u64, singular: &'static str, plural: &'static str) -> &'stat
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
+
+    use crate::bottom_pane::InputMode;
+
+    use super::HistoryCell;
     use pretty_assertions::assert_eq;
 
     use super::format_duration_hms;
+    use super::new_user_prompt;
+
+    fn content_spans_for_message(message: &str) -> Vec<(String, Option<Color>)> {
+        let cell = new_user_prompt(
+            message.to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Color::Yellow,
+            InputMode::Build,
+        );
+        cell.display_lines(80)
+            .into_iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+                    .contains(message)
+            })
+            .unwrap_or_else(|| panic!("missing rendered message line for {message:?}"))
+            .spans
+            .into_iter()
+            .map(|span| (span.content.to_string(), span.style.fg))
+            .collect()
+    }
 
     #[test]
     fn turn_summary_duration_uses_hour_minute_second_units() {
@@ -1737,5 +1764,28 @@ mod tests {
         assert_eq!(format_duration_hms(3_600), "1h");
         assert_eq!(format_duration_hms(3_601), "1h0m1s");
         assert_eq!(format_duration_hms(3_723), "1h2m3s");
+    }
+
+    #[test]
+    fn user_prompt_highlights_leading_slash_command_without_text_element() {
+        assert_eq!(
+            content_spans_for_message("/btw check this"),
+            vec![
+                ("▌ ".to_string(), Some(Color::Cyan)),
+                ("/btw".to_string(), Some(Color::Yellow)),
+                (" check this".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn user_prompt_does_not_highlight_unknown_slash_command() {
+        assert_eq!(
+            content_spans_for_message("/unknown check this"),
+            vec![
+                ("▌ ".to_string(), Some(Color::Cyan)),
+                ("/unknown check this".to_string(), None),
+            ]
+        );
     }
 }
