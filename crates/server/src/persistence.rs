@@ -1868,7 +1868,12 @@ mod tests {
             );
         }
 
-        assert_eq!(history_items.len(), 7);
+        assert_eq!(history_items.len(), 6);
+        assert!(
+            history_items
+                .iter()
+                .all(|item| item.title != "Research Context Reference")
+        );
         assert_eq!(
             messages,
             vec![
