@@ -26,15 +26,6 @@ fn pending_turn_metadata(
 }
 
 impl ServerRuntime {
-    pub(crate) async fn handle_turn_start(
-        self: &Arc<Self>,
-        request_id: serde_json::Value,
-        params: serde_json::Value,
-    ) -> serde_json::Value {
-        self.handle_turn_start_for_connection(None, request_id, params)
-            .await
-    }
-
     pub(crate) async fn handle_turn_start_for_connection(
         self: &Arc<Self>,
         connection_id: Option<u64>,
@@ -418,15 +409,6 @@ impl ServerRuntime {
             },
         })
         .expect("serialize turn/start response")
-    }
-
-    pub(crate) async fn handle_turn_shell_command(
-        self: &Arc<Self>,
-        request_id: serde_json::Value,
-        params: serde_json::Value,
-    ) -> serde_json::Value {
-        self.handle_turn_shell_command_for_connection(None, request_id, params)
-            .await
     }
 
     pub(crate) async fn handle_turn_shell_command_for_connection(

@@ -200,7 +200,8 @@ mod tests {
         }
 
         let value = runtime
-            .handle_turn_shell_command(
+            .handle_turn_shell_command_for_connection(
+                None,
                 serde_json::json!(2),
                 serde_json::to_value(ShellCommandParams {
                     session_id,

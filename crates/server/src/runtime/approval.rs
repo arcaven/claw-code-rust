@@ -89,7 +89,7 @@ impl ServerRuntime {
                     }
                 }
                 let result = self
-                    .request_tool_approval(session_id, turn_id, request.clone())
+                    .request_tool_approval(session_id, request.clone())
                     .await;
                 if let Err(reason) = &result {
                     self.run_permission_denied_hook(session_id, &request, reason)
@@ -267,7 +267,6 @@ impl ServerRuntime {
     async fn request_tool_approval(
         &self,
         session_id: SessionId,
-        turn_id: TurnId,
         request: ToolPermissionRequest,
     ) -> Result<(), String> {
         let approval_id = format!("approval-{}", request.tool_call_id);
@@ -291,7 +290,6 @@ impl ServerRuntime {
             session.pending_approvals.insert(
                 approval_id.clone(),
                 PendingApproval {
-                    turn_id,
                     tool_name: request.tool_name.clone(),
                     path: request.path.clone(),
                     host: request.host.clone(),

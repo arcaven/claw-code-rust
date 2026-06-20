@@ -1817,6 +1817,7 @@ mod tests {
                     wall_time_limit_ms: Some(11),
                 },
                 cancel_token,
+                on_tool_execution_start: None,
             },
         );
         let call = ToolCall {

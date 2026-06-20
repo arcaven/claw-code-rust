@@ -71,7 +71,6 @@ pub(crate) struct PersistedTurnItem {
 }
 
 pub(crate) struct PendingApproval {
-    pub(crate) turn_id: TurnId,
     pub(crate) tool_name: String,
     pub(crate) path: Option<PathBuf>,
     pub(crate) host: Option<String>,
