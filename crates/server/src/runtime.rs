@@ -69,7 +69,6 @@ use crate::ErrorResponse;
 use crate::EventContext;
 use crate::EventsSubscribeParams;
 use crate::EventsSubscribeResult;
-use crate::InitializeParams;
 use crate::InitializeResult;
 use crate::ItemDeltaKind;
 use crate::ItemDeltaPayload;

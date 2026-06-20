@@ -58,17 +58,19 @@ fn write_test_config(home_dir: &TempDir, listen: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn initialize_request(transport: &str) -> serde_json::Value {
+fn initialize_request(_transport: &str) -> serde_json::Value {
     serde_json::json!({
+        "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
         "params": {
-            "client_name": "e2e-test",
-            "client_version": "1.0.0",
-            "transport": transport,
-            "supports_streaming": true,
-            "supports_binary_images": false,
-            "opt_out_notification_methods": [],
+            "protocolVersion": 1,
+            "clientCapabilities": {},
+            "clientInfo": {
+                "name": "e2e-test",
+                "title": "E2E Test",
+                "version": "1.0.0"
+            }
         }
     })
 }
@@ -235,11 +237,9 @@ async fn stdio_server_process_supports_handshake_and_session_start() -> Result<(
         parse_stdio_json_line(&mut child, &mut stderr_reader, "initialize response", &line).await?;
     assert_eq!(initialize_response["id"], serde_json::json!(1));
     assert_eq!(
-        initialize_response["result"]["server_name"],
+        initialize_response["result"]["agentInfo"]["name"],
         serde_json::json!("devo-server")
     );
-
-    stdin.write_all(b"{\"method\":\"initialized\"}\n").await?;
     stdin
         .write_all(
             format!(
@@ -361,17 +361,9 @@ async fn websocket_listener_supports_handshake_subscription_and_turn_lifecycle()
     let initialize_response = read_websocket_json(&mut socket).await?;
     assert_eq!(initialize_response["id"], serde_json::json!(1));
     assert_eq!(
-        initialize_response["result"]["server_name"],
+        initialize_response["result"]["agentInfo"]["name"],
         serde_json::json!("devo-server")
     );
-
-    socket
-        .send(Message::Text(
-            serde_json::json!({ "method": "initialized" })
-                .to_string()
-                .into(),
-        ))
-        .await?;
 
     socket
         .send(Message::Text(
@@ -579,14 +571,6 @@ async fn websocket_turn_streams_final_tool_metadata_for_read_and_glob() -> Resul
         .await?;
     let initialize_response = read_websocket_json(&mut socket).await?;
     assert_eq!(initialize_response["id"], serde_json::json!(1));
-
-    socket
-        .send(Message::Text(
-            serde_json::json!({ "method": "initialized" })
-                .to_string()
-                .into(),
-        ))
-        .await?;
     socket
         .send(Message::Text(
             serde_json::json!({

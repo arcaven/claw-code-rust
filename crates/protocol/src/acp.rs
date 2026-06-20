@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::AcpAuthCapabilities;
+use crate::AcpAuthMethod;
 use crate::CommandExecutionPayload;
 use crate::FileChangePayload;
 use crate::InputItem;
@@ -188,7 +190,7 @@ pub struct AcpInitializeResult {
     #[serde(default)]
     pub agent_capabilities: AcpAgentCapabilities,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub auth_methods: Vec<serde_json::Value>,
+    pub auth_methods: Vec<AcpAuthMethod>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_info: Option<AcpImplementation>,
     #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -206,6 +208,8 @@ pub struct AcpAgentCapabilities {
     pub mcp_capabilities: AcpMcpCapabilities,
     #[serde(default)]
     pub session_capabilities: AcpSessionCapabilities,
+    #[serde(default, skip_serializing_if = "AcpAuthCapabilities::is_empty")]
+    pub auth: AcpAuthCapabilities,
     #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<AcpMeta>,
 }

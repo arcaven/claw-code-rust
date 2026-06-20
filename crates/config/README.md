@@ -70,6 +70,11 @@ provider fields without clearing every omitted provider field from lower layers.
 - `server.event_buffer_size = 1024`
 - `server.idle_session_timeout_secs = 1800`
 - `server.persist_ephemeral_sessions = false`
+- `server.auth.enabled = false`
+- `server.auth.method_id = "agent-login"`
+- `server.auth.name = "Agent login"`
+- `server.auth.description = None`
+- `server.auth.logout = true`
 - `logging.level = "info"`
 - `logging.json = false`
 - `logging.redact_secrets_in_logs = true`
@@ -107,6 +112,13 @@ max_connections = 32
 event_buffer_size = 1024
 idle_session_timeout_secs = 1800
 persist_ephemeral_sessions = false
+
+[server.auth]
+enabled = false
+method_id = "agent-login"
+name = "Agent login"
+description = "Sign in using the agent"
+logout = true
 
 [logging]
 level = "info"
@@ -174,6 +186,8 @@ timeout = 30
 `validate_app_config` rejects configs when:
 
 - `server.listen` contains duplicate endpoints.
+- `server.auth.method_id` is empty or whitespace while server auth is enabled.
+- `server.auth.name` is empty or whitespace while server auth is enabled.
 - `logging.file.max_files` is less than `1`.
 - `logging.file.filename_prefix` is empty or whitespace.
 - `updates.check_interval_hours` is less than `1`.

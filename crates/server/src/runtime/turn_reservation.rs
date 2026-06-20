@@ -103,17 +103,17 @@ mod tests {
 
     async fn start_session(runtime: &Arc<ServerRuntime>, cwd: std::path::PathBuf) -> SessionId {
         let value = runtime
-            .handle_session_start(
+            .start_session_with_registry(
                 /*connection_id*/ 1,
                 serde_json::json!(1),
-                serde_json::to_value(SessionStartParams {
+                SessionStartParams {
                     cwd,
                     ephemeral: false,
                     title: None,
                     model: None,
                     model_binding_id: None,
-                })
-                .expect("session start params"),
+                },
+                None,
             )
             .await;
         let response: SuccessResponse<SessionStartResult> =

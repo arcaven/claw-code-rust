@@ -4,7 +4,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::ACP_AUTHENTICATE_METHOD;
 use crate::ACP_INITIALIZE_METHOD;
+use crate::ACP_LOGOUT_METHOD;
 use crate::ACP_SESSION_CANCEL_METHOD;
 use crate::ACP_SESSION_CLOSE_METHOD;
 use crate::ACP_SESSION_DELETE_METHOD;
@@ -15,6 +17,7 @@ use crate::ACP_SESSION_PROMPT_METHOD;
 use crate::ACP_SESSION_RESUME_METHOD;
 use crate::ACP_SESSION_SET_CONFIG_OPTION_METHOD;
 use crate::ACP_SESSION_SET_MODE_METHOD;
+use crate::acp_auth_required_response;
 use crate::acp_notification_from_server_event;
 use crate::devo_extension_inner_method;
 
@@ -43,6 +46,7 @@ impl ServerRuntime {
             ConnectionRuntime {
                 transport,
                 state: ConnectionState::Connected,
+                acp_authenticated: false,
                 sender,
                 opt_out_notification_methods: HashSet::new(),
                 subscriptions: Vec::new(),
@@ -100,37 +104,45 @@ impl ServerRuntime {
             "received client message"
         );
 
-        if method == "initialized" {
-            if let Some(connection) = self.connections.lock().await.get_mut(&connection_id) {
-                connection.state = ConnectionState::Ready;
-            }
-            tracing::info!(connection_id, "client completed initialized handshake");
-            return None;
-        }
         if method == ACP_INITIALIZE_METHOD {
-            let is_acp_initialize = message.get("jsonrpc").is_some()
-                || params.get("protocolVersion").is_some()
-                || params.get("clientCapabilities").is_some()
-                || params.get("clientInfo").is_some();
-            if is_acp_initialize {
-                return Some(self.handle_acp_initialize(connection_id, id, params).await);
-            }
-            return Some(self.handle_initialize(connection_id, id, params).await);
+            return Some(self.handle_acp_initialize(connection_id, id, params).await);
         }
-        if method == ACP_SESSION_CANCEL_METHOD {
-            self.handle_acp_session_cancel(params).await;
-            return None;
-        }
-
-        // Before connection enter `Ready` state, only allowed method: "initialized" or "initialize"
+        // Before connection enter `Ready` state, only allowed method: "initialize"
         if !self.connection_ready(connection_id).await {
             return id.map(|request_id| {
                 self.error_response(
                     request_id,
                     ProtocolErrorCode::NotInitialized,
-                    "connection has not completed initialize/initialized",
+                    "connection has not completed initialize",
                 )
             });
+        }
+
+        if method == ACP_AUTHENTICATE_METHOD {
+            return Some(
+                self.handle_acp_authenticate(connection_id, id, params)
+                    .await,
+            );
+        }
+        if method == ACP_LOGOUT_METHOD {
+            return Some(self.handle_acp_logout(connection_id, id, params).await);
+        }
+
+        if !self.connection_authenticated(connection_id).await {
+            if let Some(request_id) = id {
+                return Some(acp_auth_required_response(request_id));
+            }
+            tracing::warn!(
+                connection_id,
+                method,
+                "dropping unauthenticated client notification"
+            );
+            return None;
+        }
+
+        if method == ACP_SESSION_CANCEL_METHOD {
+            self.handle_acp_session_cancel(params).await;
+            return None;
         }
 
         let client_method = devo_extension_inner_method(&method).and_then(ClientMethod::parse);
@@ -166,13 +178,6 @@ impl ServerRuntime {
             None if method == ACP_SESSION_SET_CONFIG_OPTION_METHOD => {
                 Some(self.handle_acp_session_set_config_option(id?, params).await)
             }
-            // start a session
-            Some(ClientMethod::SessionStart) => {
-                Some(self.handle_session_start(connection_id, id?, params).await)
-            }
-            // list sessions
-            // TODO: Should add pagnation
-            Some(ClientMethod::SessionList) => Some(self.handle_session_list(id?, params).await),
             // update session metadata, current including model and reason effort (thinking), the term 'thinking' should be changed to 'reasoning_effort'
             Some(ClientMethod::SessionMetadataUpdate) => {
                 Some(self.handle_session_metadata_update(id?, params).await)
@@ -474,6 +479,7 @@ impl ServerRuntime {
 pub(crate) struct ConnectionRuntime {
     pub(crate) transport: ClientTransportKind,
     pub(crate) state: ConnectionState,
+    pub(crate) acp_authenticated: bool,
     pub(crate) sender: mpsc::Sender<serde_json::Value>,
     pub(crate) opt_out_notification_methods: HashSet<String>,
     pub(crate) subscriptions: Vec<SubscriptionFilter>,

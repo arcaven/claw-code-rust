@@ -46,8 +46,6 @@ pub struct ServerRequestEnvelope<T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientMethod {
-    SessionStart,
-    SessionList,
     SessionMetadataUpdate,
     SessionPermissionsUpdate,
     SessionTitleUpdate,
@@ -97,8 +95,6 @@ pub enum ClientMethod {
 impl ClientMethod {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::SessionStart => "session/start",
-            Self::SessionList => "session/list",
             Self::SessionMetadataUpdate => "session/metadata/update",
             Self::SessionPermissionsUpdate => "session/permissions/update",
             Self::SessionTitleUpdate => "session/title/update",
@@ -148,8 +144,6 @@ impl ClientMethod {
 
     pub fn parse(method: &str) -> Option<Self> {
         Some(match method {
-            "session/start" => Self::SessionStart,
-            "session/list" => Self::SessionList,
             "session/metadata/update" => Self::SessionMetadataUpdate,
             "session/permissions/update" => Self::SessionPermissionsUpdate,
             "session/title/update" => Self::SessionTitleUpdate,

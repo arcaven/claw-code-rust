@@ -13,6 +13,7 @@ use devo_core::PresetModelCatalog;
 use devo_core::ProviderVendorCatalog;
 use devo_core::SkillsConfig;
 use devo_core::tools::ToolRegistry;
+use devo_protocol::AcpAuthMethod;
 use devo_protocol::AcpLoadSessionResult;
 use devo_protocol::AcpNewSessionResult;
 use devo_protocol::AcpPromptResult;
@@ -289,42 +290,178 @@ async fn acp_session_load_replays_history_and_rejects_relative_roots() -> Result
     )
     .await?;
 
-    let legacy_start_response = runtime
+    assert_legacy_session_method_removed(&runtime, connection_id, 25, "_devo/session/start")
+        .await?;
+    assert_legacy_session_method_removed(&runtime, connection_id, 26, "_devo/session/list").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn acp_auth_gates_acp_methods_on_connection() -> Result<()> {
+    let data_root = TempDir::new()?;
+    std::fs::write(
+        data_root.path().join("config.toml"),
+        r#"
+[server.auth]
+enabled = true
+method_id = "agent-login"
+name = "Agent login"
+description = "Use the test login flow"
+logout = true
+"#,
+    )?;
+    let runtime = build_runtime(data_root.path())?;
+    let (connection_id, _notifications_rx, initialize) =
+        initialize_acp_connection_with_response(&runtime).await?;
+    assert_eq!(
+        initialize.auth_methods,
+        vec![AcpAuthMethod::agent(
+            "agent-login",
+            "Agent login",
+            Some("Use the test login flow".to_string())
+        )]
+    );
+    assert_eq!(
+        initialize.agent_capabilities.auth.logout,
+        Some(serde_json::json!({}))
+    );
+    let cwd = data_root.path().join("repo");
+    std::fs::create_dir_all(&cwd)?;
+
+    assert_auth_required(
+        &runtime,
+        connection_id,
+        serde_json::json!({
+            "id": 30,
+            "method": "session/new",
+            "params": {
+                "cwd": path_value(&cwd),
+                "mcpServers": []
+            }
+        }),
+    )
+    .await?;
+    let invalid_auth_response = runtime
         .handle_incoming(
             connection_id,
             serde_json::json!({
-                "id": 25,
-                "method": "_devo/session/start",
+                "id": 32,
+                "method": "authenticate",
                 "params": {
-                    "cwd": "relative",
-                    "ephemeral": false,
-                    "title": null,
-                    "model": null
+                    "methodId": "wrong-login"
                 }
             }),
         )
         .await
-        .context("legacy relative session/start response")?;
-    assert!(legacy_start_response.get("result").is_some());
-    let list_response = runtime
+        .context("invalid authenticate response")?;
+    let invalid_auth_error: AcpErrorResponse = serde_json::from_value(invalid_auth_response)?;
+    assert_eq!(invalid_auth_error.error.code, -32602);
+
+    let auth_response = runtime
         .handle_incoming(
             connection_id,
             serde_json::json!({
-                "id": 26,
-                "method": "session/list",
+                "id": 33,
+                "method": "authenticate",
+                "params": {
+                    "methodId": "agent-login"
+                }
+            }),
+        )
+        .await
+        .context("authenticate response")?;
+    assert_eq!(
+        auth_response,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 33,
+            "result": {}
+        })
+    );
+
+    let session_id = create_acp_session(&runtime, connection_id, &cwd, 34).await?;
+    let sessions = list_acp_sessions(&runtime, connection_id, 35, None, None).await?;
+    assert!(
+        sessions
+            .sessions
+            .iter()
+            .any(|session| session.session_id == session_id)
+    );
+
+    let logout_response = runtime
+        .handle_incoming(
+            connection_id,
+            serde_json::json!({
+                "id": 36,
+                "method": "logout",
                 "params": {}
             }),
         )
         .await
-        .context("session/list with legacy relative cwd response")?;
-    let list_error: AcpErrorResponse = serde_json::from_value(list_response)?;
-    assert_eq!(list_error.error.code, -32603);
-    assert!(
-        list_error
-            .error
-            .message
-            .contains("cwd is not an absolute path")
+        .context("logout response")?;
+    assert_eq!(
+        logout_response,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 36,
+            "result": {}
+        })
     );
+
+    assert_auth_required(
+        &runtime,
+        connection_id,
+        serde_json::json!({
+            "id": 37,
+            "method": "session/list",
+            "params": {}
+        }),
+    )
+    .await?;
+    let cancel_notification = runtime
+        .handle_incoming(
+            connection_id,
+            serde_json::json!({
+                "method": "session/cancel",
+                "params": {
+                    "sessionId": session_id
+                }
+            }),
+        )
+        .await;
+    assert_eq!(cancel_notification, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_initialize_params_are_rejected() -> Result<()> {
+    let data_root = TempDir::new()?;
+    let runtime = build_runtime(data_root.path())?;
+    let (notifications_tx, _notifications_rx) = mpsc::channel(/*buffer*/ 4096);
+    let connection_id = runtime
+        .register_connection(ClientTransportKind::Stdio, notifications_tx)
+        .await;
+    let initialize_response = runtime
+        .handle_incoming(
+            connection_id,
+            serde_json::json!({
+                "id": 40,
+                "method": "initialize",
+                "params": {
+                    "client_name": "legacy-auth-test",
+                    "client_version": "1.0.0",
+                    "transport": "stdio",
+                    "supports_streaming": true,
+                    "supports_binary_images": false,
+                    "opt_out_notification_methods": []
+                }
+            }),
+        )
+        .await
+        .context("legacy initialize response")?;
+    let error: AcpErrorResponse = serde_json::from_value(initialize_response)?;
+    assert_eq!(error.error.code, -32602);
+    assert!(error.error.message.contains("invalid initialize params"));
     Ok(())
 }
 
@@ -364,6 +501,14 @@ fn build_runtime(data_root: &Path) -> Result<Arc<ServerRuntime>> {
 async fn initialize_acp_connection(
     runtime: &Arc<ServerRuntime>,
 ) -> Result<(u64, mpsc::Receiver<serde_json::Value>)> {
+    let (connection_id, notifications_rx, _) =
+        initialize_acp_connection_with_response(runtime).await?;
+    Ok((connection_id, notifications_rx))
+}
+
+async fn initialize_acp_connection_with_response(
+    runtime: &Arc<ServerRuntime>,
+) -> Result<(u64, mpsc::Receiver<serde_json::Value>, AcpInitializeResult)> {
     let (notifications_tx, notifications_rx) = mpsc::channel(/*buffer*/ 4096);
     let connection_id = runtime
         .register_connection(ClientTransportKind::Stdio, notifications_tx)
@@ -389,24 +534,16 @@ async fn initialize_acp_connection(
         .context("initialize response")?;
     let response: AcpSuccessResponse<AcpInitializeResult> =
         serde_json::from_value(initialize_response)?;
-    assert!(response.result.agent_capabilities.load_session);
+    let initialize_result = response.result;
+    assert!(initialize_result.agent_capabilities.load_session);
     assert!(
-        response
-            .result
+        initialize_result
             .agent_capabilities
             .session_capabilities
             .list
             .is_some()
     );
-    let _ = runtime
-        .handle_incoming(
-            connection_id,
-            serde_json::json!({
-                "method": "initialized"
-            }),
-        )
-        .await;
-    Ok((connection_id, notifications_rx))
+    Ok((connection_id, notifications_rx, initialize_result))
 }
 
 async fn create_acp_session(
@@ -520,6 +657,55 @@ async fn assert_acp_error_message(
     let error: AcpErrorResponse = serde_json::from_value(response)?;
     assert_eq!(error.error.code, -32602);
     assert_eq!(error.error.message, expected_message);
+    Ok(())
+}
+
+async fn assert_auth_required(
+    runtime: &Arc<ServerRuntime>,
+    connection_id: u64,
+    message: serde_json::Value,
+) -> Result<()> {
+    let response = runtime
+        .handle_incoming(connection_id, message)
+        .await
+        .context("auth-required response")?;
+    let error: AcpErrorResponse = serde_json::from_value(response)?;
+    assert_eq!(error.error.code, -32000);
+    assert_eq!(error.error.message, "Authentication required");
+    assert_eq!(
+        error.error.data,
+        serde_json::json!({ "reason": "auth_required" })
+    );
+    Ok(())
+}
+
+async fn assert_legacy_session_method_removed(
+    runtime: &Arc<ServerRuntime>,
+    connection_id: u64,
+    request_id: u64,
+    method: &str,
+) -> Result<()> {
+    let response = runtime
+        .handle_incoming(
+            connection_id,
+            serde_json::json!({
+                "id": request_id,
+                "method": method,
+                "params": {}
+            }),
+        )
+        .await
+        .context("legacy session method response")?;
+    let response: serde_json::Value = response;
+    assert_eq!(response["id"], serde_json::json!(request_id));
+    assert_eq!(
+        response["error"]["code"],
+        serde_json::json!("InvalidParams")
+    );
+    assert_eq!(
+        response["error"]["message"],
+        serde_json::json!(format!("unknown method: {method}"))
+    );
     Ok(())
 }
 

@@ -1,4 +1,5 @@
 mod acp;
+mod acp_auth;
 mod compaction;
 pub mod goal;
 mod message_edit;

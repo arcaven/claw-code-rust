@@ -17,8 +17,7 @@ stdout.
 ## StdioServerClient Methods
 
 - `spawn`: start the server process and attach stdin/stdout/stderr readers.
-- `initialize`: perform the protocol handshake and send the `initialized`
-  notification.
+- `initialize`: perform the ACP protocol handshake.
 - `session_start`, `session_resume`, `session_list`: create, resume, and list
   sessions.
 - `session_title_update`, `session_metadata_update`,

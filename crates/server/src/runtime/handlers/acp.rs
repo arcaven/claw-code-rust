@@ -92,8 +92,10 @@ impl ServerRuntime {
                 );
             }
         };
+        let acp_auth_config = self.acp_auth_config();
         if let Some(connection) = self.connections.lock().await.get_mut(&connection_id) {
             connection.state = ConnectionState::Ready;
+            connection.acp_authenticated = !acp_auth_config.enabled;
         }
         tracing::info!(
             connection_id,
@@ -128,6 +130,7 @@ impl ServerRuntime {
                         http: false,
                         ..AcpMcpCapabilities::default()
                     },
+                    auth: Self::acp_auth_capabilities(&acp_auth_config),
                     session_capabilities: AcpSessionCapabilities {
                         list: Some(serde_json::json!({})),
                         delete: Some(serde_json::json!({})),
@@ -137,7 +140,7 @@ impl ServerRuntime {
                     },
                     ..AcpAgentCapabilities::default()
                 },
-                auth_methods: Vec::new(),
+                auth_methods: Self::acp_auth_methods(&acp_auth_config),
                 agent_info: Some(
                     AcpImplementation::new(
                         self.metadata.server_name.clone(),

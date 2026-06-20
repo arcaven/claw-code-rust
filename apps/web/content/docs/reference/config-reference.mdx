@@ -67,6 +67,29 @@ Provider-related fields are flattened into the top level:
 | `disable_response_storage` | Optional response-storage switch. |
 | `preferred_auth_method` | Preferred provider auth method. Currently API key based. |
 
+## `[server]`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `listen` | string array | Server listen endpoints. |
+| `max_connections` | integer | Maximum concurrent client connections. Defaults to `32`. |
+| `event_buffer_size` | integer | Event buffer capacity per connection. Defaults to `1024`. |
+| `idle_session_timeout_secs` | integer | Idle session timeout in seconds. Defaults to `1800`. |
+| `persist_ephemeral_sessions` | bool | Whether ephemeral sessions are persisted. Defaults to `false`. |
+
+### `[server.auth]`
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `enabled` | bool | Requires server authentication before non-initialization server methods. Defaults to `false`. |
+| `method_id` | string | Server authentication method id advertised during initialization. Defaults to `agent-login`. |
+| `name` | string | Human-readable authentication method name. Defaults to `Agent login`. |
+| `description` | string | Optional authentication method description. |
+| `logout` | bool | Advertises and supports ACP `logout` when auth is enabled. Defaults to `true`. |
+
+When enabled, auth state is per connection and gates both ACP methods and legacy
+Devo server methods.
+
 ## `[defaults]`
 
 | Field | Type | Meaning |

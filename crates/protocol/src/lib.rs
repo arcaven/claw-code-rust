@@ -5,6 +5,7 @@
 //! on stable protocol shapes instead of each other's internal models.
 
 mod acp;
+mod acp_auth;
 mod acp_session;
 mod agent;
 mod approval;
@@ -33,6 +34,7 @@ mod turn;
 pub mod user_input;
 
 pub use acp::*;
+pub use acp_auth::*;
 pub use acp_session::*;
 pub use agent::*;
 pub use approval::*;

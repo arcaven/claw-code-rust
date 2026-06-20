@@ -10,68 +10,6 @@ pub(crate) struct RuntimeSessionTurnCutOptions {
 }
 
 impl ServerRuntime {
-    pub(crate) async fn handle_initialize(
-        &self,
-        connection_id: u64,
-        id: Option<serde_json::Value>,
-        params: serde_json::Value,
-    ) -> serde_json::Value {
-        let request_id = id.unwrap_or(serde_json::Value::Null);
-        match serde_json::from_value::<InitializeParams>(params) {
-            Ok(params) => {
-                let transport = params.transport.clone();
-                let opt_out_notification_count = params.opt_out_notification_methods.len();
-                if let Some(connection) = self.connections.lock().await.get_mut(&connection_id) {
-                    connection.state = ConnectionState::Initializing;
-                    connection.transport = params.transport;
-                    connection.opt_out_notification_methods =
-                        params.opt_out_notification_methods.into_iter().collect();
-                }
-                tracing::info!(
-                    connection_id,
-                    client_name = %params.client_name,
-                    client_version = %params.client_version,
-                    transport = ?transport,
-                    supports_streaming = params.supports_streaming,
-                    supports_binary_images = params.supports_binary_images,
-                    opt_out_notification_count,
-                    "accepted initialize request"
-                );
-                serde_json::to_value(SuccessResponse {
-                    id: request_id,
-                    result: self.metadata.clone(),
-                })
-                .expect("serialize initialize result")
-            }
-            Err(error) => self.error_response(
-                request_id,
-                ProtocolErrorCode::InvalidParams,
-                format!("invalid initialize params: {error}"),
-            ),
-        }
-    }
-
-    pub(crate) async fn handle_session_start(
-        &self,
-        connection_id: u64,
-        request_id: serde_json::Value,
-        params: serde_json::Value,
-    ) -> serde_json::Value {
-        let params: SessionStartParams = match serde_json::from_value(params) {
-            Ok(params) => params,
-            Err(error) => {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::InvalidParams,
-                    format!("invalid session/start params: {error}"),
-                );
-            }
-        };
-
-        self.start_session_with_registry(connection_id, request_id, params, None)
-            .await
-    }
-
     pub(crate) async fn start_session_with_registry(
         &self,
         connection_id: u64,

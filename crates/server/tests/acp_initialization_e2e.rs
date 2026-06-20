@@ -158,7 +158,246 @@ async fn stdio_acp_initialize_negotiates_capabilities_and_allows_session_setup()
     Ok(())
 }
 
+#[tokio::test]
+async fn stdio_acp_auth_gates_acp_methods() -> Result<()> {
+    let home_dir = TempDir::new()?;
+    write_test_config_with_extra(
+        &home_dir,
+        &["stdio://"],
+        r#"
+[server.auth]
+enabled = true
+method_id = "agent-login"
+name = "Agent login"
+description = "Use the test login flow"
+logout = true
+"#,
+    )?;
+    let test_cwd = home_dir.path().to_string_lossy().into_owned();
+
+    let mut command = devo_command()?;
+    let mut child = command
+        .arg("server")
+        .arg("--transport")
+        .arg("stdio")
+        .env("DEVO_HOME", home_dir.path().join(".devo"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("spawn devo child process in server mode")?;
+
+    let mut stdin = child.stdin.take().context("capture child stdin")?;
+    let stdout = child.stdout.take().context("capture child stdout")?;
+    let stderr = child.stderr.take().context("capture child stderr")?;
+    let mut stdout_reader = AsyncBufReader::new(stdout).lines();
+    let mut stderr_reader = AsyncBufReader::new(stderr);
+
+    write_stdio_json(
+        &mut stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": 1,
+                "clientCapabilities": {},
+                "clientInfo": {
+                    "name": "acp-auth-e2e",
+                    "title": "ACP Auth E2E",
+                    "version": "1.0.0"
+                }
+            }
+        }),
+    )
+    .await?;
+
+    let initialize_response = read_stdio_json(
+        &mut child,
+        &mut stdout_reader,
+        &mut stderr_reader,
+        "server auth initialize response",
+        STDIO_SERVER_STARTUP_TIMEOUT,
+    )
+    .await?;
+    assert_eq!(
+        initialize_response["result"]["authMethods"],
+        serde_json::json!([
+            {
+                "id": "agent-login",
+                "name": "Agent login",
+                "description": "Use the test login flow"
+            }
+        ])
+    );
+    assert_eq!(
+        initialize_response["result"]["agentCapabilities"]["auth"],
+        serde_json::json!({
+            "logout": {}
+        })
+    );
+
+    write_stdio_json(
+        &mut stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {
+                "cwd": test_cwd,
+                "mcpServers": []
+            }
+        }),
+    )
+    .await?;
+    let unauth_acp_response = read_stdio_json_until(
+        &mut child,
+        &mut stdout_reader,
+        &mut stderr_reader,
+        "unauthenticated ACP session/new response",
+        |value| value.get("id") == Some(&serde_json::json!(1)),
+    )
+    .await?;
+    assert_auth_required(&unauth_acp_response);
+
+    write_stdio_json(
+        &mut stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "authenticate",
+            "params": {
+                "methodId": "agent-login"
+            }
+        }),
+    )
+    .await?;
+    let authenticate_response = read_stdio_json_until(
+        &mut child,
+        &mut stdout_reader,
+        &mut stderr_reader,
+        "authenticate response",
+        |value| value.get("id") == Some(&serde_json::json!(3)),
+    )
+    .await?;
+    assert_eq!(
+        authenticate_response,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": {}
+        })
+    );
+
+    write_stdio_json(
+        &mut stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "session/new",
+            "params": {
+                "cwd": test_cwd,
+                "mcpServers": []
+            }
+        }),
+    )
+    .await?;
+    let session_new_response = read_stdio_json_until(
+        &mut child,
+        &mut stdout_reader,
+        &mut stderr_reader,
+        "authenticated ACP session/new response",
+        |value| value.get("id") == Some(&serde_json::json!(4)),
+    )
+    .await?;
+    assert!(
+        session_new_response["result"]["sessionId"]
+            .as_str()
+            .is_some_and(|session_id| !session_id.is_empty())
+    );
+
+    write_stdio_json(
+        &mut stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "session/list",
+            "params": {}
+        }),
+    )
+    .await?;
+    let session_list_response = read_stdio_json_until(
+        &mut child,
+        &mut stdout_reader,
+        &mut stderr_reader,
+        "authenticated ACP session/list response",
+        |value| value.get("id") == Some(&serde_json::json!(5)),
+    )
+    .await?;
+    assert!(
+        session_list_response["result"]["sessions"]
+            .as_array()
+            .is_some_and(|sessions| !sessions.is_empty())
+    );
+
+    write_stdio_json(
+        &mut stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "logout",
+            "params": {}
+        }),
+    )
+    .await?;
+    let logout_response = read_stdio_json_until(
+        &mut child,
+        &mut stdout_reader,
+        &mut stderr_reader,
+        "logout response",
+        |value| value.get("id") == Some(&serde_json::json!(6)),
+    )
+    .await?;
+    assert_eq!(
+        logout_response,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "result": {}
+        })
+    );
+
+    write_stdio_json(
+        &mut stdin,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "session/list",
+            "params": {}
+        }),
+    )
+    .await?;
+    let relocked_response = read_stdio_json_until(
+        &mut child,
+        &mut stdout_reader,
+        &mut stderr_reader,
+        "relocked ACP session/list response",
+        |value| value.get("id") == Some(&serde_json::json!(7)),
+    )
+    .await?;
+    assert_auth_required(&relocked_response);
+
+    drop(stdin);
+    child.kill().await.ok();
+    let _ = child.wait().await;
+    Ok(())
+}
+
 fn write_test_config(home_dir: &TempDir, listen: &[&str]) -> Result<()> {
+    write_test_config_with_extra(home_dir, listen, "")
+}
+
+fn write_test_config_with_extra(home_dir: &TempDir, listen: &[&str], extra: &str) -> Result<()> {
     let config_dir = home_dir.path().join(".devo");
 
     std::fs::create_dir_all(&config_dir)?;
@@ -168,10 +407,25 @@ fn write_test_config(home_dir: &TempDir, listen: &[&str]) -> Result<()> {
         .collect::<Vec<_>>()
         .join(", ");
     let config = format!(
-        "[server]\nlisten = [{listen_entries}]\nmax_connections = 32\nevent_buffer_size = 128\nidle_session_timeout_secs = 300\npersist_ephemeral_sessions = false\n\n[defaults]\nmodel_binding = \"test-openai\"\n\n[providers.openai]\nenabled = true\nname = \"OpenAI\"\nwire_apis = [\"openai_chat_completions\"]\n\n[model_bindings.test-openai]\nenabled = true\nmodel_slug = \"test-model\"\nprovider = \"openai\"\nmodel_name = \"test-model\"\ninvocation_method = \"openai_chat_completions\"\n"
+        "[server]\nlisten = [{listen_entries}]\nmax_connections = 32\nevent_buffer_size = 128\nidle_session_timeout_secs = 300\npersist_ephemeral_sessions = false\n\n[defaults]\nmodel_binding = \"test-openai\"\n\n[providers.openai]\nenabled = true\nname = \"OpenAI\"\nwire_apis = [\"openai_chat_completions\"]\n\n[model_bindings.test-openai]\nenabled = true\nmodel_slug = \"test-model\"\nprovider = \"openai\"\nmodel_name = \"test-model\"\ninvocation_method = \"openai_chat_completions\"\n{extra}"
     );
     std::fs::write(config_dir.join("config.toml"), config)?;
     Ok(())
+}
+
+fn assert_auth_required(response: &serde_json::Value) {
+    assert_eq!(response["jsonrpc"], serde_json::json!("2.0"));
+    assert_eq!(response["error"]["code"], serde_json::json!(-32000));
+    assert_eq!(
+        response["error"]["message"],
+        serde_json::json!("Authentication required")
+    );
+    assert_eq!(
+        response["error"]["data"],
+        serde_json::json!({
+            "reason": "auth_required"
+        })
+    );
 }
 
 async fn write_stdio_json(
@@ -258,11 +512,6 @@ fn devo_command() -> Result<Command> {
         return Ok(Command::new(binary_path));
     }
 
-    let binary_path = devo_binary_path()?;
-    if binary_path.is_file() {
-        return Ok(Command::new(binary_path));
-    }
-
     let cargo_path = std::env::var_os("CARGO")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cargo"));
@@ -277,12 +526,4 @@ fn devo_command() -> Result<Command> {
         .arg("devo")
         .arg("--");
     Ok(command)
-}
-
-fn devo_binary_path() -> Result<PathBuf> {
-    let mut path = std::env::current_exe()?;
-    path.pop();
-    path.pop();
-    path.push(if cfg!(windows) { "devo.exe" } else { "devo" });
-    Ok(path)
 }
