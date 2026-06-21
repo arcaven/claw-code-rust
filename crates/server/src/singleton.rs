@@ -27,6 +27,9 @@ const METADATA_FILE_NAME: &str = "server.lock.json";
 const METADATA_VERSION: u32 = 1;
 const METADATA_READ_RETRIES: usize = 100;
 const METADATA_READ_RETRY_DELAY: Duration = Duration::from_millis(50);
+pub(crate) const SERVER_CONTROL_STATUS_METHOD: &str = "_devo/server/status";
+pub(crate) const SERVER_CONTROL_SHUTDOWN_METHOD: &str = "_devo/server/shutdown";
+const SERVER_CONTROL_REQUEST_ID: u64 = 1;
 
 #[derive(Debug)]
 pub(crate) enum SingletonRole {
@@ -43,6 +46,26 @@ pub(crate) struct ServerLockMetadata {
     pub(crate) started_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerControlAction {
+    Status,
+    Shutdown,
+}
+
+impl ServerControlAction {
+    pub(crate) fn method(self) -> &'static str {
+        match self {
+            ServerControlAction::Status => SERVER_CONTROL_STATUS_METHOD,
+            ServerControlAction::Shutdown => SERVER_CONTROL_SHUTDOWN_METHOD,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ServerControlResult {
+    pub(crate) status: String,
+}
+
 impl ServerLockMetadata {
     fn new(endpoint: String, token: String) -> Self {
         Self {
@@ -52,6 +75,39 @@ impl ServerLockMetadata {
             token,
             started_at: Utc::now().to_rfc3339(),
         }
+    }
+}
+
+pub(crate) async fn run_server_control(
+    metadata: &ServerLockMetadata,
+    action: ServerControlAction,
+) -> Result<ServerControlResult> {
+    let (socket, _) = connect_async(metadata.endpoint.as_str())
+        .await
+        .with_context(|| format!("connect to singleton server {}", metadata.endpoint))?;
+    let (mut writer, mut reader) = socket.split();
+    writer
+        .send(Message::Text(metadata.token.clone().into()))
+        .await
+        .context("authenticate singleton server control request")?;
+
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": SERVER_CONTROL_REQUEST_ID,
+        "method": action.method(),
+    });
+    writer
+        .send(Message::Text(request.to_string().into()))
+        .await
+        .context("send singleton server control request")?;
+
+    match reader.next().await {
+        Some(Ok(Message::Text(text))) => decode_server_control_response(&text),
+        Some(Ok(Message::Close(_))) | None => {
+            bail!("singleton server closed before answering control request")
+        }
+        Some(Ok(_)) => bail!("singleton server returned non-text control response"),
+        Some(Err(error)) => Err(error).context("read singleton server control response"),
     }
 }
 
@@ -99,7 +155,7 @@ pub(crate) fn acquire_singleton_role(devo_home: &Path) -> Result<SingletonRole> 
             lock_file,
             metadata_path: metadata_path(devo_home),
         })),
-        Err(error) if error.kind() == ErrorKind::WouldBlock => {
+        Err(error) if is_lock_temporarily_unavailable(&error) => {
             Ok(SingletonRole::Proxy(read_metadata_with_retry(devo_home)?))
         }
         Err(error) => {
@@ -172,6 +228,41 @@ pub(crate) async fn run_stdio_proxy(metadata: ServerLockMetadata) -> Result<()> 
     Ok(())
 }
 
+fn decode_server_control_response(text: &str) -> Result<ServerControlResult> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).context("decode singleton server control response")?;
+    if value.get("id") != Some(&serde_json::json!(SERVER_CONTROL_REQUEST_ID)) {
+        bail!("singleton server returned response for unexpected control request id");
+    }
+    if let Some(error) = value.get("error") {
+        bail!("singleton server control request failed: {error}");
+    }
+    let status = value
+        .pointer("/result/status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("ok")
+        .to_string();
+    Ok(ServerControlResult { status })
+}
+
+fn is_lock_temporarily_unavailable(error: &std::io::Error) -> bool {
+    if error.kind() == ErrorKind::WouldBlock {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows may report either sharing or byte-range lock conflicts when
+        // another process owns the singleton lock file.
+        matches!(error.raw_os_error(), Some(32 | 33))
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn read_metadata_with_retry(devo_home: &Path) -> Result<ServerLockMetadata> {
     let mut last_error = None;
     for _ in 0..METADATA_READ_RETRIES {
@@ -215,6 +306,55 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn lock_unavailable_detection_handles_would_block() {
+        assert_eq!(
+            [is_lock_temporarily_unavailable(&std::io::Error::new(
+                ErrorKind::WouldBlock,
+                "lock held",
+            ))],
+            [true]
+        );
+    }
+
+    #[test]
+    fn server_control_action_methods_match_internal_methods() {
+        assert_eq!(
+            [
+                ServerControlAction::Status.method(),
+                ServerControlAction::Shutdown.method()
+            ],
+            [SERVER_CONTROL_STATUS_METHOD, SERVER_CONTROL_SHUTDOWN_METHOD]
+        );
+    }
+
+    #[test]
+    fn decode_server_control_response_reads_status() {
+        assert_eq!(
+            decode_server_control_response(
+                r#"{"jsonrpc":"2.0","id":1,"result":{"status":"running"}}"#
+            )
+            .expect("decode response"),
+            ServerControlResult {
+                status: "running".to_string()
+            }
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lock_unavailable_detection_handles_windows_lock_errors() {
+        assert_eq!(
+            [32, 33]
+                .into_iter()
+                .map(|code| {
+                    is_lock_temporarily_unavailable(&std::io::Error::from_raw_os_error(code))
+                })
+                .collect::<Vec<_>>(),
+            vec![true, true]
+        );
+    }
 
     #[test]
     fn real_guard_publishes_metadata_without_working_root() {

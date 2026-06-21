@@ -185,9 +185,15 @@ async fn run_cli() -> Result<()> {
             }
             Ok(())
         }
-        Some(Command::Server { transport }) => {
+        Some(Command::Server {
+            transport,
+            status,
+            shutdown,
+        }) => {
             let args = ServerProcessArgs {
                 transport: *transport,
+                status: *status,
+                shutdown: *shutdown,
             };
             let _logging = install_server_logging(&cli)?;
             run_server_process(args).await
@@ -238,6 +244,12 @@ enum Command {
         /// Override the transport mode used by this server process.
         #[arg(long, value_enum, hide = true, default_value_t = ServerTransportMode::Config)]
         transport: ServerTransportMode,
+        /// Print status for an existing singleton server and exit.
+        #[arg(long, hide = true)]
+        status: bool,
+        /// Ask an existing singleton server to shut down and exit.
+        #[arg(long, hide = true)]
+        shutdown: bool,
     },
 }
 
@@ -421,6 +433,8 @@ mod tests {
         let server = Cli {
             command: Some(Command::Server {
                 transport: devo_server::ServerTransportMode::Config,
+                status: false,
+                shutdown: false,
             }),
             model: None,
             log_level: None,
@@ -475,6 +489,36 @@ mod tests {
         match cli.command {
             Some(Command::Upgrade) => {}
             other => panic!("expected upgrade command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_server_status_and_shutdown_flags() {
+        let status = Cli::try_parse_from(["devo", "server", "--status"]).expect("parse status");
+        let shutdown =
+            Cli::try_parse_from(["devo", "server", "--shutdown"]).expect("parse shutdown");
+
+        match status.command {
+            Some(Command::Server {
+                transport,
+                status,
+                shutdown,
+            }) => {
+                assert_eq!(transport, devo_server::ServerTransportMode::Config);
+                assert_eq!([status, shutdown], [true, false]);
+            }
+            other => panic!("expected server command, got {other:?}"),
+        }
+        match shutdown.command {
+            Some(Command::Server {
+                transport,
+                status,
+                shutdown,
+            }) => {
+                assert_eq!(transport, devo_server::ServerTransportMode::Config);
+                assert_eq!([status, shutdown], [false, true]);
+            }
+            other => panic!("expected server command, got {other:?}"),
         }
     }
 

@@ -19,6 +19,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::MSG;
 use windows_sys::Win32::UI::WindowsAndMessaging::PM_NOREMOVE;
 use windows_sys::Win32::UI::WindowsAndMessaging::PeekMessageW;
 use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+use windows_sys::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW;
 use windows_sys::Win32::UI::WindowsAndMessaging::TranslateMessage;
 use windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT;
 
@@ -83,14 +84,13 @@ fn run_tray_thread(
 ) {
     create_message_queue();
 
-    let tray_resources = match create_tray_resources() {
+    let mut tray_resources = match create_tray_resources() {
         Ok(tray_resources) => tray_resources,
         Err(error) => {
             let _ = ready_tx.send(Err(error.to_string()));
             return;
         }
     };
-    let exit_item_id = tray_resources.exit_item_id.clone();
 
     // SAFETY: `GetCurrentThreadId` has no preconditions.
     let thread_id = unsafe { GetCurrentThreadId() };
@@ -98,7 +98,7 @@ fn run_tray_thread(
         return;
     }
 
-    run_message_loop(&exit_item_id, shutdown_tx);
+    run_message_loop(&mut tray_resources, shutdown_tx);
     drop(tray_resources);
 }
 
@@ -115,7 +115,7 @@ fn create_tray_resources() -> Result<TrayResources> {
 
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(tray_menu))
-        .with_tooltip("Devo server is running.")
+        .with_tooltip("devo")
         .with_icon(icon)
         .with_menu_on_left_click(/*enable*/ false)
         .with_menu_on_right_click(/*enable*/ true)
@@ -138,8 +138,10 @@ fn create_message_queue() {
     }
 }
 
-fn run_message_loop(exit_item_id: &MenuId, shutdown_tx: oneshot::Sender<()>) {
+fn run_message_loop(tray_resources: &mut TrayResources, shutdown_tx: oneshot::Sender<()>) {
     let mut shutdown_tx = Some(shutdown_tx);
+    let mut exit_item_id = tray_resources.exit_item_id.clone();
+    let taskbar_created_message = register_taskbar_created_message();
 
     // SAFETY: This is the standard Win32 message loop for the tray thread. The
     // tray icon is created on this same thread and remains alive until the loop
@@ -155,7 +157,21 @@ fn run_message_loop(exit_item_id: &MenuId, shutdown_tx: oneshot::Sender<()>) {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
 
-            if exit_menu_item_selected(exit_item_id)
+            if taskbar_created_message != 0 && msg.message == taskbar_created_message {
+                match create_tray_resources() {
+                    Ok(recreated_resources) => {
+                        *tray_resources = recreated_resources;
+                        exit_item_id = tray_resources.exit_item_id.clone();
+                        tracing::info!("recreated Windows tray icon after taskbar restart");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "failed to recreate Windows tray icon");
+                    }
+                }
+                continue;
+            }
+
+            if exit_menu_item_selected(&exit_item_id)
                 && let Some(shutdown_tx) = shutdown_tx.take()
             {
                 let _ = shutdown_tx.send(());
@@ -163,6 +179,16 @@ fn run_message_loop(exit_item_id: &MenuId, shutdown_tx: oneshot::Sender<()>) {
             }
         }
     }
+}
+
+fn register_taskbar_created_message() -> u32 {
+    let message_name = "TaskbarCreated"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: `message_name` is a null-terminated UTF-16 string and remains
+    // alive for the duration of the call.
+    unsafe { RegisterWindowMessageW(message_name.as_ptr()) }
 }
 
 fn exit_menu_item_selected(exit_item_id: &MenuId) -> bool {

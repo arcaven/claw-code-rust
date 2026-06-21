@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use anyhow::bail;
 use clap::Parser;
 use clap::ValueEnum;
 use devo_core::AgentsMdConfig;
@@ -22,9 +21,12 @@ use crate::execution::ServerRuntimeDependencies;
 use crate::load_server_provider;
 use crate::resolve_listen_targets;
 use crate::run_listeners_with_internal_proxy;
+use crate::singleton::ServerControlAction;
 use crate::singleton::SingletonRole;
 use crate::singleton::acquire_singleton_role;
+use crate::singleton::run_server_control;
 use crate::singleton::run_stdio_proxy;
+use crate::transport::InternalProxyControl;
 use crate::transport::InternalProxyEndpoint;
 #[cfg(windows)]
 use crate::windows_tray::WindowsServerTray;
@@ -42,29 +44,73 @@ pub struct ServerProcessArgs {
     /// Override the transport mode used by this server process.
     #[arg(long, value_enum, hide = true, default_value_t = ServerTransportMode::Config)]
     pub transport: ServerTransportMode,
+
+    /// Print status for an existing singleton server and exit.
+    #[arg(long, hide = true)]
+    pub status: bool,
+
+    /// Ask an existing singleton server to shut down and exit.
+    #[arg(long, hide = true)]
+    pub shutdown: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerProcessAction {
+    Run,
+    Status,
+    Shutdown,
+}
+
+impl ServerProcessArgs {
+    fn action(&self) -> Result<ServerProcessAction> {
+        match (self.status, self.shutdown) {
+            (false, false) => Ok(ServerProcessAction::Run),
+            (true, false) => Ok(ServerProcessAction::Status),
+            (false, true) => Ok(ServerProcessAction::Shutdown),
+            (true, true) => anyhow::bail!("--status and --shutdown cannot be used together"),
+        }
+    }
 }
 
 /// Starts the transport-facing server runtime using the resolved application
 /// configuration and listener set.
 pub async fn run_server_process(args: ServerProcessArgs) -> Result<()> {
     let resolver = FileSystemConfigPathResolver::from_env()?;
+    let action = args.action()?;
     let singleton_role = acquire_singleton_role(&resolver.user_config_dir())?;
     let real_server_guard = match singleton_role {
-        SingletonRole::Real(guard) => guard,
-        SingletonRole::Proxy(metadata) => {
-            if args.transport != ServerTransportMode::Stdio {
-                bail!(
-                    "devo server is already running for this DEVO_HOME at {}",
-                    metadata.endpoint
-                );
+        SingletonRole::Real(guard) => match action {
+            ServerProcessAction::Run => guard,
+            ServerProcessAction::Status | ServerProcessAction::Shutdown => {
+                println!("devo server is not running for this DEVO_HOME");
+                return Ok(());
             }
-            tracing::info!(
-                pid = metadata.pid,
-                endpoint = %metadata.endpoint,
-                "proxying stdio to existing singleton server"
-            );
-            return run_stdio_proxy(metadata).await;
-        }
+        },
+        SingletonRole::Proxy(metadata) => match action {
+            ServerProcessAction::Run if args.transport == ServerTransportMode::Stdio => {
+                tracing::info!(
+                    pid = metadata.pid,
+                    endpoint = %metadata.endpoint,
+                    "proxying stdio to existing singleton server"
+                );
+                return run_stdio_proxy(metadata).await;
+            }
+            ServerProcessAction::Run => {
+                print_existing_server_status(&metadata, "already running");
+                println!("Use `devo server --shutdown` to stop it.");
+                return Ok(());
+            }
+            ServerProcessAction::Status => {
+                let result = run_server_control(&metadata, ServerControlAction::Status).await?;
+                print_existing_server_status(&metadata, result.status.as_str());
+                return Ok(());
+            }
+            ServerProcessAction::Shutdown => {
+                let result = run_server_control(&metadata, ServerControlAction::Shutdown).await?;
+                print_existing_server_status(&metadata, result.status.as_str());
+                return Ok(());
+            }
+        },
     };
     let internal_proxy = InternalProxyEndpoint::bind().await?;
     let singleton_metadata =
@@ -162,6 +208,8 @@ pub async fn run_server_process(args: ServerProcessArgs) -> Result<()> {
     runtime.load_persisted_sessions().await?;
     tracing::info!("persisted session restore completed");
     tracing::info!("server bootstrap completed; starting listeners");
+    let shutdown_signal = tokio_util::sync::CancellationToken::new();
+    let internal_proxy_control = InternalProxyControl::new(shutdown_signal.clone());
 
     #[cfg(windows)]
     let mut windows_tray = match WindowsServerTray::start() {
@@ -180,6 +228,7 @@ pub async fn run_server_process(args: ServerProcessArgs) -> Result<()> {
                 &effective_listen,
                 internal_proxy,
                 singleton_metadata.token.clone(),
+                internal_proxy_control,
             ) => {
                 result?;
             }
@@ -189,6 +238,9 @@ pub async fn run_server_process(args: ServerProcessArgs) -> Result<()> {
             }
             _ = wait_for_windows_tray_shutdown(&mut windows_tray) => {
                 tracing::info!("server shutdown requested from Windows tray icon");
+            }
+            _ = shutdown_signal.cancelled() => {
+                tracing::info!("server shutdown requested from singleton control");
             }
         }
     }
@@ -201,12 +253,16 @@ pub async fn run_server_process(args: ServerProcessArgs) -> Result<()> {
                 &effective_listen,
                 internal_proxy,
                 singleton_metadata.token.clone(),
+                internal_proxy_control,
             ) => {
                 result?;
             }
             result = tokio::signal::ctrl_c() => {
                 result?;
                 tracing::info!("server shutdown requested");
+            }
+            _ = shutdown_signal.cancelled() => {
+                tracing::info!("server shutdown requested from singleton control");
             }
         }
     }
@@ -216,6 +272,13 @@ pub async fn run_server_process(args: ServerProcessArgs) -> Result<()> {
     tracing::info!("completing deferred items for active turns");
     runtime.shutdown().await;
     Ok(())
+}
+
+fn print_existing_server_status(metadata: &crate::singleton::ServerLockMetadata, status: &str) {
+    println!("devo server {status}");
+    println!("pid: {}", metadata.pid);
+    println!("endpoint: {}", metadata.endpoint);
+    println!("started_at: {}", metadata.started_at);
 }
 
 #[cfg(windows)]
@@ -240,6 +303,10 @@ mod tests {
         let args = ServerProcessArgs::parse_from(["devo-server"]);
 
         assert_eq!(args.transport, ServerTransportMode::Config);
+        assert_eq!(
+            args.action().expect("action"),
+            super::ServerProcessAction::Run
+        );
     }
 
     #[test]
@@ -247,6 +314,40 @@ mod tests {
         let args = ServerProcessArgs::parse_from(["devo-server", "--transport", "stdio"]);
 
         assert_eq!(args.transport, ServerTransportMode::Stdio);
+        assert_eq!(
+            args.action().expect("action"),
+            super::ServerProcessAction::Run
+        );
+    }
+
+    #[test]
+    fn server_process_args_accept_status_action() {
+        let args = ServerProcessArgs::parse_from(["devo-server", "--status"]);
+
+        assert_eq!(
+            args.action().expect("action"),
+            super::ServerProcessAction::Status
+        );
+    }
+
+    #[test]
+    fn server_process_args_accept_shutdown_action() {
+        let args = ServerProcessArgs::parse_from(["devo-server", "--shutdown"]);
+
+        assert_eq!(
+            args.action().expect("action"),
+            super::ServerProcessAction::Shutdown
+        );
+    }
+
+    #[test]
+    fn server_process_args_reject_conflicting_actions() {
+        let args = ServerProcessArgs::parse_from(["devo-server", "--status", "--shutdown"]);
+
+        assert_eq!(
+            args.action().expect_err("conflicting actions").to_string(),
+            "--status and --shutdown cannot be used together"
+        );
     }
 
     #[test]

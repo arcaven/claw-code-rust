@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
@@ -19,10 +20,13 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_util::sync::CancellationToken;
 
 use crate::ClientTransportKind;
 use crate::ServerRuntime;
 use crate::runtime::CONNECTION_NOTIFICATION_CHANNEL_CAPACITY;
+use crate::singleton::SERVER_CONTROL_SHUTDOWN_METHOD;
+use crate::singleton::SERVER_CONTROL_STATUS_METHOD;
 
 const TRANSPORT_WRITE_CHANNEL_CAPACITY: usize = 4096;
 const TRANSPORT_BACKPRESSURE_LOG_THRESHOLD: Duration = Duration::from_millis(50);
@@ -143,6 +147,22 @@ pub struct InternalProxyEndpoint {
     endpoint: String,
 }
 
+/// Control hooks accepted by the authenticated internal proxy listener.
+#[derive(Clone)]
+pub struct InternalProxyControl {
+    shutdown_token: CancellationToken,
+}
+
+impl InternalProxyControl {
+    pub fn new(shutdown_token: CancellationToken) -> Self {
+        Self { shutdown_token }
+    }
+
+    fn request_shutdown(&self) {
+        self.shutdown_token.cancel();
+    }
+}
+
 impl InternalProxyEndpoint {
     pub async fn bind() -> Result<Self> {
         let listener = TcpListener::bind(INTERNAL_PROXY_BIND_ADDRESS).await?;
@@ -205,15 +225,16 @@ pub async fn run_listeners_with_internal_proxy(
     listen: &[String],
     internal_proxy: InternalProxyEndpoint,
     token: String,
+    control: InternalProxyControl,
 ) -> Result<()> {
     let targets = resolve_listen_targets(listen)?;
-    run_listener_tasks(runtime, targets, Some((internal_proxy, token))).await
+    run_listener_tasks(runtime, targets, Some((internal_proxy, token, control))).await
 }
 
 async fn run_listener_tasks(
     runtime: Arc<ServerRuntime>,
     targets: Vec<ListenTarget>,
-    internal_proxy: Option<(InternalProxyEndpoint, String)>,
+    internal_proxy: Option<(InternalProxyEndpoint, String, InternalProxyControl)>,
 ) -> Result<()> {
     let mut tasks = JoinSet::new();
     for target in targets {
@@ -232,9 +253,11 @@ async fn run_listener_tasks(
         });
     }
 
-    if let Some((internal_proxy, token)) = internal_proxy {
+    if let Some((internal_proxy, token, control)) = internal_proxy {
         let runtime = Arc::clone(&runtime);
-        tasks.spawn(async move { run_internal_proxy(runtime, internal_proxy, token).await });
+        tasks.spawn(
+            async move { run_internal_proxy(runtime, internal_proxy, token, control).await },
+        );
     }
 
     if let Some(result) = tasks.join_next().await {
@@ -322,6 +345,7 @@ async fn run_internal_proxy(
     runtime: Arc<ServerRuntime>,
     internal_proxy: InternalProxyEndpoint,
     token: String,
+    control: InternalProxyControl,
 ) -> Result<()> {
     let InternalProxyEndpoint { listener, endpoint } = internal_proxy;
     tracing::info!(endpoint = %endpoint, "internal stdio proxy listener bound");
@@ -329,9 +353,12 @@ async fn run_internal_proxy(
         let (stream, remote_addr) = listener.accept().await?;
         let runtime = Arc::clone(&runtime);
         let token = token.clone();
+        let control = control.clone();
         tokio::spawn(async move {
             tracing::info!(remote_addr = %remote_addr, "internal stdio proxy connected");
-            if let Err(error) = handle_internal_proxy_connection(runtime, stream, &token).await {
+            if let Err(error) =
+                handle_internal_proxy_connection(runtime, stream, &token, control).await
+            {
                 tracing::warn!(remote_addr = %remote_addr, error = %error, "internal stdio proxy closed with error");
             }
             tracing::info!(remote_addr = %remote_addr, "internal stdio proxy disconnected");
@@ -343,6 +370,7 @@ async fn handle_internal_proxy_connection(
     runtime: Arc<ServerRuntime>,
     stream: tokio::net::TcpStream,
     expected_token: &str,
+    control: InternalProxyControl,
 ) -> Result<()> {
     let websocket = accept_async(stream).await?;
     let (mut writer, mut reader) = websocket.split();
@@ -352,6 +380,29 @@ async fn handle_internal_proxy_connection(
         Some(Ok(_)) => bail!("internal stdio proxy did not send auth token"),
         Some(Err(error)) => return Err(error.into()),
     }
+
+    let first_value = loop {
+        match reader.next().await {
+            Some(Ok(Message::Text(text))) => {
+                let value: serde_json::Value = serde_json::from_str(&text)?;
+                if let Some(request) = parse_internal_proxy_control_request(&value) {
+                    let response = internal_proxy_control_response(&request);
+                    writer
+                        .send(Message::Text(response.to_string().into()))
+                        .await
+                        .context("send internal proxy control response")?;
+                    if request.action == InternalProxyControlAction::Shutdown {
+                        control.request_shutdown();
+                    }
+                    return Ok(());
+                }
+                break value;
+            }
+            Some(Ok(Message::Close(_))) | None => return Ok(()),
+            Some(Ok(_)) => {}
+            Some(Err(error)) => return Err(error.into()),
+        }
+    };
 
     let (sender, mut receiver) = mpsc::channel(CONNECTION_NOTIFICATION_CHANNEL_CAPACITY);
     let sender_clone = sender.clone();
@@ -372,6 +423,21 @@ async fn handle_internal_proxy_connection(
         }
         Result::<()>::Ok(())
     });
+
+    if let Some(response) = runtime.handle_incoming(connection_id, first_value).await
+        && !send_transport_queue_message(
+            &sender_clone,
+            response,
+            connection_id,
+            "internal_proxy_notifications",
+        )
+        .await
+    {
+        runtime.unregister_connection(connection_id).await;
+        tracing::info!(connection_id, "internal stdio proxy connection closed");
+        writer_task.abort();
+        return Ok(());
+    }
 
     while let Some(frame) = reader.next().await {
         let frame = frame?;
@@ -399,6 +465,52 @@ async fn handle_internal_proxy_connection(
     tracing::info!(connection_id, "internal stdio proxy connection closed");
     writer_task.abort();
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InternalProxyControlAction {
+    Status,
+    Shutdown,
+}
+
+impl InternalProxyControlAction {
+    fn response_status(self) -> &'static str {
+        match self {
+            InternalProxyControlAction::Status => "running",
+            InternalProxyControlAction::Shutdown => "shutting down",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InternalProxyControlRequest {
+    id: serde_json::Value,
+    action: InternalProxyControlAction,
+}
+
+fn parse_internal_proxy_control_request(
+    value: &serde_json::Value,
+) -> Option<InternalProxyControlRequest> {
+    let method = value.get("method")?.as_str()?;
+    let action = match method {
+        SERVER_CONTROL_STATUS_METHOD => InternalProxyControlAction::Status,
+        SERVER_CONTROL_SHUTDOWN_METHOD => InternalProxyControlAction::Shutdown,
+        _ => return None,
+    };
+    Some(InternalProxyControlRequest {
+        id: value.get("id").cloned().unwrap_or(serde_json::Value::Null),
+        action,
+    })
+}
+
+fn internal_proxy_control_response(request: &InternalProxyControlRequest) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request.id.clone(),
+        "result": {
+            "status": request.action.response_status(),
+        },
+    })
 }
 
 async fn run_websocket(runtime: Arc<ServerRuntime>, bind_address: &str) -> Result<()> {
@@ -522,7 +634,11 @@ async fn send_transport_queue_message<T>(
 mod tests {
     use super::DEFAULT_WEBSOCKET_BIND_ADDRESS;
     use super::EventBroadcaster;
+    use super::InternalProxyControlAction;
+    use super::InternalProxyControlRequest;
     use super::ListenTarget;
+    use super::internal_proxy_control_response;
+    use super::parse_internal_proxy_control_request;
     use super::parse_listen_target;
     use super::resolve_listen_targets;
     use pretty_assertions::assert_eq;
@@ -568,6 +684,53 @@ mod tests {
                     bind_address: DEFAULT_WEBSOCKET_BIND_ADDRESS.into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn internal_proxy_control_request_parses_status_and_shutdown() {
+        assert_eq!(
+            [
+                parse_internal_proxy_control_request(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": crate::singleton::SERVER_CONTROL_STATUS_METHOD,
+                }))
+                .expect("status request"),
+                parse_internal_proxy_control_request(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": crate::singleton::SERVER_CONTROL_SHUTDOWN_METHOD,
+                }))
+                .expect("shutdown request"),
+            ],
+            [
+                InternalProxyControlRequest {
+                    id: serde_json::json!(1),
+                    action: InternalProxyControlAction::Status,
+                },
+                InternalProxyControlRequest {
+                    id: serde_json::json!(2),
+                    action: InternalProxyControlAction::Shutdown,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn internal_proxy_control_response_reports_action_status() {
+        assert_eq!(
+            internal_proxy_control_response(&InternalProxyControlRequest {
+                id: serde_json::json!(2),
+                action: InternalProxyControlAction::Shutdown,
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "status": "shutting down",
+                },
+            })
         );
     }
 
