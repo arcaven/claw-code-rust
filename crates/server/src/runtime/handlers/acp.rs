@@ -305,6 +305,8 @@ impl ServerRuntime {
             Err(error) => return acp_error_response(request_id, AcpErrorCode::ServerError, error),
         };
         legacy.result.session = updated_summary;
+        self.subscribe_connection_to_session(connection_id, params.session_id, None)
+            .await;
         self.send_acp_history_updates(
             connection_id,
             params.session_id,
@@ -369,6 +371,12 @@ impl ServerRuntime {
             DEVO_SESSION_META.to_string(),
             serde_json::to_value(&legacy.result.session).expect("serialize session metadata"),
         );
+        self.subscribe_connection_to_session(
+            connection_id,
+            legacy.result.session.session_id,
+            None,
+        )
+        .await;
         acp_success_response(
             request_id,
             AcpNewSessionResult {
@@ -508,6 +516,8 @@ impl ServerRuntime {
             DEVO_SESSION_RESUME_META.to_string(),
             serde_json::to_value(&legacy.result).expect("serialize session resume result"),
         );
+        self.subscribe_connection_to_session(connection_id, params.session_id, None)
+            .await;
         acp_success_response(
             request_id,
             AcpResumeSessionResult {
@@ -590,6 +600,8 @@ impl ServerRuntime {
                 "session already has an active prompt turn",
             ));
         }
+        self.subscribe_connection_to_session(connection_id, params.session_id, None)
+            .await;
         let session_id = params.session_id;
         let input = match input_items_from_acp_prompt(params.prompt) {
             Ok(input) => input,

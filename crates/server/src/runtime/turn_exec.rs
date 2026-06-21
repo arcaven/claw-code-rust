@@ -2225,12 +2225,6 @@ impl ServerRuntime {
 
             final_turn
         };
-        self.record_terminal_turn_status(
-            final_turn.turn_id,
-            TerminalTurnSnapshot::from_turn(&final_turn),
-        )
-        .await;
-
         // The turn is finished, so any queued "btw" input no longer applies.
         // Clear both the in-memory queue and the persisted mirror.
         {
@@ -2312,7 +2306,7 @@ impl ServerRuntime {
             .await;
         self.broadcast_event(ServerEvent::TurnCompleted(TurnEventPayload {
             session_id,
-            turn: final_turn,
+            turn: final_turn.clone(),
         }))
         .await;
         self.broadcast_event(ServerEvent::SessionStatusChanged(
@@ -2321,6 +2315,11 @@ impl ServerRuntime {
                 status: SessionRuntimeStatus::Idle,
             },
         ))
+        .await;
+        self.record_terminal_turn_status(
+            final_turn.turn_id,
+            TerminalTurnSnapshot::from_turn(&final_turn),
+        )
         .await;
 
         // After the turn completes, check for queued inputs and start the next turn.

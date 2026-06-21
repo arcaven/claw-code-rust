@@ -11,6 +11,7 @@ use acp_session_setup::assert_no_history_replay_before_response;
 use acp_session_setup::assert_openai_request_has_mcp_tool;
 use acp_session_setup::assert_openai_request_lacks_mcp_tool;
 use acp_session_setup::assert_prompt_response;
+use acp_session_setup::assert_prompt_updates_before_response;
 use acp_session_setup::assert_replayed_history_before_response;
 use acp_session_setup::build_test_mcp_server_binary;
 use acp_session_setup::devo_command;
@@ -133,7 +134,7 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
 
     let initial_prompt = "create one replayable ACP history item";
     write_acp_prompt(&mut stdin, 2, &session_id, initial_prompt).await?;
-    let initial_prompt_response = read_stdio_json_until(
+    let initial_prompt_messages = read_stdio_json_collect_until(
         &mut child,
         &mut stdout_reader,
         &mut stderr_reader,
@@ -141,7 +142,11 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
         |value| value.get("id") == Some(&serde_json::json!(2)),
     )
     .await?;
+    let initial_prompt_response = initial_prompt_messages
+        .last()
+        .context("initial session/prompt produced a response")?;
     assert_prompt_response(&initial_prompt_response, 2);
+    assert_prompt_updates_before_response(&initial_prompt_messages, &session_id)?;
     let initial_provider_request = recv_provider_prompt_request(
         &mut provider.requests,
         "initial provider prompt request",
@@ -188,7 +193,7 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
 
     let load_prompt = "after load, declare load MCP tools";
     write_acp_prompt(&mut stdin, 4, &session_id, load_prompt).await?;
-    let load_prompt_response = read_stdio_json_until(
+    let load_prompt_messages = read_stdio_json_collect_until(
         &mut child,
         &mut stdout_reader,
         &mut stderr_reader,
@@ -196,7 +201,11 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
         |value| value.get("id") == Some(&serde_json::json!(4)),
     )
     .await?;
+    let load_prompt_response = load_prompt_messages
+        .last()
+        .context("post-load session/prompt produced a response")?;
     assert_prompt_response(&load_prompt_response, 4);
+    assert_prompt_updates_before_response(&load_prompt_messages, &session_id)?;
     let load_provider_request = recv_provider_prompt_request(
         &mut provider.requests,
         "post-load provider prompt request",
@@ -238,7 +247,7 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
 
     let resume_prompt = "after resume, declare resume MCP tools";
     write_acp_prompt(&mut stdin, 6, &session_id, resume_prompt).await?;
-    let resume_prompt_response = read_stdio_json_until(
+    let resume_prompt_messages = read_stdio_json_collect_until(
         &mut child,
         &mut stdout_reader,
         &mut stderr_reader,
@@ -246,7 +255,11 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
         |value| value.get("id") == Some(&serde_json::json!(6)),
     )
     .await?;
+    let resume_prompt_response = resume_prompt_messages
+        .last()
+        .context("post-resume session/prompt produced a response")?;
     assert_prompt_response(&resume_prompt_response, 6);
+    assert_prompt_updates_before_response(&resume_prompt_messages, &session_id)?;
     let resume_provider_request = recv_provider_prompt_request(
         &mut provider.requests,
         "post-resume provider prompt request",

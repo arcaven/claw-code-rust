@@ -788,8 +788,18 @@ async fn send_connection_notification(notification: PendingConnectionNotificatio
         sender,
         value,
     } = notification;
-    let item_id = notification_item_id(&value);
-    let assistant_delta = notification_assistant_delta(&method, &value);
+    let is_response = method == "<response>";
+    let notification = if is_response {
+        value
+    } else {
+        serde_json::to_value(crate::NotificationEnvelope {
+            method: method.clone(),
+            params: value,
+        })
+        .expect("serialize client notification envelope")
+    };
+    let item_id = notification_item_id(&notification);
+    let assistant_delta = notification_assistant_delta(&method, &notification);
     let delta_len = assistant_delta.map(str::len);
     let assistant_token_text = assistant_delta.and_then(assistant_token_log_preview);
     if let Some(assistant_token_text) = assistant_token_text.as_deref() {
@@ -863,7 +873,7 @@ async fn send_connection_notification(notification: PendingConnectionNotificatio
             "client notification queue accepted message after backpressure"
         );
     }
-    permit.send(value);
+    permit.send(notification);
     true
 }
 

@@ -710,11 +710,6 @@ impl ServerRuntime {
             }
             turn
         };
-        self.record_terminal_turn_status(
-            interrupted_turn.turn_id,
-            TerminalTurnSnapshot::from_turn(&interrupted_turn),
-        )
-        .await;
         let (record, session_context, turn_context) = {
             let session = session_arc.lock().await;
             let core_session_lock = session.core_session.try_lock();
@@ -763,6 +758,11 @@ impl ServerRuntime {
                 status: SessionRuntimeStatus::Idle,
             },
         ))
+        .await;
+        self.record_terminal_turn_status(
+            interrupted_turn.turn_id,
+            TerminalTurnSnapshot::from_turn(&interrupted_turn),
+        )
         .await;
 
         let runtime = Arc::clone(self);

@@ -84,6 +84,25 @@ pub(crate) fn assert_prompt_response(response: &Value, id: i64) {
     );
 }
 
+pub(crate) fn assert_prompt_updates_before_response(
+    messages: &[Value],
+    session_id: &str,
+) -> Result<()> {
+    let (_, before_response) = messages
+        .split_last()
+        .context("session/prompt produced at least one message")?;
+    let saw_agent_message = before_response.iter().any(|message| {
+        message["method"] == serde_json::json!("session/update")
+            && message["params"]["sessionId"].as_str() == Some(session_id)
+            && message["params"]["update"]["sessionUpdate"].as_str() == Some("agent_message_chunk")
+    });
+    anyhow::ensure!(
+        saw_agent_message,
+        "session/prompt did not emit an agent_message_chunk before responding: {messages:?}"
+    );
+    Ok(())
+}
+
 pub(crate) fn assert_replayed_history_before_response(
     messages: &[Value],
     session_id: &str,

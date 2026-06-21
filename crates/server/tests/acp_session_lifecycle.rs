@@ -322,6 +322,56 @@ async fn acp_session_load_replays_history_and_rejects_relative_roots() -> Result
 }
 
 #[tokio::test]
+async fn acp_session_prompt_streams_session_updates_without_devo_subscriptions() -> Result<()> {
+    let data_root = TempDir::new()?;
+    let runtime = build_runtime(data_root.path())?;
+    let (connection_id, mut notifications_rx, _) =
+        initialize_acp_connection_with_transport(&runtime, ClientTransportKind::WebSocket).await?;
+    let cwd = data_root.path().join("repo");
+    std::fs::create_dir_all(&cwd)?;
+    let session_id = create_acp_session(&runtime, connection_id, &cwd, 50).await?;
+
+    let prompt_response = runtime
+        .handle_incoming(
+            connection_id,
+            serde_json::json!({
+                "id": 51,
+                "method": "session/prompt",
+                "params": {
+                    "sessionId": session_id,
+                    "prompt": [
+                        {
+                            "type": "text",
+                            "text": "stream an ACP reply over websocket"
+                        }
+                    ]
+                }
+            }),
+        )
+        .await;
+    assert_eq!(prompt_response, None);
+
+    let (
+        updates_before_response,
+        updates_after_response,
+        prompt_result,
+    ): (
+        Vec<AcpSessionUpdate>,
+        Vec<AcpSessionUpdate>,
+        AcpSuccessResponse<AcpPromptResult>,
+    ) =
+        wait_for_prompt_update_and_response(&mut notifications_rx, 51, session_id).await?;
+    assert_eq!(prompt_result.result.stop_reason, AcpStopReason::EndTurn);
+    assert!(
+        updates_before_response
+            .iter()
+            .any(|update| matches!(update, AcpSessionUpdate::AgentMessageChunk { .. })),
+        "expected ACP prompt turn to emit a native agent_message_chunk before the response; before={updates_before_response:?} after={updates_after_response:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn acp_session_additional_directories_roundtrip_new_load_and_resume() -> Result<()> {
     let data_root = TempDir::new()?;
     let runtime = build_runtime(data_root.path())?;
@@ -725,17 +775,22 @@ async fn initialize_acp_connection(
     runtime: &Arc<ServerRuntime>,
 ) -> Result<(u64, mpsc::Receiver<serde_json::Value>)> {
     let (connection_id, notifications_rx, _) =
-        initialize_acp_connection_with_response(runtime).await?;
+        initialize_acp_connection_with_transport(runtime, ClientTransportKind::Stdio).await?;
     Ok((connection_id, notifications_rx))
 }
 
 async fn initialize_acp_connection_with_response(
     runtime: &Arc<ServerRuntime>,
 ) -> Result<(u64, mpsc::Receiver<serde_json::Value>, AcpInitializeResult)> {
+    initialize_acp_connection_with_transport(runtime, ClientTransportKind::Stdio).await
+}
+
+async fn initialize_acp_connection_with_transport(
+    runtime: &Arc<ServerRuntime>,
+    transport: ClientTransportKind,
+) -> Result<(u64, mpsc::Receiver<serde_json::Value>, AcpInitializeResult)> {
     let (notifications_tx, notifications_rx) = mpsc::channel(/*buffer*/ 4096);
-    let connection_id = runtime
-        .register_connection(ClientTransportKind::Stdio, notifications_tx)
-        .await;
+    let connection_id = runtime.register_connection(transport, notifications_tx).await;
     let initialize_response = runtime
         .handle_incoming(
             connection_id,
@@ -767,6 +822,61 @@ async fn initialize_acp_connection_with_response(
             .is_some()
     );
     Ok((connection_id, notifications_rx, initialize_result))
+}
+
+async fn wait_for_prompt_update_and_response(
+    notifications_rx: &mut mpsc::Receiver<serde_json::Value>,
+    request_id: u64,
+    session_id: SessionId,
+) -> Result<(
+    Vec<AcpSessionUpdate>,
+    Vec<AcpSessionUpdate>,
+    AcpSuccessResponse<AcpPromptResult>,
+)> {
+    let started = tokio::time::Instant::now();
+    let mut updates_before_response = Vec::new();
+    let mut updates_after_response = Vec::new();
+    let mut seen_messages = Vec::new();
+    let response = loop {
+        if started.elapsed() >= Duration::from_secs(5) {
+            anyhow::bail!(
+                "timed out waiting for prompt response {request_id}; seen={seen_messages:?}"
+            );
+        }
+        let Some(value) = timeout(Duration::from_millis(250), notifications_rx.recv())
+            .await
+            .context("timed out waiting for next ACP prompt message")?
+        else {
+            anyhow::bail!(
+                "notification channel closed before prompt response {request_id}; seen={seen_messages:?}"
+            );
+        };
+        seen_messages.push(value.clone());
+        if value.get("method") == Some(&serde_json::json!("session/update")) {
+            let notification: AcpSessionNotification =
+                serde_json::from_value(value["params"].clone())
+                    .context("decode ACP session/update notification")?;
+            if notification.session_id == session_id && notification.meta.is_none() {
+                updates_before_response.push(notification.update);
+            }
+            continue;
+        }
+        if value.get("id") == Some(&serde_json::json!(request_id)) {
+            break serde_json::from_value(value).context("decode ACP prompt response")?;
+        }
+    };
+    while let Ok(Some(value)) = timeout(Duration::from_millis(100), notifications_rx.recv()).await {
+        if value.get("method") != Some(&serde_json::json!("session/update")) {
+            continue;
+        }
+        let notification: AcpSessionNotification =
+            serde_json::from_value(value["params"].clone())
+                .context("decode ACP trailing session/update notification")?;
+        if notification.session_id == session_id && notification.meta.is_none() {
+            updates_after_response.push(notification.update);
+        }
+    }
+    Ok((updates_before_response, updates_after_response, response))
 }
 
 async fn create_acp_session(
