@@ -145,7 +145,7 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
     let initial_prompt_response = initial_prompt_messages
         .last()
         .context("initial session/prompt produced a response")?;
-    assert_prompt_response(&initial_prompt_response, 2);
+    assert_prompt_response(initial_prompt_response, 2);
     assert_prompt_updates_before_response(&initial_prompt_messages, &session_id)?;
     let initial_provider_request = recv_provider_prompt_request(
         &mut provider.requests,
@@ -204,7 +204,7 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
     let load_prompt_response = load_prompt_messages
         .last()
         .context("post-load session/prompt produced a response")?;
-    assert_prompt_response(&load_prompt_response, 4);
+    assert_prompt_response(load_prompt_response, 4);
     assert_prompt_updates_before_response(&load_prompt_messages, &session_id)?;
     let load_provider_request = recv_provider_prompt_request(
         &mut provider.requests,
@@ -258,7 +258,7 @@ async fn stdio_acp_load_and_resume_match_session_setup_contract() -> Result<()> 
     let resume_prompt_response = resume_prompt_messages
         .last()
         .context("post-resume session/prompt produced a response")?;
-    assert_prompt_response(&resume_prompt_response, 6);
+    assert_prompt_response(resume_prompt_response, 6);
     assert_prompt_updates_before_response(&resume_prompt_messages, &session_id)?;
     let resume_provider_request = recv_provider_prompt_request(
         &mut provider.requests,

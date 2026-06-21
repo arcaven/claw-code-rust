@@ -93,8 +93,8 @@ async fn stdio_acp_initialize_negotiates_capabilities_and_allows_session_setup()
     assert_eq!(
         initialize_response["result"]["agentCapabilities"]["mcpCapabilities"],
         serde_json::json!({
-            "http": false,
-            "sse": false
+            "http": true,
+            "sse": true
         })
     );
     assert_eq!(

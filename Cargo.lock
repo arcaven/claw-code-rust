@@ -1444,6 +1444,7 @@ name = "devo-client"
 version = "0.1.21"
 dependencies = [
  "anyhow",
+ "chrono",
  "devo-protocol",
  "pretty_assertions",
  "serde",

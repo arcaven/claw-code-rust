@@ -68,6 +68,13 @@ impl AcpTerminalManager {
             .ok_or_else(|| format!("unknown terminalId {terminal_id}"))
     }
 
+    pub(crate) async fn output(
+        &self,
+        terminal_id: &str,
+    ) -> std::result::Result<AcpTerminalOutputResult, String> {
+        acp_terminal_output(terminal_id, self.clone()).await
+    }
+
     pub(crate) async fn release_all(&self) {
         let terminals = self.terminals.lock().await.drain().collect::<Vec<_>>();
         for (_, terminal) in terminals {

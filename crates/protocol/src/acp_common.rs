@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::AcpAuthCapabilities;
 use crate::AcpAuthMethod;
 use crate::AcpClientCapabilities;
+use crate::AcpProtocolVersion;
 use crate::AcpSessionAdditionalDirectoriesCapabilities;
 use crate::AcpSessionCloseCapabilities;
 use crate::AcpSessionConfigOption;
@@ -13,7 +14,6 @@ use crate::AcpSessionDeleteCapabilities;
 use crate::AcpSessionListCapabilities;
 use crate::AcpSessionModeState;
 use crate::AcpSessionResumeCapabilities;
-use crate::AcpProtocolVersion;
 use crate::SessionId;
 use crate::acp::ACP_JSONRPC_VERSION;
 use crate::acp::AcpMeta;
@@ -236,9 +236,23 @@ pub enum AcpMcpServer {
     Unsupported(AcpUnsupportedMcpServer),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AcpMcpServerHttpType {
+    Http,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AcpMcpServerSseType {
+    Sse,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpMcpServerHttp {
+    #[serde(rename = "type")]
+    pub transport_type: AcpMcpServerHttpType,
     pub name: String,
     pub url: String,
     pub headers: Vec<AcpHttpHeader>,
@@ -249,6 +263,8 @@ pub struct AcpMcpServerHttp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpMcpServerSse {
+    #[serde(rename = "type")]
+    pub transport_type: AcpMcpServerSseType,
     pub name: String,
     pub url: String,
     pub headers: Vec<AcpHttpHeader>,

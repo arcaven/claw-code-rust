@@ -480,13 +480,13 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::acp_client_io::*;
-    use crate::acp_common::*;
     use crate::EventContext;
     use crate::ItemDeltaPayload;
     use crate::ItemId;
     use crate::SessionId;
     use crate::TurnId;
+    use crate::acp_client_io::*;
+    use crate::acp_common::*;
 
     fn native_absolute_test_path(suffix: &str) -> String {
         #[cfg(windows)]
@@ -643,6 +643,93 @@ mod tests {
                 })],
                 meta: None,
             }
+        );
+    }
+
+    #[test]
+    fn mcp_servers_use_transport_type_discriminator() {
+        let params: AcpNewSessionParams = serde_json::from_value(serde_json::json!({
+            "cwd": std::env::current_dir().expect("current dir"),
+            "mcpServers": [
+                {
+                    "type": "http",
+                    "name": "api-server",
+                    "url": "https://api.example.com/mcp",
+                    "headers": [
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer token123"
+                        }
+                    ]
+                },
+                {
+                    "type": "sse",
+                    "name": "event-stream",
+                    "url": "https://events.example.com/mcp",
+                    "headers": [
+                        {
+                            "name": "X-API-Key",
+                            "value": "apikey456"
+                        }
+                    ]
+                }
+            ]
+        }))
+        .expect("deserialize ACP HTTP/SSE MCP servers");
+
+        assert_eq!(
+            params.mcp_servers,
+            vec![
+                AcpMcpServer::Http(AcpMcpServerHttp {
+                    transport_type: AcpMcpServerHttpType::Http,
+                    name: "api-server".to_string(),
+                    url: "https://api.example.com/mcp".to_string(),
+                    headers: vec![AcpHttpHeader {
+                        name: "Authorization".to_string(),
+                        value: "Bearer token123".to_string(),
+                        meta: None,
+                    }],
+                    meta: None,
+                }),
+                AcpMcpServer::Sse(AcpMcpServerSse {
+                    transport_type: AcpMcpServerSseType::Sse,
+                    name: "event-stream".to_string(),
+                    url: "https://events.example.com/mcp".to_string(),
+                    headers: vec![AcpHttpHeader {
+                        name: "X-API-Key".to_string(),
+                        value: "apikey456".to_string(),
+                        meta: None,
+                    }],
+                    meta: None,
+                }),
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(params.mcp_servers).expect("serialize MCP servers"),
+            serde_json::json!([
+                {
+                    "type": "http",
+                    "name": "api-server",
+                    "url": "https://api.example.com/mcp",
+                    "headers": [
+                        {
+                            "name": "Authorization",
+                            "value": "Bearer token123"
+                        }
+                    ]
+                },
+                {
+                    "type": "sse",
+                    "name": "event-stream",
+                    "url": "https://events.example.com/mcp",
+                    "headers": [
+                        {
+                            "name": "X-API-Key",
+                            "value": "apikey456"
+                        }
+                    ]
+                }
+            ])
         );
     }
 

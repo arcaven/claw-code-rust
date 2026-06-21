@@ -938,6 +938,10 @@ fn handle_worker_event(
         | WorkerEvent::SubagentDiscovered { .. }
         | WorkerEvent::SubagentMonitor { .. }
         | WorkerEvent::SkillsListed { .. }
+        | WorkerEvent::AcpAvailableCommandsUpdated { .. }
+        | WorkerEvent::AcpCurrentModeUpdated { .. }
+        | WorkerEvent::AcpConfigOptionsUpdated { .. }
+        | WorkerEvent::AcpUsageUpdated { .. }
         | WorkerEvent::ReferenceSearchUpdated { .. }
         | WorkerEvent::NewSessionPrepared { .. }
         | WorkerEvent::SessionRenamed { .. }

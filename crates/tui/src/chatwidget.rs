@@ -13,6 +13,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use devo_core::ItemId;
+use devo_protocol::AcpAvailableCommand;
+use devo_protocol::AcpCost;
+use devo_protocol::AcpSessionConfigOption;
 use devo_protocol::Model;
 use devo_protocol::ProviderWireApi;
 use devo_protocol::ReasoningEffort;
@@ -258,6 +261,10 @@ pub(crate) struct ChatWidget {
     available_models: Vec<Model>,
     saved_models: Vec<SavedModelEntry>,
     current_model_binding_id: Option<String>,
+    acp_available_commands: Vec<AcpAvailableCommand>,
+    acp_current_mode_id: Option<String>,
+    acp_config_options: Vec<AcpSessionConfigOption>,
+    acp_usage: Option<(u64, u64, Option<AcpCost>)>,
     onboarding: Option<OnboardingWidget>,
     resume_browser: Option<ResumeBrowserState>,
     resume_browser_loading: bool,
@@ -404,6 +411,10 @@ impl ChatWidget {
             available_models,
             current_model_binding_id,
             saved_models,
+            acp_available_commands: Vec::new(),
+            acp_current_mode_id: None,
+            acp_config_options: Vec::new(),
+            acp_usage: None,
             onboarding: None,
             resume_browser: None,
             resume_browser_loading: false,

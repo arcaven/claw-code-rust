@@ -6,6 +6,9 @@ use crate::app_command::InputHistoryDirection;
 use crate::bottom_pane::SkillMetadata;
 use devo_core::ItemId;
 use devo_core::SessionId;
+use devo_protocol::AcpAvailableCommand;
+use devo_protocol::AcpCost;
+use devo_protocol::AcpSessionConfigOption;
 use devo_protocol::ProviderModelBinding;
 use devo_protocol::ProviderVendor;
 use devo_protocol::ProviderWireApi;
@@ -457,6 +460,30 @@ pub(crate) enum WorkerEvent {
         skills: Vec<SkillMetadata>,
         /// Whether this list should be rendered into the transcript.
         show_in_transcript: bool,
+    },
+    /// ACP-native available commands changed for the active session.
+    AcpAvailableCommandsUpdated {
+        /// Commands advertised through `session/update`.
+        commands: Vec<AcpAvailableCommand>,
+    },
+    /// ACP-native current session mode changed.
+    AcpCurrentModeUpdated {
+        /// Current ACP session mode id.
+        current_mode_id: String,
+    },
+    /// ACP-native session configuration options changed.
+    AcpConfigOptionsUpdated {
+        /// Full set of ACP config options from the update.
+        config_options: Vec<AcpSessionConfigOption>,
+    },
+    /// ACP-native context window usage changed.
+    AcpUsageUpdated {
+        /// Tokens currently used in the context window.
+        used: u64,
+        /// Total context window size in tokens.
+        size: u64,
+        /// Optional cumulative ACP cost.
+        cost: Option<AcpCost>,
     },
     /// Server-owned `@` reference search results for the composer popup.
     ReferenceSearchUpdated {

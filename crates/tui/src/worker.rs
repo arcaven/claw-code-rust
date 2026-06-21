@@ -119,6 +119,20 @@ struct EnsureSessionOutcome {
     created: bool,
 }
 
+fn acp_terminal_snapshot_delta(
+    previous_output: &mut String,
+    output: String,
+    truncated: bool,
+) -> Option<String> {
+    let delta = if truncated || !output.starts_with(previous_output.as_str()) {
+        output.clone()
+    } else {
+        output[previous_output.len()..].to_string()
+    };
+    *previous_output = output;
+    (!delta.is_empty()).then_some(delta)
+}
+
 /// Immutable runtime configuration used to construct the background server client worker.
 pub(crate) struct QueryWorkerConfig {
     /// Optional pre-existing session to resume immediately on startup.
@@ -759,7 +773,9 @@ async fn run_worker_inner(
     let mut active_reference_search_id: Option<ReferenceSearchId> = None;
     let mut active_shell_process_ids: HashSet<String> = HashSet::new();
     let mut visible_acp_terminal_ids: HashSet<String> = HashSet::new();
+    let mut private_acp_terminal_ids: HashSet<String> = HashSet::new();
     let mut pending_acp_terminal_output: HashMap<String, String> = HashMap::new();
+    let mut polled_acp_terminal_output: HashMap<String, String> = HashMap::new();
     let mut next_shell_process_index = 1_u64;
 
     if let Some(initial_session_id) = config.initial_session_id {
@@ -821,6 +837,8 @@ async fn run_worker_inner(
         }
     }
     let _ = emit_skills_list(&mut client, &session_cwd, event_tx, false).await;
+    let mut acp_terminal_poll = tokio::time::interval(Duration::from_millis(250));
+    acp_terminal_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
@@ -2126,6 +2144,40 @@ async fn run_worker_inner(
                     }
                 }
             }
+            _ = acp_terminal_poll.tick(), if !visible_acp_terminal_ids.is_empty() => {
+                let terminal_ids = visible_acp_terminal_ids
+                    .iter()
+                    .filter(|terminal_id| !private_acp_terminal_ids.contains(*terminal_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for terminal_id in terminal_ids {
+                    match client.acp_terminal_output_snapshot(&terminal_id).await {
+                        Ok(snapshot) => {
+                            if let Some(delta) = acp_terminal_snapshot_delta(
+                                polled_acp_terminal_output
+                                    .entry(terminal_id.clone())
+                                    .or_default(),
+                                snapshot.output,
+                                snapshot.truncated,
+                            ) {
+                                let _ = event_tx.send(WorkerEvent::ToolOutputDelta {
+                                    tool_use_id: terminal_id.clone(),
+                                    delta,
+                                });
+                            }
+                            if snapshot.exit_status.is_some() {
+                                visible_acp_terminal_ids.remove(&terminal_id);
+                                polled_acp_terminal_output.remove(&terminal_id);
+                            }
+                        }
+                        Err(error) => {
+                            tracing::debug!(%error, terminal_id, "failed to poll ACP terminal output");
+                            visible_acp_terminal_ids.remove(&terminal_id);
+                            polled_acp_terminal_output.remove(&terminal_id);
+                        }
+                    }
+                }
+            }
             notification = client.recv_notification() => {
                 match notification {
                     Some(notification) => {
@@ -2168,6 +2220,12 @@ async fn run_worker_inner(
                             continue;
                         }
                         if method == ACP_TERMINAL_OUTPUT_NOTIFICATION_METHOD {
+                            if let Some(terminal_id) =
+                                params.get("terminalId").and_then(serde_json::Value::as_str)
+                            {
+                                private_acp_terminal_ids.insert(terminal_id.to_string());
+                                polled_acp_terminal_output.remove(terminal_id);
+                            }
                             if let Some(event) = acp_terminal_output_event(
                                 &params,
                                 &visible_acp_terminal_ids,
@@ -4218,6 +4276,7 @@ mod tests {
     use super::acp_prompt_completed_event;
     use super::acp_prompt_started_event;
     use super::acp_terminal_output_event;
+    use super::acp_terminal_snapshot_delta;
     use super::handle_completed_item;
     use super::is_stale_turn_interrupt_error;
     use super::next_shell_command_exec_start;
@@ -5021,6 +5080,94 @@ mod tests {
     }
 
     #[test]
+    fn raw_acp_session_state_updates_emit_worker_events() {
+        let session_id = SessionId::new();
+
+        assert_eq!(
+            worker_events_from_acp_notification(
+                &serde_json::json!({
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "available_commands_update",
+                        "availableCommands": [
+                            {
+                                "name": "explain",
+                                "description": "Explain current context",
+                                "input": {
+                                    "hint": "optional focus"
+                                }
+                            }
+                        ]
+                    }
+                }),
+                Some(session_id),
+            ),
+            vec![WorkerEvent::AcpAvailableCommandsUpdated {
+                commands: vec![devo_protocol::AcpAvailableCommand {
+                    name: "explain".to_string(),
+                    description: "Explain current context".to_string(),
+                    input: Some(devo_protocol::AcpAvailableCommandInput {
+                        hint: "optional focus".to_string(),
+                        meta: None,
+                    }),
+                    meta: None,
+                }],
+            }]
+        );
+
+        assert_eq!(
+            worker_events_from_acp_notification(
+                &serde_json::json!({
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "current_mode_update",
+                        "currentModeId": "build"
+                    }
+                }),
+                Some(session_id),
+            ),
+            vec![WorkerEvent::AcpCurrentModeUpdated {
+                current_mode_id: "build".to_string(),
+            }]
+        );
+
+        assert_eq!(
+            worker_events_from_acp_notification(
+                &serde_json::json!({
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "config_option_update",
+                        "configOptions": []
+                    }
+                }),
+                Some(session_id),
+            ),
+            vec![WorkerEvent::AcpConfigOptionsUpdated {
+                config_options: Vec::new(),
+            }]
+        );
+
+        assert_eq!(
+            worker_events_from_acp_notification(
+                &serde_json::json!({
+                    "sessionId": session_id,
+                    "update": {
+                        "sessionUpdate": "usage_update",
+                        "used": 42,
+                        "size": 100
+                    }
+                }),
+                Some(session_id),
+            ),
+            vec![WorkerEvent::AcpUsageUpdated {
+                used: 42,
+                size: 100,
+                cost: None,
+            }]
+        );
+    }
+
+    #[test]
     fn raw_acp_tool_call_emits_visible_tool_events() {
         let session_id = SessionId::new();
         let events = worker_events_from_acp_notification(
@@ -5297,6 +5444,32 @@ mod tests {
             &mut pending_terminal_output,
         );
         assert_eq!(second_events, Vec::new());
+    }
+
+    #[test]
+    fn acp_terminal_snapshot_delta_emits_incremental_output() {
+        let mut previous_output = String::new();
+
+        assert_eq!(
+            acp_terminal_snapshot_delta(&mut previous_output, "hello".to_string(), false),
+            Some("hello".to_string())
+        );
+        assert_eq!(
+            acp_terminal_snapshot_delta(&mut previous_output, "hello world".to_string(), false),
+            Some(" world".to_string())
+        );
+        assert_eq!(
+            acp_terminal_snapshot_delta(&mut previous_output, "hello world".to_string(), false),
+            None
+        );
+        assert_eq!(
+            acp_terminal_snapshot_delta(&mut previous_output, "world".to_string(), true),
+            Some("world".to_string())
+        );
+        assert_eq!(
+            acp_terminal_snapshot_delta(&mut previous_output, "fresh".to_string(), false),
+            Some("fresh".to_string())
+        );
     }
 
     #[test]

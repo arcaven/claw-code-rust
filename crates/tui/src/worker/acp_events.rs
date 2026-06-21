@@ -107,6 +107,20 @@ pub(super) fn worker_events_from_acp_notification_with_terminal_state(
             session_id: notification.session_id.to_string(),
             title,
         }],
+        AcpSessionUpdate::AvailableCommandsUpdate {
+            available_commands, ..
+        } => vec![WorkerEvent::AcpAvailableCommandsUpdated {
+            commands: available_commands,
+        }],
+        AcpSessionUpdate::CurrentModeUpdate {
+            current_mode_id, ..
+        } => vec![WorkerEvent::AcpCurrentModeUpdated { current_mode_id }],
+        AcpSessionUpdate::ConfigOptionUpdate { config_options, .. } => {
+            vec![WorkerEvent::AcpConfigOptionsUpdated { config_options }]
+        }
+        AcpSessionUpdate::UsageUpdate {
+            used, size, cost, ..
+        } => vec![WorkerEvent::AcpUsageUpdated { used, size, cost }],
         AcpSessionUpdate::ToolCall {
             tool_call_id,
             title,
@@ -156,11 +170,7 @@ pub(super) fn worker_events_from_acp_notification_with_terminal_state(
             },
         ),
         AcpSessionUpdate::UserMessageChunk { .. }
-        | AcpSessionUpdate::AvailableCommandsUpdate { .. }
-        | AcpSessionUpdate::CurrentModeUpdate { .. }
-        | AcpSessionUpdate::ConfigOptionUpdate { .. }
-        | AcpSessionUpdate::SessionInfoUpdate { title: None, .. }
-        | AcpSessionUpdate::UsageUpdate { .. } => Vec::new(),
+        | AcpSessionUpdate::SessionInfoUpdate { title: None, .. } => Vec::new(),
     }
 }
 
@@ -228,7 +238,10 @@ fn worker_events_from_acp_tool_call_update(
             parsed_commands: Vec::new(),
         });
     }
-    events.extend(worker_events_from_acp_tool_content(tool_call, terminal_state));
+    events.extend(worker_events_from_acp_tool_content(
+        tool_call,
+        terminal_state,
+    ));
     events
 }
 
@@ -264,9 +277,7 @@ fn worker_events_from_acp_tool_content(
                         preparing: false,
                         parsed_commands: None,
                     });
-                    if let Some(delta) = terminal_state
-                        .pending_terminal_output
-                        .remove(&terminal_id)
+                    if let Some(delta) = terminal_state.pending_terminal_output.remove(&terminal_id)
                         && !delta.is_empty()
                     {
                         events.push(WorkerEvent::ToolOutputDelta {
