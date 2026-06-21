@@ -6,12 +6,12 @@ use anyhow::Result;
 use anyhow::anyhow;
 use tokio::sync::oneshot;
 use tray_icon::Icon;
-use tray_icon::MouseButton;
-use tray_icon::MouseButtonState;
 use tray_icon::TrayIcon;
 use tray_icon::TrayIconBuilder;
-use tray_icon::TrayIconEvent;
-use tray_icon::TrayIconId;
+use tray_icon::menu::Menu;
+use tray_icon::menu::MenuEvent;
+use tray_icon::menu::MenuId;
+use tray_icon::menu::MenuItem;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::DispatchMessageW;
 use windows_sys::Win32::UI::WindowsAndMessaging::GetMessageW;
@@ -25,6 +25,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT;
 const TRAY_THREAD_NAME: &str = "devo-windows-tray";
 const ICON_SIZE: u32 = 16;
 const DEVO_MARK_PNG: &[u8] = include_bytes!("../../../.github/assets/devo-mark.png");
+
+struct TrayResources {
+    _tray_icon: TrayIcon,
+    exit_item_id: MenuId,
+}
 
 pub(crate) struct WindowsServerTray {
     shutdown_rx: oneshot::Receiver<()>,
@@ -78,14 +83,14 @@ fn run_tray_thread(
 ) {
     create_message_queue();
 
-    let tray_icon = match create_tray_icon() {
-        Ok(tray_icon) => tray_icon,
+    let tray_resources = match create_tray_resources() {
+        Ok(tray_resources) => tray_resources,
         Err(error) => {
             let _ = ready_tx.send(Err(error.to_string()));
             return;
         }
     };
-    let tray_id = tray_icon.id().clone();
+    let exit_item_id = tray_resources.exit_item_id.clone();
 
     // SAFETY: `GetCurrentThreadId` has no preconditions.
     let thread_id = unsafe { GetCurrentThreadId() };
@@ -93,21 +98,34 @@ fn run_tray_thread(
         return;
     }
 
-    run_message_loop(&tray_id, shutdown_tx);
-    drop(tray_icon);
+    run_message_loop(&exit_item_id, shutdown_tx);
+    drop(tray_resources);
 }
 
-fn create_tray_icon() -> Result<TrayIcon> {
+fn create_tray_resources() -> Result<TrayResources> {
     let icon = Icon::from_rgba(devo_icon_rgba()?, ICON_SIZE, ICON_SIZE)
         .context("create Windows tray icon image")?;
+    let tray_menu = Menu::new();
+    let exit_item = MenuItem::new("Exit", /*enabled*/ true, /*accelerator*/ None);
+    let exit_item_id = exit_item.id().clone();
 
-    TrayIconBuilder::new()
-        .with_tooltip("Devo server is running. Right-click to exit.")
+    tray_menu
+        .append(&exit_item)
+        .context("add Windows tray exit menu item")?;
+
+    let tray_icon = TrayIconBuilder::new()
+        .with_menu(Box::new(tray_menu))
+        .with_tooltip("Devo server is running.")
         .with_icon(icon)
-        .with_menu_on_left_click(false)
-        .with_menu_on_right_click(false)
+        .with_menu_on_left_click(/*enable*/ false)
+        .with_menu_on_right_click(/*enable*/ true)
         .build()
-        .context("create Windows tray icon")
+        .context("create Windows tray icon")?;
+
+    Ok(TrayResources {
+        _tray_icon: tray_icon,
+        exit_item_id,
+    })
 }
 
 fn create_message_queue() {
@@ -120,7 +138,7 @@ fn create_message_queue() {
     }
 }
 
-fn run_message_loop(tray_id: &TrayIconId, shutdown_tx: oneshot::Sender<()>) {
+fn run_message_loop(exit_item_id: &MenuId, shutdown_tx: oneshot::Sender<()>) {
     let mut shutdown_tx = Some(shutdown_tx);
 
     // SAFETY: This is the standard Win32 message loop for the tray thread. The
@@ -137,7 +155,7 @@ fn run_message_loop(tray_id: &TrayIconId, shutdown_tx: oneshot::Sender<()>) {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
 
-            if right_click_exit_requested(tray_id)
+            if exit_menu_item_selected(exit_item_id)
                 && let Some(shutdown_tx) = shutdown_tx.take()
             {
                 let _ = shutdown_tx.send(());
@@ -147,20 +165,12 @@ fn run_message_loop(tray_id: &TrayIconId, shutdown_tx: oneshot::Sender<()>) {
     }
 }
 
-fn right_click_exit_requested(tray_id: &TrayIconId) -> bool {
-    let receiver = TrayIconEvent::receiver();
+fn exit_menu_item_selected(exit_item_id: &MenuId) -> bool {
+    let receiver = MenuEvent::receiver();
     let mut exit_requested = false;
 
     while let Ok(event) = receiver.try_recv() {
-        if matches!(
-            event,
-            TrayIconEvent::Click {
-                id,
-                button: MouseButton::Right,
-                button_state: MouseButtonState::Up,
-                ..
-            } if id == tray_id
-        ) {
+        if event.id() == exit_item_id {
             exit_requested = true;
         }
     }
