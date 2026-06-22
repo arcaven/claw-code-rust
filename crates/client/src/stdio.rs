@@ -15,6 +15,9 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use crate::acp_fs::handle_acp_fs_request;
+use crate::acp_permissions::AcpPendingPermissions;
+use crate::acp_permissions::handle_acp_request_permission;
+use crate::acp_permissions::resolve_acp_permission_response;
 use crate::acp_terminal::AcpTerminalManager;
 use crate::acp_terminal::handle_acp_terminal_request;
 use anyhow::Context;
@@ -54,11 +57,7 @@ use devo_protocol::AcpSuccessResponse;
 use devo_protocol::AcpTerminalOutputResult;
 use devo_protocol::AgentListParams;
 use devo_protocol::AgentListResult;
-use devo_protocol::ApprovalDecisionPayload;
-use devo_protocol::ApprovalDecisionValue;
-use devo_protocol::ApprovalRequestPayload;
 use devo_protocol::ApprovalResponseParams;
-use devo_protocol::ApprovalScopeValue;
 use devo_protocol::CloseAgentParams;
 use devo_protocol::CloseAgentResult;
 use devo_protocol::CommandExecParams;
@@ -71,7 +70,6 @@ use devo_protocol::CommandExecWriteParams;
 use devo_protocol::CommandExecWriteResult;
 use devo_protocol::DEVO_SESSION_RESUME_META;
 use devo_protocol::ErrorResponse;
-use devo_protocol::EventContext;
 use devo_protocol::GoalClearParams;
 use devo_protocol::GoalClearResult;
 use devo_protocol::GoalCreateParams;
@@ -83,16 +81,11 @@ use devo_protocol::GoalSetStatusResult;
 use devo_protocol::GoalStatusParams;
 use devo_protocol::GoalStatusResult;
 use devo_protocol::InitializeResult;
-use devo_protocol::ItemEnvelope;
-use devo_protocol::ItemEventPayload;
-use devo_protocol::ItemId;
-use devo_protocol::ItemKind;
 use devo_protocol::ModelCatalogParams;
 use devo_protocol::ModelCatalogResult;
 use devo_protocol::ModelSavedParams;
 use devo_protocol::ModelSavedResult;
 use devo_protocol::NotificationEnvelope;
-use devo_protocol::PendingServerRequestContext;
 use devo_protocol::ProtocolErrorCode;
 use devo_protocol::ProviderValidateParams;
 use devo_protocol::ProviderValidateResult;
@@ -108,7 +101,6 @@ use devo_protocol::ReferenceSearchUpdateParams;
 use devo_protocol::ReferenceSearchUpdateResult;
 use devo_protocol::RequestUserInputRespondParams;
 use devo_protocol::ServerEvent;
-use devo_protocol::ServerRequestKind;
 use devo_protocol::SessionCompactParams;
 use devo_protocol::SessionCompactResult;
 use devo_protocol::SessionForkParams;
@@ -138,14 +130,12 @@ use devo_protocol::SkillSetEnabledParams;
 use devo_protocol::SkillSetEnabledResult;
 use devo_protocol::SpawnAgentParams;
 use devo_protocol::SpawnAgentResult;
-use devo_protocol::TurnId;
 use devo_protocol::TurnInterruptParams;
 use devo_protocol::TurnInterruptResult;
 use devo_protocol::TurnStartParams;
 use devo_protocol::TurnStartResult;
 use devo_protocol::TurnSteerParams;
 use devo_protocol::TurnSteerResult;
-use devo_protocol::acp_success_response;
 use devo_protocol::devo_extension_inner_method;
 use devo_protocol::devo_extension_method;
 use devo_protocol::original_event_from_acp_notification;
@@ -166,7 +156,6 @@ use tokio::time::timeout;
 
 const SERVER_CHILD_STDIN_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(100);
 const SERVER_CHILD_EXIT_TIMEOUT: Duration = Duration::from_millis(500);
-static ACP_PERMISSION_NEXT_ID: AtomicU64 = AtomicU64::new(1);
 pub const ACP_PROMPT_STARTED_NOTIFICATION_METHOD: &str = "_devo/acp_prompt/started";
 pub const ACP_PROMPT_COMPLETED_NOTIFICATION_METHOD: &str = "_devo/acp_prompt/completed";
 pub use crate::acp_terminal::ACP_TERMINAL_OUTPUT_NOTIFICATION_METHOD;
@@ -195,21 +184,6 @@ pub struct StdioServerClientConfig {
 pub struct ServerNotificationMessage {
     pub method: String,
     pub params: serde_json::Value,
-}
-
-type AcpPendingPermissions = Arc<Mutex<HashMap<String, AcpPendingPermission>>>;
-
-struct AcpPendingPermission {
-    request_id: serde_json::Value,
-    session_id: devo_protocol::SessionId,
-    turn_id: TurnId,
-    item_id: ItemId,
-    options: Vec<AcpPermissionOption>,
-}
-
-struct AcpPermissionOption {
-    option_id: String,
-    kind: String,
 }
 
 pub struct StdioServerClient {
@@ -648,22 +622,13 @@ impl StdioServerClient {
     }
 
     pub async fn approval_respond(&mut self, params: ApprovalResponseParams) -> Result<()> {
-        if let Some(pending) = self
-            .acp_pending_permissions
-            .lock()
-            .await
-            .remove(&params.approval_id.to_string())
+        if let Some((response, notification)) =
+            resolve_acp_permission_response(&self.acp_pending_permissions, &params).await
         {
-            let decision = acp_permission_response_from_approval(&params, &pending);
-            write_acp_client_response(
-                Arc::clone(&self.stdin),
-                acp_success_response(pending.request_id.clone(), decision),
-            )
-            .await
-            .context("write ACP permission response")?;
-            let _ = self
-                .notifications_tx
-                .send(acp_approval_decision_notification(&params, &pending));
+            write_acp_client_response(Arc::clone(&self.stdin), response)
+                .await
+                .context("write ACP permission response")?;
+            let _ = self.notifications_tx.send(notification);
             return Ok(());
         }
         anyhow::bail!("no pending ACP permission request exists for approval response")
@@ -1075,255 +1040,6 @@ async fn handle_acp_client_request(
     let response = acp_client_error_response(id, -32601, format!("unknown client method {method}"));
     if let Err(error) = write_acp_client_response(stdin, response).await {
         tracing::warn!(%error, method, "failed to write ACP client response");
-    }
-}
-
-async fn handle_acp_request_permission(
-    request_id: serde_json::Value,
-    params: serde_json::Value,
-    pending_permissions: AcpPendingPermissions,
-    notifications_tx: mpsc::UnboundedSender<ServerNotificationMessage>,
-) -> std::result::Result<(), String> {
-    let session_id = params
-        .get("sessionId")
-        .cloned()
-        .ok_or_else(|| "session/request_permission params.sessionId is required".to_string())
-        .and_then(|value| {
-            serde_json::from_value::<devo_protocol::SessionId>(value)
-                .map_err(|error| format!("invalid session/request_permission sessionId: {error}"))
-        })?;
-    let options = acp_permission_options(&params)?;
-    if !options
-        .iter()
-        .any(|option| option.kind.starts_with("allow"))
-    {
-        return Err("session/request_permission options must include an allow option".to_string());
-    }
-
-    let approval_id = format!(
-        "acp-permission-{}",
-        ACP_PERMISSION_NEXT_ID.fetch_add(1, Ordering::SeqCst)
-    );
-    let pending = AcpPendingPermission {
-        request_id,
-        session_id,
-        turn_id: TurnId::new(),
-        item_id: ItemId::new(),
-        options,
-    };
-    let notification = acp_approval_request_notification(&approval_id, &params, &pending);
-    pending_permissions
-        .lock()
-        .await
-        .insert(approval_id.clone(), pending);
-    if let Err(error) = notifications_tx.send(notification) {
-        pending_permissions.lock().await.remove(&approval_id);
-        return Err(format!("failed to deliver permission request: {error}"));
-    }
-    Ok(())
-}
-
-fn acp_permission_options(
-    params: &serde_json::Value,
-) -> std::result::Result<Vec<AcpPermissionOption>, String> {
-    let options = params
-        .get("options")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| "session/request_permission params.options must be an array".to_string())?;
-    options
-        .iter()
-        .map(|option| {
-            let option_id = option
-                .get("optionId")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    "session/request_permission option.optionId must be a string".to_string()
-                })?
-                .to_string();
-            let kind = option
-                .get("kind")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    "session/request_permission option.kind must be a string".to_string()
-                })?
-                .to_string();
-            Ok(AcpPermissionOption { option_id, kind })
-        })
-        .collect()
-}
-
-fn acp_approval_request_notification(
-    approval_id: &str,
-    params: &serde_json::Value,
-    pending: &AcpPendingPermission,
-) -> ServerNotificationMessage {
-    let action_summary = params
-        .get("toolCall")
-        .and_then(|tool_call| tool_call.get("title"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("ACP tool permission request")
-        .to_string();
-    let target = params
-        .get("toolCall")
-        .and_then(|tool_call| tool_call.get("toolCallId"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    let request = PendingServerRequestContext {
-        request_id: approval_id.to_string().into(),
-        request_kind: ServerRequestKind::ItemPermissionsRequestApproval,
-        session_id: pending.session_id,
-        turn_id: Some(pending.turn_id),
-        item_id: Some(pending.item_id),
-    };
-    let payload = ApprovalRequestPayload {
-        request,
-        approval_id: approval_id.to_string().into(),
-        action_summary,
-        justification: "ACP agent requested permission to continue this tool call.".to_string(),
-        resource: target.clone(),
-        available_scopes: acp_approval_scopes(&pending.options),
-        path: None,
-        host: None,
-        target,
-    };
-    acp_item_notification(
-        "item/completed",
-        ServerEvent::ItemCompleted(ItemEventPayload {
-            context: EventContext {
-                session_id: pending.session_id,
-                turn_id: Some(pending.turn_id),
-                item_id: Some(pending.item_id),
-                seq: 0,
-            },
-            item: ItemEnvelope {
-                item_id: pending.item_id,
-                item_kind: ItemKind::ApprovalRequest,
-                payload: serde_json::to_value(payload).expect("serialize ACP approval request"),
-            },
-        }),
-    )
-}
-
-fn acp_approval_decision_notification(
-    params: &ApprovalResponseParams,
-    pending: &AcpPendingPermission,
-) -> ServerNotificationMessage {
-    let payload = ApprovalDecisionPayload {
-        approval_id: params.approval_id.clone(),
-        decision: acp_approval_decision_label(&params.decision).to_string(),
-        scope: acp_approval_scope_label(&params.scope).to_string(),
-    };
-    acp_item_notification(
-        "item/completed",
-        ServerEvent::ItemCompleted(ItemEventPayload {
-            context: EventContext {
-                session_id: pending.session_id,
-                turn_id: Some(pending.turn_id),
-                item_id: Some(pending.item_id),
-                seq: 0,
-            },
-            item: ItemEnvelope {
-                item_id: ItemId::new(),
-                item_kind: ItemKind::ApprovalDecision,
-                payload: serde_json::to_value(payload).expect("serialize ACP approval decision"),
-            },
-        }),
-    )
-}
-
-fn acp_item_notification(method: &str, event: ServerEvent) -> ServerNotificationMessage {
-    ServerNotificationMessage {
-        method: method.to_string(),
-        params: serde_json::to_value(event).expect("serialize ACP bridged event"),
-    }
-}
-
-fn acp_approval_scopes(options: &[AcpPermissionOption]) -> Vec<String> {
-    let mut scopes = Vec::new();
-    if options.iter().any(|option| option.kind == "allow_once") {
-        scopes.push("once".to_string());
-    }
-    if options.iter().any(|option| option.kind == "allow_always") {
-        scopes.push("session".to_string());
-    }
-    scopes
-}
-
-fn acp_permission_response_from_approval(
-    params: &ApprovalResponseParams,
-    pending: &AcpPendingPermission,
-) -> serde_json::Value {
-    if let Some(option_id) = acp_selected_permission_option(params, pending) {
-        serde_json::json!({
-            "outcome": {
-                "outcome": "selected",
-                "optionId": option_id
-            }
-        })
-    } else {
-        acp_cancelled_permission_response()
-    }
-}
-
-fn acp_selected_permission_option(
-    params: &ApprovalResponseParams,
-    pending: &AcpPendingPermission,
-) -> Option<String> {
-    let preferred_kinds: &[&str] = match params.decision {
-        ApprovalDecisionValue::Approve => match params.scope {
-            ApprovalScopeValue::Session => &["allow_always", "allow_once"],
-            ApprovalScopeValue::Once
-            | ApprovalScopeValue::Turn
-            | ApprovalScopeValue::PathPrefix
-            | ApprovalScopeValue::Host
-            | ApprovalScopeValue::Tool
-            | ApprovalScopeValue::CommandPrefix => &["allow_once", "allow_always"],
-        },
-        ApprovalDecisionValue::Deny => match params.scope {
-            ApprovalScopeValue::Session => &["reject_always", "reject_once"],
-            ApprovalScopeValue::Once
-            | ApprovalScopeValue::Turn
-            | ApprovalScopeValue::PathPrefix
-            | ApprovalScopeValue::Host
-            | ApprovalScopeValue::Tool
-            | ApprovalScopeValue::CommandPrefix => &["reject_once", "reject_always"],
-        },
-        ApprovalDecisionValue::Cancel => return None,
-    };
-    preferred_kinds.iter().find_map(|kind| {
-        pending
-            .options
-            .iter()
-            .find(|option| option.kind == *kind)
-            .map(|option| option.option_id.clone())
-    })
-}
-
-fn acp_cancelled_permission_response() -> serde_json::Value {
-    serde_json::json!({
-        "outcome": {
-            "outcome": "cancelled"
-        }
-    })
-}
-
-fn acp_approval_decision_label(decision: &ApprovalDecisionValue) -> &'static str {
-    match decision {
-        ApprovalDecisionValue::Approve => "approve",
-        ApprovalDecisionValue::Deny => "deny",
-        ApprovalDecisionValue::Cancel => "cancel",
-    }
-}
-
-fn acp_approval_scope_label(scope: &ApprovalScopeValue) -> &'static str {
-    match scope {
-        ApprovalScopeValue::Once => "once",
-        ApprovalScopeValue::Turn => "turn",
-        ApprovalScopeValue::Session => "session",
-        ApprovalScopeValue::PathPrefix => "path_prefix",
-        ApprovalScopeValue::Host => "host",
-        ApprovalScopeValue::Tool => "tool",
-        ApprovalScopeValue::CommandPrefix => "command_prefix",
     }
 }
 
