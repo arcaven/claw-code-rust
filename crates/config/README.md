@@ -306,7 +306,7 @@ The current provider schema uses provider vendor entries plus model bindings:
 
 ```toml
 model = "gpt-5.4"
-model_thinking_selection = "medium"
+model_reasoning_effort_selection = "medium"
 model_auto_compact_token_limit = 970000
 model_context_window = 997500
 disable_response_storage = true
@@ -421,7 +421,7 @@ Supported modes:
 ## Deep Research
 
 `[research]` controls the server-owned `/research` workflow. The workflow reuses
-the active session model, provider, thinking, `web_search`, and `web_fetch`
+the active session model, provider, reasoning effort, `web_search`, and `web_fetch`
 configuration for all stages.
 
 Supported keys:
@@ -463,7 +463,7 @@ After a binding is selected, resolution requires:
   `auth.json`.
 
 The resolved runtime settings contain the provider id, wire API, final model
-name, optional base URL, optional API key, model limits, thinking selection,
+name, optional base URL, optional API key, model limits, reasoning effort selection,
 response-storage flag, and preferred auth method.
 
 `model_slug` is the local catalog key matching a `slug` in the effective
@@ -474,7 +474,7 @@ defaults, merged by `slug`. Turn metadata records `model` as the catalog slug
 and `request_model` as the provider request model; these values may be
 identical.
 
-When thinking resolution selects a model variant catalog slug, the provider
+When reasoning effort resolution selects a model variant catalog slug, the provider
 request model is resolved from enabled bindings for the same provider as the
 selected turn binding. Duplicate `model_slug` values under other providers do
 not affect that request.
