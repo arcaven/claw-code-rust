@@ -397,13 +397,35 @@ async fn acp_sessions_advertise_server_backed_slash_commands() -> Result<()> {
     let commands = wait_for_available_commands_update(&mut notifications_rx, session_id).await?;
     assert_acp_slash_command_advertisement(&commands);
 
+    let (load_connection_id, mut load_notifications_rx) =
+        initialize_acp_connection(&runtime).await?;
+    let load_response = runtime
+        .handle_incoming(
+            load_connection_id,
+            serde_json::json!({
+                "id": 71,
+                "method": "session/load",
+                "params": {
+                    "sessionId": session_id,
+                    "cwd": path_value(&cwd),
+                    "mcpServers": []
+                }
+            }),
+        )
+        .await
+        .context("session/load response")?;
+    let _: AcpSuccessResponse<AcpLoadSessionResult> = serde_json::from_value(load_response)?;
+    let commands =
+        wait_for_available_commands_update(&mut load_notifications_rx, session_id).await?;
+    assert_acp_slash_command_advertisement(&commands);
+
     let (resume_connection_id, mut resume_notifications_rx) =
         initialize_acp_connection(&runtime).await?;
     let resume_response = runtime
         .handle_incoming(
             resume_connection_id,
             serde_json::json!({
-                "id": 71,
+                "id": 72,
                 "method": "session/resume",
                 "params": {
                     "sessionId": session_id,

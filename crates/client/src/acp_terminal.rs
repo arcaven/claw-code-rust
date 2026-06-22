@@ -372,13 +372,16 @@ async fn wait_for_acp_terminal_exit(
 ) -> std::result::Result<AcpTerminalExitStatus, String> {
     let terminal = terminals.get(terminal_id).await?;
     loop {
+        let notified = terminal.exit_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
         {
             let mut state = terminal.state.lock().await;
             if let Some(status) = refresh_acp_terminal_exit_status(&mut state)? {
                 return Ok(status);
             }
         }
-        terminal.exit_notify.notified().await;
+        notified.await;
     }
 }
 

@@ -317,6 +317,8 @@ impl ServerRuntime {
             &legacy.result.history_items,
         )
         .await;
+        self.send_acp_available_commands_update(connection_id, params.session_id)
+            .await;
         let config_options = match self.acp_session_config_options(params.session_id).await {
             Ok(config_options) => config_options,
             Err(error) => return acp_error_response(request_id, AcpErrorCode::ServerError, error),
