@@ -5,7 +5,7 @@ use devo_protocol::ACP_FS_WRITE_TEXT_FILE_METHOD;
 use devo_protocol::AcpFsReadTextFileParams;
 use devo_protocol::AcpFsReadTextFileResult;
 use devo_protocol::AcpFsWriteTextFileParams;
-use devo_protocol::AcpSuccessResponse;
+use devo_protocol::acp_success_response;
 
 pub(crate) async fn handle_acp_fs_request(
     request_id: serde_json::Value,
@@ -17,7 +17,7 @@ pub(crate) async fn handle_acp_fs_request(
             let params = serde_json::from_value::<AcpFsReadTextFileParams>(params)
                 .map_err(|error| format!("invalid fs/read_text_file params: {error}"))?;
             let content = read_acp_text_file(&params.path, params.line, params.limit).await?;
-            Ok(acp_fs_success_response(
+            Ok(acp_success_response(
                 request_id,
                 AcpFsReadTextFileResult {
                     content,
@@ -29,7 +29,7 @@ pub(crate) async fn handle_acp_fs_request(
             let params = serde_json::from_value::<AcpFsWriteTextFileParams>(params)
                 .map_err(|error| format!("invalid fs/write_text_file params: {error}"))?;
             write_acp_text_file(&params.path, params.content).await?;
-            Ok(acp_fs_success_response(request_id, serde_json::Value::Null))
+            Ok(acp_success_response(request_id, serde_json::Value::Null))
         }
         _ => Err(format!("unknown ACP filesystem method {method}")),
     }
@@ -82,20 +82,13 @@ fn select_text_lines(
     Ok(selected)
 }
 
-fn acp_fs_success_response<T: serde::Serialize>(
-    id: serde_json::Value,
-    result: T,
-) -> serde_json::Value {
-    serde_json::to_value(AcpSuccessResponse::new(id, result))
-        .expect("serialize ACP filesystem success response")
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering;
 
+    use devo_protocol::AcpSuccessResponse;
     use pretty_assertions::assert_eq;
 
     use super::*;

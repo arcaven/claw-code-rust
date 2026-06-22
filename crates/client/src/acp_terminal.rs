@@ -10,13 +10,13 @@ use devo_protocol::ACP_TERMINAL_KILL_METHOD;
 use devo_protocol::ACP_TERMINAL_OUTPUT_METHOD;
 use devo_protocol::ACP_TERMINAL_RELEASE_METHOD;
 use devo_protocol::ACP_TERMINAL_WAIT_FOR_EXIT_METHOD;
-use devo_protocol::AcpSuccessResponse;
 use devo_protocol::AcpTerminalCreateParams;
 use devo_protocol::AcpTerminalCreateResult;
 use devo_protocol::AcpTerminalExitStatus;
 use devo_protocol::AcpTerminalOutputResult;
 use devo_protocol::AcpTerminalParams;
 use devo_protocol::AcpTerminalWaitForExitResult;
+use devo_protocol::acp_success_response;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::process::Child;
@@ -95,7 +95,7 @@ pub(crate) async fn handle_acp_terminal_request(
             let params = serde_json::from_value::<AcpTerminalCreateParams>(params)
                 .map_err(|error| format!("invalid terminal/create params: {error}"))?;
             let terminal_id = create_acp_terminal(params, terminals, notifications_tx).await?;
-            Ok(acp_terminal_success_response(
+            Ok(acp_success_response(
                 request_id,
                 AcpTerminalCreateResult {
                     terminal_id,
@@ -107,13 +107,13 @@ pub(crate) async fn handle_acp_terminal_request(
             let params = serde_json::from_value::<AcpTerminalParams>(params)
                 .map_err(|error| format!("invalid terminal/output params: {error}"))?;
             let result = acp_terminal_output(&params.terminal_id, terminals).await?;
-            Ok(acp_terminal_success_response(request_id, result))
+            Ok(acp_success_response(request_id, result))
         }
         ACP_TERMINAL_WAIT_FOR_EXIT_METHOD => {
             let params = serde_json::from_value::<AcpTerminalParams>(params)
                 .map_err(|error| format!("invalid terminal/wait_for_exit params: {error}"))?;
             let status = wait_for_acp_terminal_exit(&params.terminal_id, terminals).await?;
-            Ok(acp_terminal_success_response(
+            Ok(acp_success_response(
                 request_id,
                 AcpTerminalWaitForExitResult {
                     exit_code: status.exit_code,
@@ -126,19 +126,13 @@ pub(crate) async fn handle_acp_terminal_request(
             let params = serde_json::from_value::<AcpTerminalParams>(params)
                 .map_err(|error| format!("invalid terminal/kill params: {error}"))?;
             kill_acp_terminal(&params.terminal_id, terminals).await?;
-            Ok(acp_terminal_success_response(
-                request_id,
-                serde_json::json!({}),
-            ))
+            Ok(acp_success_response(request_id, serde_json::json!({})))
         }
         ACP_TERMINAL_RELEASE_METHOD => {
             let params = serde_json::from_value::<AcpTerminalParams>(params)
                 .map_err(|error| format!("invalid terminal/release params: {error}"))?;
             release_acp_terminal(&params.terminal_id, terminals).await?;
-            Ok(acp_terminal_success_response(
-                request_id,
-                serde_json::json!({}),
-            ))
+            Ok(acp_success_response(request_id, serde_json::json!({})))
         }
         _ => Err(format!("unknown ACP terminal method {method}")),
     }
@@ -450,16 +444,9 @@ fn acp_terminal_exit_status_from_process_status(status: ExitStatus) -> AcpTermin
     }
 }
 
-fn acp_terminal_success_response<T: serde::Serialize>(
-    id: serde_json::Value,
-    result: T,
-) -> serde_json::Value {
-    serde_json::to_value(AcpSuccessResponse::new(id, result))
-        .expect("serialize ACP terminal success response")
-}
-
 #[cfg(test)]
 mod tests {
+    use devo_protocol::AcpSuccessResponse;
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
     use tokio::time::Duration;

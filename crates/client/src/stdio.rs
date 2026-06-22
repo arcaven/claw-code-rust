@@ -145,6 +145,7 @@ use devo_protocol::TurnStartParams;
 use devo_protocol::TurnStartResult;
 use devo_protocol::TurnSteerParams;
 use devo_protocol::TurnSteerResult;
+use devo_protocol::acp_success_response;
 use devo_protocol::devo_extension_inner_method;
 use devo_protocol::devo_extension_method;
 use devo_protocol::original_event_from_acp_notification;
@@ -656,7 +657,7 @@ impl StdioServerClient {
             let decision = acp_permission_response_from_approval(&params, &pending);
             write_acp_client_response(
                 Arc::clone(&self.stdin),
-                acp_client_success_response(pending.request_id.clone(), decision),
+                acp_success_response(pending.request_id.clone(), decision),
             )
             .await
             .context("write ACP permission response")?;
@@ -1324,17 +1325,6 @@ fn acp_approval_scope_label(scope: &ApprovalScopeValue) -> &'static str {
         ApprovalScopeValue::Tool => "tool",
         ApprovalScopeValue::CommandPrefix => "command_prefix",
     }
-}
-
-fn acp_client_success_response(
-    id: serde_json::Value,
-    result: serde_json::Value,
-) -> serde_json::Value {
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": result
-    })
 }
 
 fn acp_client_error_response(
