@@ -47,7 +47,8 @@ pub struct SessionMetadata {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding_id: Option<String>,
-    pub thinking: Option<String>,
+    #[serde(default, alias = "thinking", skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort_selection: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub total_input_tokens: usize,
     pub total_output_tokens: usize,
@@ -214,7 +215,8 @@ pub struct SessionMetadataUpdateParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding_id: Option<String>,
-    pub thinking: Option<String>,
+    #[serde(default, alias = "thinking", skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort_selection: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,7 +349,7 @@ mod tests {
     use crate::SessionTitleState;
 
     #[test]
-    fn session_metadata_roundtrips_with_model_and_thinking() {
+    fn session_metadata_roundtrips_with_model_and_reasoning_effort_selection() {
         let metadata = SessionMetadata {
             session_id: SessionId::new(),
             cwd: "/tmp".into(),
@@ -363,7 +365,7 @@ mod tests {
             ephemeral: false,
             model: Some("test-model".to_string()),
             model_binding_id: Some("test-binding".to_string()),
-            thinking: Some("medium".to_string()),
+            reasoning_effort_selection: Some("medium".to_string()),
             reasoning_effort: Some(crate::ReasoningEffort::Medium),
             total_input_tokens: 12,
             total_output_tokens: 34,

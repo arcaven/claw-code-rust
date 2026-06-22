@@ -117,7 +117,7 @@ async fn session_rollback_persists_cut_and_keeps_future_turns_durable() -> Resul
             connection_id,
             serde_json::json!({
                 "id": 5,
-                "method": "session/rollback",
+                "method": "_devo/session/rollback",
                 "params": {
                     "session_id": session_id,
                     "user_turn_index": 1,
@@ -159,7 +159,7 @@ async fn session_rollback_persists_cut_and_keeps_future_turns_durable() -> Resul
             rebuilt_connection_id,
             serde_json::json!({
                 "id": 6,
-                "method": "session/resume",
+                "method": "_devo/session/resume",
                 "params": {
                     "session_id": session_id
                 }
@@ -316,7 +316,7 @@ async fn start_and_complete_turn(
             connection_id,
             serde_json::json!({
                 "id": 3,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": text }],
@@ -341,7 +341,9 @@ async fn wait_for_turn_completed(
 ) -> Result<()> {
     timeout(Duration::from_secs(5), async {
         while let Some(value) = notifications_rx.recv().await {
-            if value.get("method") == Some(&serde_json::json!("turn/completed")) {
+            if value.get("method") == Some(&serde_json::json!("turn/completed"))
+                || has_original_method(&value, "turn/completed")
+            {
                 return Ok(());
             }
         }
@@ -350,4 +352,9 @@ async fn wait_for_turn_completed(
     .await
     .context("timed out waiting for turn/completed")??;
     Ok(())
+}
+
+fn has_original_method(value: &serde_json::Value, method: &str) -> bool {
+    value.get("method") == Some(&serde_json::json!("session/update"))
+        && value["params"]["_meta"]["devo/originalMethod"].as_str() == Some(method)
 }

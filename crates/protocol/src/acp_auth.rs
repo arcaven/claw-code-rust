@@ -1,9 +1,9 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::AcpAuthMethodId;
 use crate::AcpErrorCode;
 use crate::AcpErrorResponse;
-use crate::AcpAuthMethodId;
 use crate::AcpLogoutCapabilities;
 use crate::AcpMeta;
 

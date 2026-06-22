@@ -139,6 +139,14 @@ impl SessionRuntimeContext {
             .effective_config()
             .clone();
         let has_provider_configuration = config.has_provider_configuration();
+        let inherited_provider_config = inherited_context
+            .config_store
+            .lock()
+            .expect("inherited app config store mutex should not be poisoned")
+            .effective_config()
+            .provider
+            .clone();
+        let provider_config_changed = config.provider != inherited_provider_config;
         let registry = if !has_provider_configuration && config.mcp.servers.is_empty() {
             Arc::clone(&inherited_context.registry)
         } else {
@@ -154,22 +162,29 @@ impl SessionRuntimeContext {
             workspace_root,
         )?);
         let default_model = model_catalog.resolve_for_turn(None)?.slug.clone();
-        let (provider, provider_router, provider_default_model) = if has_provider_configuration {
-            let provider =
-                load_server_provider(&config, Some(default_model.as_str()), &user_config_dir)
-                    .context("load server provider for session workspace")?;
-            (
-                provider.provider,
-                provider.provider_router,
-                provider.default_model,
-            )
-        } else {
-            (
-                Arc::clone(&inherited_context.provider),
-                Arc::clone(&inherited_context.provider_router),
-                default_model,
-            )
-        };
+        let (provider, provider_router, provider_default_model) =
+            if has_provider_configuration && provider_config_changed {
+                let provider =
+                    load_server_provider(&config, Some(default_model.as_str()), &user_config_dir)
+                        .context("load server provider for session workspace")?;
+                (
+                    provider.provider,
+                    provider.provider_router,
+                    provider.default_model,
+                )
+            } else if has_provider_configuration {
+                (
+                    Arc::clone(&inherited_context.provider),
+                    Arc::clone(&inherited_context.provider_router),
+                    inherited_context.default_model.clone(),
+                )
+            } else {
+                (
+                    Arc::clone(&inherited_context.provider),
+                    Arc::clone(&inherited_context.provider_router),
+                    default_model,
+                )
+            };
         let skill_workspace_root = workspace_root
             .map(Path::to_path_buf)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -292,7 +307,7 @@ impl SessionRuntimeContext {
     pub(crate) fn resolve_turn_config(
         &self,
         requested_model: Option<&str>,
-        thinking_selection: Option<String>,
+        reasoning_effort_selection: Option<String>,
     ) -> TurnConfig {
         let (config, user_config_dir) = {
             let config_store = self
@@ -331,7 +346,7 @@ impl SessionRuntimeContext {
                 ProviderRoute::binding(binding.provider_id, binding.invocation_method),
                 web_search,
                 web_fetch,
-                thinking_selection,
+                reasoning_effort_selection,
             );
             turn_config.model_binding_id = Some(binding_id);
             return turn_config;
@@ -340,7 +355,7 @@ impl SessionRuntimeContext {
         let model = self.resolve_turn_model(requested_model);
         let web_search = self.resolve_turn_web_search(&config, &user_config_dir, None, None);
         let web_fetch = self.resolve_turn_web_fetch(&config, None, None);
-        let mut turn_config = TurnConfig::new(model, thinking_selection);
+        let mut turn_config = TurnConfig::new(model, reasoning_effort_selection);
         turn_config.web_search = web_search;
         turn_config.web_fetch = web_fetch;
         turn_config

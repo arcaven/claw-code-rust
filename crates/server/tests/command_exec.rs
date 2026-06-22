@@ -75,7 +75,7 @@ async fn sessionless_command_exec_streams_to_owner_without_session() -> Result<(
             owner_connection_id,
             serde_json::json!({
                 "id": 20,
-                "method": "command/exec",
+                "method": "_devo/command/exec",
                 "params": {
                     "process_id": "sessionless-1",
                     "cwd": data_root.path(),
@@ -125,7 +125,7 @@ async fn sessionless_command_exec_requires_explicit_cwd() -> Result<()> {
             connection_id,
             serde_json::json!({
                 "id": 21,
-                "method": "command/exec",
+                "method": "_devo/command/exec",
                 "params": {
                     "process_id": "sessionless-missing-cwd",
                     "program": {
@@ -165,7 +165,7 @@ async fn session_bound_command_exec_resolves_session_cwd() -> Result<()> {
             connection_id,
             serde_json::json!({
                 "id": 23,
-                "method": "command/exec",
+                "method": "_devo/command/exec",
                 "params": {
                     "session_id": session_id,
                     "process_id": "session-bound-1",

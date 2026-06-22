@@ -181,7 +181,7 @@ mod tests {
             ephemeral: false,
             model: None,
             model_binding_id: None,
-            thinking: None,
+            reasoning_effort_selection: None,
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,

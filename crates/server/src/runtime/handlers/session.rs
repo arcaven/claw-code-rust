@@ -77,7 +77,7 @@ impl ServerRuntime {
             ephemeral: params.ephemeral,
             model: Some(model.clone()),
             model_binding_id: model_binding_id.clone(),
-            thinking: None,
+            reasoning_effort_selection: None,
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -220,13 +220,13 @@ impl ServerRuntime {
             let mut session = session_arc.lock().await;
             session.summary.model = params.model.clone();
             session.summary.model_binding_id = params.model_binding_id.clone();
-            session.summary.thinking = params.thinking.clone();
+            session.summary.reasoning_effort_selection = params.reasoning_effort_selection.clone();
             let updated_at = Utc::now();
             session.summary.updated_at = updated_at;
             if let Some(record) = session.record.as_mut() {
                 record.model = params.model;
                 record.model_binding_id = params.model_binding_id;
-                record.thinking = params.thinking;
+                record.reasoning_effort_selection = params.reasoning_effort_selection;
                 record.updated_at = updated_at;
                 if let Err(error) = self.rollout_store.append_session_meta(record) {
                     return self.error_response(
@@ -550,7 +550,7 @@ impl ServerRuntime {
                 forked_runtime.summary.title.clone(),
                 forked_runtime.summary.model.clone(),
                 forked_runtime.summary.model_binding_id.clone(),
-                forked_runtime.summary.thinking.clone(),
+                forked_runtime.summary.reasoning_effort_selection.clone(),
                 forked_runtime.runtime_context.provider.name().to_string(),
                 Some(params.session_id),
             );
@@ -760,7 +760,7 @@ impl ServerRuntime {
                                 .model_binding_id
                                 .as_deref()
                                 .or(Some(model.as_str())),
-                            source.summary.thinking.clone(),
+                            source.summary.reasoning_effort_selection.clone(),
                         )
                         .request_model;
                     let sequence = kept_items
@@ -775,10 +775,13 @@ impl ServerRuntime {
                         kind: devo_protocol::TurnKind::Regular,
                         model,
                         model_binding_id: source.summary.model_binding_id.clone(),
-                        thinking: source.summary.thinking.clone(),
+                        reasoning_effort_selection: source
+                            .summary
+                            .reasoning_effort_selection
+                            .clone(),
                         reasoning_effort: source.summary.reasoning_effort,
                         request_model,
-                        request_thinking: source.summary.thinking.clone(),
+                        request_thinking: source.summary.reasoning_effort_selection.clone(),
                         started_at: source.summary.created_at,
                         completed_at: Some(source.summary.updated_at),
                         usage: None,
@@ -806,7 +809,7 @@ impl ServerRuntime {
             ephemeral: source.summary.ephemeral,
             model: source.summary.model.clone(),
             model_binding_id: source.summary.model_binding_id.clone(),
-            thinking: source.summary.thinking.clone(),
+            reasoning_effort_selection: source.summary.reasoning_effort_selection.clone(),
             reasoning_effort: source.summary.reasoning_effort,
             total_input_tokens: source_core_session.total_input_tokens,
             total_output_tokens: source_core_session.total_output_tokens,

@@ -103,7 +103,7 @@ impl ServerRuntime {
         first_user_input: String,
     ) {
         for attempt in 1..=Self::MAX_TITLE_RETRIES {
-            let (model_selection, thinking, should_skip, runtime_context) = {
+            let (model_selection, reasoning_effort_selection, should_skip, runtime_context) = {
                 let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() else {
                     return;
                 };
@@ -112,7 +112,7 @@ impl ServerRuntime {
                     session_model_selection(&session.summary)
                         .map(str::to_string)
                         .unwrap_or_else(|| session.runtime_context.default_model.clone()),
-                    session.summary.thinking.clone(),
+                    session.summary.reasoning_effort_selection.clone(),
                     matches!(session.summary.title_state, SessionTitleState::Final(_)),
                     Arc::clone(&session.runtime_context),
                 )
@@ -122,11 +122,11 @@ impl ServerRuntime {
                 return;
             }
 
-            let turn_config =
-                runtime_context.resolve_turn_config(Some(model_selection.as_str()), thinking);
-            let resolved_request = turn_config
-                .model
-                .resolve_thinking_selection(turn_config.thinking_selection.as_deref());
+            let turn_config = runtime_context
+                .resolve_turn_config(Some(model_selection.as_str()), reasoning_effort_selection);
+            let resolved_request = turn_config.model.resolve_reasoning_effort_selection(
+                turn_config.reasoning_effort_selection.as_deref(),
+            );
             let request_model = turn_config.provider_request_model(&resolved_request.request_model);
 
             let response = match runtime_context

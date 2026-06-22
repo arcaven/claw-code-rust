@@ -106,7 +106,7 @@ async fn turn_start_append_failure_does_not_launch_model_turn_or_leave_session_a
             connection_id,
             serde_json::json!({
                 "id": 3,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": turn_start_params(session.session_id)
             }),
         )
@@ -135,7 +135,7 @@ async fn turn_start_append_failure_does_not_launch_model_turn_or_leave_session_a
             connection_id,
             serde_json::json!({
                 "id": 4,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": turn_start_params(session.session_id)
             }),
         )
@@ -172,7 +172,7 @@ async fn message_edit_previous_accepts_skip_restore_and_replaces_prompt_branch()
             connection_id,
             serde_json::json!({
                 "id": 6,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": turn_start_params(session.session_id)
             }),
         )
@@ -204,7 +204,7 @@ async fn message_edit_previous_accepts_skip_restore_and_replaces_prompt_branch()
             connection_id,
             serde_json::json!({
                 "id": 7,
-                "method": "message/editPrevious",
+                "method": "_devo/message/editPrevious",
                 "params": {
                     "session_id": session.session_id,
                     "expected_target_message_id": null,
@@ -268,7 +268,7 @@ async fn message_edit_previous_default_safe_restore_records_and_broadcasts() -> 
             connection_id,
             serde_json::json!({
                 "id": 6,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": turn_start_params(session.session_id)
             }),
         )
@@ -297,7 +297,7 @@ async fn message_edit_previous_default_safe_restore_records_and_broadcasts() -> 
             connection_id,
             serde_json::json!({
                 "id": 7,
-                "method": "message/editPrevious",
+                "method": "_devo/message/editPrevious",
                 "params": {
                     "session_id": session.session_id,
                     "expected_target_message_id": null,
@@ -371,7 +371,7 @@ async fn message_edit_previous_dispatches_to_edit_handler() -> Result<()> {
             connection_id,
             serde_json::json!({
                 "id": 6,
-                "method": "message/editPrevious",
+                "method": "_devo/message/editPrevious",
                 "params": {
                     "session_id": session.session_id,
                     "expected_target_message_id": null,
@@ -410,7 +410,7 @@ async fn message_edit_previous_rejects_malformed_edited_content_parts() -> Resul
             connection_id,
             serde_json::json!({
                 "id": 6,
-                "method": "message/editPrevious",
+                "method": "_devo/message/editPrevious",
                 "params": {
                     "session_id": session.session_id,
                     "expected_target_message_id": null,
@@ -450,9 +450,13 @@ async fn collect_notification_methods(
     while let Ok(Some(notification)) =
         timeout(Duration::from_millis(10), notifications_rx.recv()).await
     {
-        if let Some(method) = notification
-            .get("method")
-            .and_then(serde_json::Value::as_str)
+        if let Some(method) = notification["params"]["_meta"]["devo/originalMethod"]
+            .as_str()
+            .or_else(|| {
+                notification
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+            })
         {
             methods.push(method.to_string());
         }
@@ -582,7 +586,7 @@ async fn interrupt_turn(
             connection_id,
             serde_json::json!({
                 "id": 5,
-                "method": "turn/interrupt",
+                "method": "_devo/turn/interrupt",
                 "params": {
                     "session_id": session_id,
                     "turn_id": turn_id,

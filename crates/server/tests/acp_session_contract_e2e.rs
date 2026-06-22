@@ -314,7 +314,7 @@ async fn stdio_acp_session_config_options_select_model_binding() -> Result<()> {
             {
                 "slug": "test-model",
                 "display_name": "Test Model",
-                "thinking_capability": {
+                "reasoning_capability": {
                     "levels": ["low", "medium", "high"]
                 },
                 "default_reasoning_effort": "medium",
@@ -417,17 +417,21 @@ async fn stdio_acp_session_config_options_select_model_binding() -> Result<()> {
     );
     assert_model_config_option_values(model_option, &["alt-openai", "test-openai"])?;
     assert_config_option_lacks_value(model_option, "catalog-only-model")?;
-    let thought_option = acp_config_option(&session_new_response["result"], "thought_level")?;
+    let reasoning_effort_option =
+        acp_config_option(&session_new_response["result"], "thought_level")?;
     assert_eq!(
-        thought_option["name"],
+        reasoning_effort_option["name"],
         serde_json::json!("Reasoning Effort")
     );
     assert_eq!(
-        thought_option["category"],
+        reasoning_effort_option["category"],
         serde_json::json!("thought_level")
     );
-    assert_eq!(thought_option["currentValue"], serde_json::json!("medium"));
-    assert_config_option_values(thought_option, &["low", "medium", "high"])?;
+    assert_eq!(
+        reasoning_effort_option["currentValue"],
+        serde_json::json!("medium")
+    );
+    assert_config_option_values(reasoning_effort_option, &["low", "medium", "high"])?;
     let mode_option = acp_config_option(&session_new_response["result"], "mode")?;
     assert_eq!(mode_option["name"], serde_json::json!("Session Mode"));
     assert_eq!(mode_option["category"], serde_json::json!("mode"));
@@ -451,40 +455,44 @@ async fn stdio_acp_session_config_options_select_model_binding() -> Result<()> {
         }),
     )
     .await?;
-    let set_thought_response = read_stdio_json_until(
+    let set_reasoning_effort_response = read_stdio_json_until(
         &mut child,
         &mut stdout_reader,
         &mut stderr_reader,
-        "ACP session/set_config_option thought response",
+        "ACP session/set_config_option reasoning effort response",
         |value| value.get("id") == Some(&serde_json::json!(2)),
     )
     .await?;
-    let thought_option = acp_config_option(&set_thought_response["result"], "thought_level")?;
-    assert_eq!(thought_option["currentValue"], serde_json::json!("high"));
-    let model_option = acp_model_config_option(&set_thought_response["result"])?;
+    let reasoning_effort_option =
+        acp_config_option(&set_reasoning_effort_response["result"], "thought_level")?;
+    assert_eq!(
+        reasoning_effort_option["currentValue"],
+        serde_json::json!("high")
+    );
+    let model_option = acp_model_config_option(&set_reasoning_effort_response["result"])?;
     assert_eq!(
         model_option["currentValue"],
         serde_json::json!("test-openai")
     );
 
-    let thought_prompt = "use the selected ACP reasoning effort";
-    write_acp_prompt(&mut stdin, 3, &session_id, thought_prompt).await?;
-    let thought_prompt_messages = read_stdio_json_collect_until(
+    let reasoning_effort_prompt = "use the selected ACP reasoning effort";
+    write_acp_prompt(&mut stdin, 3, &session_id, reasoning_effort_prompt).await?;
+    let reasoning_effort_prompt_messages = read_stdio_json_collect_until(
         &mut child,
         &mut stdout_reader,
         &mut stderr_reader,
-        "ACP session/prompt response after thought update",
+        "ACP session/prompt response after reasoning effort update",
         |value| value.get("id") == Some(&serde_json::json!(3)),
     )
     .await?;
-    let thought_prompt_response = thought_prompt_messages
+    let reasoning_effort_prompt_response = reasoning_effort_prompt_messages
         .last()
-        .context("session/prompt after thought update produced a response")?;
-    assert_prompt_response(thought_prompt_response, 3);
+        .context("session/prompt after reasoning effort update produced a response")?;
+    assert_prompt_response(reasoning_effort_prompt_response, 3);
     let provider_request = recv_provider_prompt_request(
         &mut provider.requests,
-        "provider prompt request after thought option update",
-        thought_prompt,
+        "provider prompt request after reasoning effort option update",
+        reasoning_effort_prompt,
     )
     .await?;
     assert_eq!(provider_request["model"], serde_json::json!("test-model"));

@@ -244,9 +244,9 @@ fn prompt_turn_config(
         let provider_request_models = devo_core::ProviderRequestModelMap::new(
             provider_request_model_map_for_binding(&app_config.provider, &binding),
         );
-        let thinking_selection = app_config
+        let reasoning_effort_selection = app_config
             .provider
-            .model_thinking_selection
+            .model_reasoning_effort_selection
             .clone()
             .or(binding.default_reasoning_effort.clone());
         let mut turn_config = TurnConfig::with_provider_route(
@@ -254,7 +254,7 @@ fn prompt_turn_config(
             binding.model_name.clone(),
             provider_request_models,
             ProviderRoute::binding(binding.provider_id.clone(), binding.invocation_method),
-            thinking_selection,
+            reasoning_effort_selection,
         );
         turn_config.model_binding_id = Some(binding.binding_id);
         return turn_config;
@@ -263,7 +263,7 @@ fn prompt_turn_config(
     let selected_model = requested_model.unwrap_or(default_model);
     TurnConfig::new(
         catalog_model(selected_model),
-        app_config.provider.model_thinking_selection.clone(),
+        app_config.provider.model_reasoning_effort_selection.clone(),
     )
 }
 

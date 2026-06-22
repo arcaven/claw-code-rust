@@ -31,14 +31,15 @@ use devo_core::tools::ToolRegistry;
 use devo_protocol::Model;
 use devo_protocol::ModelRequest;
 use devo_protocol::ModelResponse;
+use devo_protocol::ReasoningCapability;
 use devo_protocol::ReasoningEffort;
 use devo_protocol::ResponseContent;
 use devo_protocol::ResponseMetadata;
+use devo_protocol::ServerEvent;
 use devo_protocol::SessionHistoryItemKind;
 use devo_protocol::SessionId;
 use devo_protocol::StopReason;
 use devo_protocol::StreamEvent;
-use devo_protocol::ThinkingCapability;
 use devo_protocol::TurnStatus;
 use devo_protocol::Usage;
 use devo_provider::ModelProviderSDK;
@@ -270,7 +271,7 @@ async fn runtime_rebuilds_sessions_from_rollout_and_resume_works() -> Result<()>
             connection_id,
             serde_json::json!({
                 "id": 2,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "persist this session" }],
@@ -314,7 +315,7 @@ async fn runtime_rebuilds_sessions_from_rollout_and_resume_works() -> Result<()>
             rebuilt_connection_id,
             serde_json::json!({
                 "id": 4,
-                "method": "session/resume",
+                "method": "_devo/session/resume",
                 "params": {
                     "session_id": session_id
                 }
@@ -371,7 +372,7 @@ async fn runtime_generates_final_title_and_persists_explicit_rename() -> Result<
             connection_id,
             serde_json::json!({
                 "id": 12,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "implement rollout persistence for the rust server" }],
@@ -393,7 +394,7 @@ async fn runtime_generates_final_title_and_persists_explicit_rename() -> Result<
             connection_id,
             serde_json::json!({
                 "id": 13,
-                "method": "session/resume",
+                "method": "_devo/session/resume",
                 "params": {
                     "session_id": session_id
                 }
@@ -419,7 +420,7 @@ async fn runtime_generates_final_title_and_persists_explicit_rename() -> Result<
             connection_id,
             serde_json::json!({
                 "id": 14,
-                "method": "session/title/update",
+                "method": "_devo/session/title/update",
                 "params": {
                     "session_id": session_id,
                     "title": "Rollout persistence follow-up"
@@ -450,7 +451,7 @@ async fn runtime_generates_final_title_and_persists_explicit_rename() -> Result<
             rebuilt_connection_id,
             serde_json::json!({
                 "id": 15,
-                "method": "session/resume",
+                "method": "_devo/session/resume",
                 "params": {
                     "session_id": session_id
                 }
@@ -507,7 +508,7 @@ async fn runtime_assigns_provisional_title_after_first_prompt() -> Result<()> {
             connection_id,
             serde_json::json!({
                 "id": 22,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "investigate why the current session title stays null" }],
@@ -584,7 +585,7 @@ async fn runtime_skips_invalid_rollout_files_when_loading_sessions() -> Result<(
             connection_id,
             serde_json::json!({
                 "id": 32,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "persist the valid session" }],
@@ -638,7 +639,7 @@ async fn resume_normalizes_historical_default_reasoning_effort() -> Result<()> {
     fn write_historical_rollout(
         data_root: &std::path::Path,
         session_id: &SessionId,
-        thinking: Option<String>,
+        reasoning_effort_selection: Option<String>,
     ) -> Result<()> {
         let now = chrono::Utc::now();
         let rollout_dir = data_root.join("sessions/2026/06/07");
@@ -657,7 +658,7 @@ async fn resume_normalizes_historical_default_reasoning_effort() -> Result<()> {
             model_provider: "openai_chat_completions".into(),
             model: Some("deepseek-v4-flash".into()),
             model_binding_id: None,
-            thinking: thinking.clone(),
+            reasoning_effort_selection: reasoning_effort_selection.clone(),
             cwd: data_root.to_path_buf(),
             additional_directories: Vec::new(),
             cli_version: "0.1.0".into(),
@@ -688,7 +689,7 @@ async fn resume_normalizes_historical_default_reasoning_effort() -> Result<()> {
             kind: devo_core::TurnKind::Regular,
             model: "deepseek-v4-flash".into(),
             model_binding_id: None,
-            thinking,
+            reasoning_effort_selection,
             request_model: "deepseek-v4-flash".into(),
             request_thinking: Some("default".into()),
             input_token_estimate: None,
@@ -740,7 +741,7 @@ async fn resume_normalizes_historical_default_reasoning_effort() -> Result<()> {
                 connection_id,
                 serde_json::json!({
                     "id": 34,
-                    "method": "session/resume",
+                    "method": "_devo/session/resume",
                     "params": {
                         "session_id": session_id
                     }
@@ -758,7 +759,10 @@ async fn resume_normalizes_historical_default_reasoning_effort() -> Result<()> {
             resume_result.session.model.as_deref(),
             Some("deepseek-v4-flash")
         );
-        assert_eq!(resume_result.session.thinking.as_deref(), Some("high"));
+        assert_eq!(
+            resume_result.session.reasoning_effort_selection.as_deref(),
+            Some("high")
+        );
         assert_eq!(
             resume_result.session.reasoning_effort,
             Some(ReasoningEffort::High)
@@ -802,7 +806,7 @@ async fn runtime_recovers_session_when_middle_rollout_line_is_corrupted() -> Res
             connection_id,
             serde_json::json!({
                 "id": 42,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "persist this session before corruption" }],
@@ -854,7 +858,7 @@ async fn runtime_recovers_session_when_middle_rollout_line_is_corrupted() -> Res
             rebuilt_connection_id,
             serde_json::json!({
                 "id": 43,
-                "method": "session/resume",
+                "method": "_devo/session/resume",
                 "params": {
                     "session_id": session_id
                 }
@@ -910,7 +914,7 @@ async fn session_compact_runs_asynchronously_and_emits_lifecycle_events() -> Res
             connection_id,
             serde_json::json!({
                 "id": 52,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "create some history first" }],
@@ -931,7 +935,7 @@ async fn session_compact_runs_asynchronously_and_emits_lifecycle_events() -> Res
             connection_id,
             serde_json::json!({
                 "id": 53,
-                "method": "session/compact",
+                "method": "_devo/session/compact",
                 "params": {
                     "session_id": session_id
                 }
@@ -986,7 +990,7 @@ async fn compacted_session_resume_keeps_full_transcript_after_restart() -> Resul
                 connection_id,
                 serde_json::json!({
                     "id": 62 + request_id,
-                    "method": "turn/start",
+                    "method": "_devo/turn/start",
                     "params": {
                         "session_id": session_id,
                         "input": [{ "type": "text", "text": large_prompt }],
@@ -1007,7 +1011,7 @@ async fn compacted_session_resume_keeps_full_transcript_after_restart() -> Resul
             connection_id,
             serde_json::json!({
                 "id": 70,
-                "method": "session/compact",
+                "method": "_devo/session/compact",
                 "params": {
                     "session_id": session_id
                 }
@@ -1027,7 +1031,7 @@ async fn compacted_session_resume_keeps_full_transcript_after_restart() -> Resul
             rebuilt_connection_id,
             serde_json::json!({
                 "id": 71,
-                "method": "session/resume",
+                "method": "_devo/session/resume",
                 "params": {
                     "session_id": session_id
                 }
@@ -1098,7 +1102,7 @@ async fn compacted_session_next_query_uses_compaction_summary_after_restart() ->
                 connection_id,
                 serde_json::json!({
                     "id": 82 + request_id,
-                    "method": "turn/start",
+                    "method": "_devo/turn/start",
                     "params": {
                         "session_id": session_id,
                         "input": [{ "type": "text", "text": large_prompt }],
@@ -1119,7 +1123,7 @@ async fn compacted_session_next_query_uses_compaction_summary_after_restart() ->
             connection_id,
             serde_json::json!({
                 "id": 90,
-                "method": "session/compact",
+                "method": "_devo/session/compact",
                 "params": {
                     "session_id": session_id
                 }
@@ -1135,13 +1139,28 @@ async fn compacted_session_next_query_uses_compaction_summary_after_restart() ->
     rebuilt_runtime.load_persisted_sessions().await?;
     let (rebuilt_connection_id, mut rebuilt_notifications_rx) =
         initialize_connection(&rebuilt_runtime).await?;
+    let resume_response = rebuilt_runtime
+        .handle_incoming(
+            rebuilt_connection_id,
+            serde_json::json!({
+                "id": 90,
+                "method": "_devo/session/resume",
+                "params": {
+                    "session_id": session_id
+                }
+            }),
+        )
+        .await
+        .context("session/resume response after restart")?;
+    let _: devo_server::SuccessResponse<devo_server::SessionResumeResult> =
+        serde_json::from_value(resume_response)?;
 
     let _ = rebuilt_runtime
         .handle_incoming(
             rebuilt_connection_id,
             serde_json::json!({
                 "id": 91,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "go on" }],
@@ -1182,23 +1201,40 @@ async fn compacted_session_next_query_uses_compaction_summary_after_restart() ->
 #[tokio::test]
 async fn configured_model_name_is_used_for_turn_metadata_and_provider_request() -> Result<()> {
     let data_root = TempDir::new()?;
+    std::fs::create_dir_all(data_root.path().join(".devo"))?;
     std::fs::write(
-        data_root.path().join("config.toml"),
+        data_root.path().join(".devo").join("models.json"),
         r#"
-[defaults]
-model_binding = "main"
-
-[providers.openrouter]
-enabled = true
-name = "OpenRouter"
-wire_apis = ["openai_chat_completions"]
-
-[model_bindings.main]
-enabled = true
-model_slug = "test-model"
-provider = "openrouter"
-model_name = "vendor/test-model"
-invocation_method = "openai_chat_completions"
+[
+  {
+    "slug": "test-model",
+    "display_name": "test-model",
+    "provider": "openai_chat_completions",
+    "reasoning_capability": "toggle",
+    "reasoning_implementation": {
+      "model_variant": {
+        "variants": [
+          {
+            "selection_value": "disabled",
+            "model_slug": "test-model",
+            "reasoning_effort": null,
+            "label": "Off",
+            "description": "Disable reasoning effort"
+          },
+          {
+            "selection_value": "enabled",
+            "model_slug": "vendor/test-model",
+            "reasoning_effort": "medium",
+            "label": "On",
+            "description": "Enable reasoning effort"
+          }
+        ]
+      }
+    },
+    "base_instructions": "Test model",
+    "priority": 999
+  }
+]
 "#,
     )?;
     let provider = Arc::new(CapturingProvider::default());
@@ -1233,7 +1269,7 @@ invocation_method = "openai_chat_completions"
             connection_id,
             serde_json::json!({
                 "id": 102,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "use configured model name" }],
@@ -1292,7 +1328,7 @@ fn build_runtime_with_provider(
                 Model {
                     slug: "deepseek-v4-flash".to_string(),
                     display_name: "deepseek-v4-flash".to_string(),
-                    thinking_capability: ThinkingCapability::ToggleWithLevels(vec![
+                    reasoning_capability: ReasoningCapability::ToggleWithLevels(vec![
                         ReasoningEffort::High,
                         ReasoningEffort::Max,
                     ]),
@@ -1376,11 +1412,73 @@ fn decode_acp_session_list_response(
         .collect()
 }
 
+fn legacy_event_from_acp_notification(value: serde_json::Value) -> serde_json::Value {
+    if value.get("method") != Some(&serde_json::json!("session/update")) {
+        return value;
+    }
+    let Ok(notification) =
+        serde_json::from_value::<devo_protocol::AcpSessionNotification>(value["params"].clone())
+    else {
+        return value;
+    };
+    let Some((method, event)) = devo_protocol::original_event_from_acp_notification(&notification)
+    else {
+        return value;
+    };
+    let params = match event {
+        ServerEvent::TurnCompleted(payload)
+        | ServerEvent::TurnInterrupted(payload)
+        | ServerEvent::TurnFailed(payload)
+        | ServerEvent::TurnStarted(payload) => serde_json::to_value(payload),
+        ServerEvent::SessionCompactionStarted(payload)
+        | ServerEvent::SessionCompactionCompleted(payload)
+        | ServerEvent::SessionTitleUpdated(payload)
+        | ServerEvent::SessionStarted(payload) => serde_json::to_value(payload),
+        ServerEvent::ItemCompleted(payload) | ServerEvent::ItemStarted(payload) => {
+            serde_json::to_value(payload)
+        }
+        ServerEvent::ItemDelta {
+            delta_kind,
+            payload,
+        } => serde_json::to_value(serde_json::json!({
+            "delta_kind": delta_kind,
+            "payload": payload,
+        })),
+        other => serde_json::to_value(other),
+    }
+    .expect("serialize legacy event params");
+    serde_json::json!({
+        "method": method,
+        "params": params,
+    })
+}
+
+fn title_from_notification(value: &serde_json::Value) -> Option<&str> {
+    if value.get("method") == Some(&serde_json::json!("session/title/updated")) {
+        return value["params"]["session"]["title"].as_str();
+    }
+    if value.get("method") == Some(&serde_json::json!("session/update"))
+        && value["params"]["update"]["sessionUpdate"] == serde_json::json!("session_info_update")
+    {
+        return value["params"]["update"]["title"].as_str();
+    }
+    None
+}
+
+fn notification_matches_method(value: &serde_json::Value, method: &str) -> bool {
+    value.get("method") == Some(&serde_json::json!(method))
+        || (method == "item/agentMessage/delta"
+            && value.get("method") == Some(&serde_json::json!("session/update"))
+            && value["params"]["update"]["sessionUpdate"]
+                == serde_json::json!("agent_message_chunk"))
+}
+
 async fn wait_for_turn_completed(
     notifications_rx: &mut mpsc::Receiver<serde_json::Value>,
 ) -> Result<()> {
     timeout(Duration::from_secs(5), async {
         while let Some(value) = notifications_rx.recv().await {
+            let value = legacy_event_from_acp_notification(value);
             if value.get("method") == Some(&serde_json::json!("turn/completed")) {
                 return Ok(());
             }
@@ -1398,17 +1496,14 @@ async fn wait_for_title_update(
 ) -> Result<()> {
     timeout(Duration::from_secs(5), async {
         while let Some(value) = notifications_rx.recv().await {
-            if value.get("method") != Some(&serde_json::json!("session/title/updated")) {
-                continue;
-            }
-            if value["params"]["session"]["title"] == serde_json::json!(expected_title) {
+            if title_from_notification(&value) == Some(expected_title) {
                 return Ok(());
             }
         }
-        anyhow::bail!("notification channel closed before expected session/title/updated")
+        anyhow::bail!("notification channel closed before expected title update")
     })
     .await
-    .context("timed out waiting for session/title/updated")??;
+    .context("timed out waiting for title update")??;
     Ok(())
 }
 
@@ -1417,17 +1512,14 @@ async fn wait_for_any_title_update(
 ) -> Result<String> {
     timeout(Duration::from_secs(5), async {
         while let Some(value) = notifications_rx.recv().await {
-            if value.get("method") != Some(&serde_json::json!("session/title/updated")) {
-                continue;
-            }
-            if let Some(title) = value["params"]["session"]["title"].as_str() {
+            if let Some(title) = title_from_notification(&value) {
                 return Ok(title.to_string());
             }
         }
-        anyhow::bail!("notification channel closed before any session/title/updated")
+        anyhow::bail!("notification channel closed before any title update")
     })
     .await
-    .context("timed out waiting for session/title/updated")?
+    .context("timed out waiting for title update")?
 }
 
 async fn wait_for_notification_method(
@@ -1443,11 +1535,13 @@ async fn wait_for_notification_value(
     notifications_rx: &mut mpsc::Receiver<serde_json::Value>,
     method: &str,
 ) -> Result<serde_json::Value> {
-    let wanted = serde_json::json!(method);
     let value = timeout(Duration::from_secs(5), async {
         while let Some(value) = notifications_rx.recv().await {
-            if value.get("method") == Some(&wanted) {
-                return Ok(value);
+            let normalized = legacy_event_from_acp_notification(value.clone());
+            if notification_matches_method(&normalized, method)
+                || notification_matches_method(&value, method)
+            {
+                return Ok(normalized);
             }
         }
         anyhow::bail!("notification channel closed before {method}")
@@ -1492,7 +1586,7 @@ async fn interrupt_mid_stream_does_not_duplicate_last_item_on_resume() -> Result
             connection_id,
             serde_json::json!({
                 "id": 2,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "interrupt me" }],
@@ -1523,7 +1617,7 @@ async fn interrupt_mid_stream_does_not_duplicate_last_item_on_resume() -> Result
             connection_id,
             serde_json::json!({
                 "id": 3,
-                "method": "turn/interrupt",
+                "method": "_devo/turn/interrupt",
                 "params": {
                     "session_id": session_id,
                     "turn_id": turn_id,
@@ -1552,7 +1646,7 @@ async fn interrupt_mid_stream_does_not_duplicate_last_item_on_resume() -> Result
             rebuilt_cid,
             serde_json::json!({
                 "id": 4,
-                "method": "session/resume",
+                "method": "_devo/session/resume",
                 "params": {
                     "session_id": session_id
                 }

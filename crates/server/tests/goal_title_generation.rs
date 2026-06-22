@@ -84,7 +84,7 @@ async fn goal_set_objective_generates_session_title_for_new_session() -> Result<
             connection_id,
             serde_json::json!({
                 "id": 3,
-                "method": "goal/set",
+                "method": "_devo/goal/set",
                 "params": {
                     "sessionId": session_id,
                     "objective": "investigate goal title generation",
@@ -137,7 +137,7 @@ async fn goal_create_rejects_unknown_session() -> Result<()> {
             connection_id,
             serde_json::json!({
                 "id": 5,
-                "method": "goal/create",
+                "method": "_devo/goal/create",
                 "params": {
                     "sessionId": unknown_session_id,
                     "objective": "unknown session goal",
@@ -175,7 +175,7 @@ async fn goal_set_rejects_unknown_session() -> Result<()> {
             connection_id,
             serde_json::json!({
                 "id": 6,
-                "method": "goal/set",
+                "method": "_devo/goal/set",
                 "params": {
                     "sessionId": unknown_session_id,
                     "objective": "unknown session goal",
@@ -301,10 +301,15 @@ async fn wait_for_title_update(
 ) -> Result<()> {
     timeout(Duration::from_secs(/*secs*/ 5), async {
         while let Some(value) = notifications_rx.recv().await {
-            if value.get("method") != Some(&serde_json::json!("session/title/updated")) {
-                continue;
-            }
-            if value["params"]["session"]["title"] == serde_json::json!(expected_title) {
+            let is_legacy_title_update = value.get("method")
+                == Some(&serde_json::json!("session/title/updated"))
+                && value["params"]["session"]["title"] == serde_json::json!(expected_title);
+            let is_acp_title_update = value.get("method")
+                == Some(&serde_json::json!("session/update"))
+                && value["params"]["update"]["sessionUpdate"]
+                    == serde_json::json!("session_info_update")
+                && value["params"]["update"]["title"] == serde_json::json!(expected_title);
+            if is_legacy_title_update || is_acp_title_update {
                 return Ok(());
             }
         }
@@ -377,7 +382,7 @@ async fn assert_goal_status_empty(
             connection_id,
             serde_json::json!({
                 "id": 7,
-                "method": "goal/status",
+                "method": "_devo/goal/status",
                 "params": {
                     "sessionId": session_id
                 }

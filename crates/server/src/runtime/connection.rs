@@ -178,6 +178,33 @@ impl ServerRuntime {
 
         let client_method = devo_extension_inner_method(&method).and_then(ClientMethod::parse);
         let response = match client_method {
+            None if method == "session/start" => {
+                let request_id = id?;
+                let params: SessionStartParams = match serde_json::from_value(params) {
+                    Ok(params) => params,
+                    Err(error) => {
+                        return Some(self.error_response(
+                            request_id,
+                            ProtocolErrorCode::InvalidParams,
+                            format!("invalid session/start params: {error}"),
+                        ));
+                    }
+                };
+                let response = self
+                    .start_session_with_registry(connection_id, request_id, params, None)
+                    .await;
+                if let Ok(success) =
+                    serde_json::from_value::<SuccessResponse<SessionStartResult>>(response.clone())
+                {
+                    self.subscribe_connection_to_session(
+                        connection_id,
+                        success.result.session.session_id,
+                        None,
+                    )
+                    .await;
+                }
+                Some(response)
+            }
             None if method == ACP_SESSION_LIST_METHOD => {
                 Some(self.handle_acp_session_list(id?, params).await)
             }
@@ -209,7 +236,7 @@ impl ServerRuntime {
             None if method == ACP_SESSION_SET_CONFIG_OPTION_METHOD => {
                 Some(self.handle_acp_session_set_config_option(id?, params).await)
             }
-            // update session metadata, current including model and reason effort (thinking), the term 'thinking' should be changed to 'reasoning_effort'
+            // Update session metadata, including the current model and reasoning effort.
             Some(ClientMethod::SessionMetadataUpdate) => {
                 Some(self.handle_session_metadata_update(id?, params).await)
             }

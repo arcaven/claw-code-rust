@@ -2,7 +2,7 @@
 //!
 //! `ChatWidget` owns the v2 conversation surface: committed history cells, the
 //! active bottom input pane, and the Claw-local app events produced by user
-//! interaction. Protocol thinking choices come from `devo_protocol::thinking`
+//! interaction. Protocol reasoning choices come from `devo_protocol`
 //! through `Model` instead of a TUI-local reasoning enum.
 
 use std::cell::Cell;
@@ -72,7 +72,7 @@ mod text_stream;
 
 mod transcript_view;
 
-mod thinking;
+mod reasoning_effort;
 
 mod worker_events;
 
@@ -88,7 +88,7 @@ pub(crate) const MCP_SERVERS_TRANSCRIPT_TITLE: &str = "⬡  MCP Servers";
 pub(crate) const SKILLS_TRANSCRIPT_TITLE: &str = "▦  Skills";
 
 #[cfg(test)]
-pub(crate) use self::thinking::ThinkingListEntry;
+pub(crate) use self::reasoning_effort::ReasoningEffortListEntry;
 pub(crate) use self::transcript_view::ActiveCellTranscriptKey;
 pub(crate) use self::transcript_view::TranscriptOverlayCell;
 
@@ -97,7 +97,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_session: TuiSessionState,
-    pub(crate) initial_thinking_selection: Option<String>,
+    pub(crate) initial_reasoning_effort_selection: Option<String>,
     pub(crate) initial_permission_preset: devo_protocol::PermissionPreset,
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
@@ -211,14 +211,14 @@ enum DotStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickerMode {
     Model,
-    Thinking,
+    ReasoningEffort,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingModelSelection {
     selection: String,
     display_name: String,
-    thinking_selection: Option<String>,
+    reasoning_effort_selection: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,9 +241,9 @@ pub(crate) struct ChatWidget {
     // Frame requester for scheduling future frame draws on the TUI event loop.
     frame_requester: FrameRequester,
     // The session state utlized for TUI rendering, currently simple: cwd, Model, ProviderWireApi
-    // TODO: Shoule expland the session state, and move thinking_selection into session state.
+    // TODO: Shoule expland the session state, and move reasoning_effort_selection into session state.
     session: TuiSessionState,
-    thinking_selection: Option<String>,
+    reasoning_effort_selection: Option<String>,
     // sub widget, bottom pane, including such input textarea, slash command popup, status summary.
     bottom_pane: BottomPane,
     active_cell: Option<Box<dyn HistoryCell>>,
@@ -316,7 +316,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_session,
-            initial_thinking_selection,
+            initial_reasoning_effort_selection,
             initial_permission_preset,
             initial_user_message,
             enhanced_keys_supported,
@@ -328,12 +328,12 @@ impl ChatWidget {
             initial_theme_name,
         } = common;
 
-        // Prefer an explicit startup selection, but fall back to the model's default thinking mode.
-        let thinking_selection = initial_thinking_selection.or_else(|| {
+        // Prefer an explicit startup selection, but fall back to the model's default reasoning effort.
+        let reasoning_effort_selection = initial_reasoning_effort_selection.or_else(|| {
             initial_session
                 .model
                 .as_ref()
-                .and_then(Model::default_thinking_selection)
+                .and_then(Model::default_reasoning_effort_selection)
         });
 
         // Queue any startup user message so it is processed through the same path as normal input.
@@ -372,7 +372,7 @@ impl ChatWidget {
                 cwd: &initial_session.cwd,
                 model: initial_session.model.as_ref(),
                 request_model: initial_session.request_model.as_deref(),
-                thinking_selection: thinking_selection.as_deref(),
+                reasoning_effort_selection: reasoning_effort_selection.as_deref(),
                 is_first_run,
                 startup_tooltip_override,
                 accent_color: initial_accent_color,
@@ -394,7 +394,7 @@ impl ChatWidget {
             app_event_tx,
             frame_requester,
             session: initial_session,
-            thinking_selection,
+            reasoning_effort_selection,
             bottom_pane,
             active_cell: None,
             active_cell_revision: 0,

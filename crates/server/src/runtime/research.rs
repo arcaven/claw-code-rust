@@ -379,12 +379,14 @@ impl ServerRuntime {
                 params.model.as_deref(),
                 &session.summary,
             );
-            let requested_thinking = params
-                .thinking
+            let requested_reasoning_effort_selection = params
+                .reasoning_effort_selection
                 .clone()
-                .or_else(|| session.summary.thinking.clone());
-            let turn_config =
-                runtime_context.resolve_turn_config(requested_model, requested_thinking.clone());
+                .or_else(|| session.summary.reasoning_effort_selection.clone());
+            let turn_config = runtime_context.resolve_turn_config(
+                requested_model,
+                requested_reasoning_effort_selection.clone(),
+            );
             if matches!(
                 turn_config.web_search,
                 devo_core::ResolvedWebSearchConfig::Disabled
@@ -416,9 +418,9 @@ impl ServerRuntime {
                 session.core_session.lock().await.config.permission_mode = permission_mode;
                 session.config.permission_mode = permission_mode;
             }
-            let resolved_request = turn_config
-                .model
-                .resolve_thinking_selection(turn_config.thinking_selection.as_deref());
+            let resolved_request = turn_config.model.resolve_reasoning_effort_selection(
+                turn_config.reasoning_effort_selection.as_deref(),
+            );
             let request_model = turn_config.provider_request_model(&resolved_request.request_model);
             apply_turn_config_to_session_summary(&mut session.summary, &turn_config);
             let turn = TurnMetadata {
@@ -432,7 +434,7 @@ impl ServerRuntime {
                 kind: devo_core::TurnKind::Research,
                 model: turn_config.model.slug.clone(),
                 model_binding_id: turn_config.model_binding_id.clone(),
-                thinking: turn_config.thinking_selection.clone(),
+                reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
                 reasoning_effort: resolved_request.effective_reasoning_effort,
                 request_model,
                 request_thinking: resolved_request.request_thinking,
@@ -2941,9 +2943,11 @@ pub(crate) fn research_session_context(
     system_prompt: String,
 ) -> devo_core::SessionContext {
     let model = &turn_config.model;
-    let thinking_selection = turn_config.thinking_selection.as_deref();
-    let normalized_thinking_selection = model.normalize_thinking_selection(thinking_selection);
-    let resolved = model.resolve_thinking_selection(normalized_thinking_selection.as_deref());
+    let reasoning_effort_selection = turn_config.reasoning_effort_selection.as_deref();
+    let normalized_reasoning_effort_selection =
+        model.normalize_reasoning_effort_selection(reasoning_effort_selection);
+    let resolved =
+        model.resolve_reasoning_effort_selection(normalized_reasoning_effort_selection.as_deref());
     devo_core::SessionContext {
         base_instructions: system_prompt,
         available_skills: None,
@@ -2953,7 +2957,7 @@ pub(crate) fn research_session_context(
         language: devo_core::LanguageContext::default(),
         persona: devo_core::Persona::Default,
         model: model.clone(),
-        thinking_selection: normalized_thinking_selection,
+        reasoning_effort_selection: normalized_reasoning_effort_selection,
         reasoning_effort: resolved.effective_reasoning_effort,
         system_prompt_mode: devo_core::SystemPromptMode::DeepResearch,
     }
@@ -2966,7 +2970,7 @@ fn model_text_request(
 ) -> devo_protocol::ModelRequest {
     let resolved = turn_config
         .model
-        .resolve_thinking_selection(turn_config.thinking_selection.as_deref());
+        .resolve_reasoning_effort_selection(turn_config.reasoning_effort_selection.as_deref());
     devo_protocol::ModelRequest {
         model: turn_config.provider_request_model(&resolved.request_model),
         system: Some(research_stage_system(stage_prompt))
@@ -2985,7 +2989,7 @@ fn model_text_request(
             top_p: turn_config.model.top_p,
             top_k: turn_config.model.top_k.map(|value| value as u32),
         },
-        thinking: resolved.request_thinking,
+        request_thinking: resolved.request_thinking,
         reasoning_effort: resolved.request_reasoning_effort,
         extra_body: resolved.extra_body,
     }

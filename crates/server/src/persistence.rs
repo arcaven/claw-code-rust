@@ -106,7 +106,7 @@ impl RolloutStore {
         title: Option<String>,
         model: Option<String>,
         model_binding_id: Option<String>,
-        thinking: Option<String>,
+        reasoning_effort_selection: Option<String>,
         model_provider: String,
         parent_session_id: Option<SessionId>,
     ) -> SessionRecord {
@@ -127,7 +127,7 @@ impl RolloutStore {
             model_provider,
             model,
             model_binding_id,
-            thinking,
+            reasoning_effort_selection,
             cwd,
             additional_directories,
             cli_version: env!("CARGO_PKG_VERSION").into(),
@@ -728,12 +728,12 @@ impl ReplayState {
                 .filter(|selection| !selection.eq_ignore_ascii_case("default"))
                 .map(str::to_ascii_lowercase)
         };
-        let explicit_thinking = self
+        let explicit_reasoning_effort_selection = self
             .latest_turn_metadata
             .as_ref()
-            .and_then(|turn| concrete_selection(turn.thinking.as_deref()))
-            .or_else(|| concrete_selection(record.thinking.as_deref()));
-        let context_thinking = core_session
+            .and_then(|turn| concrete_selection(turn.reasoning_effort_selection.as_deref()))
+            .or_else(|| concrete_selection(record.reasoning_effort_selection.as_deref()));
+        let context_reasoning_effort_selection = core_session
             .latest_turn_context
             .as_ref()
             .and_then(|context| context.reasoning_effort)
@@ -744,16 +744,19 @@ impl ReplayState {
                     .and_then(|context| context.reasoning_effort)
             })
             .map(|effort| effort.label().to_lowercase());
-        let summary_thinking = turn_config.model.normalize_thinking_selection(
-            explicit_thinking.as_deref().or(context_thinking.as_deref()),
-        );
+        let summary_reasoning_effort_selection =
+            turn_config.model.normalize_reasoning_effort_selection(
+                explicit_reasoning_effort_selection
+                    .as_deref()
+                    .or(context_reasoning_effort_selection.as_deref()),
+            );
         let summary_reasoning_effort = turn_config
             .model
-            .resolve_thinking_selection(summary_thinking.as_deref())
+            .resolve_reasoning_effort_selection(summary_reasoning_effort_selection.as_deref())
             .effective_reasoning_effort;
         record.model = Some(turn_config.model.slug.clone());
         record.model_binding_id = turn_config.model_binding_id.clone();
-        record.thinking = summary_thinking.clone();
+        record.reasoning_effort_selection = summary_reasoning_effort_selection.clone();
 
         let summary = SessionMetadata {
             session_id: record.id,
@@ -770,7 +773,7 @@ impl ReplayState {
             ephemeral: false,
             model: Some(turn_config.model.slug),
             model_binding_id: turn_config.model_binding_id.clone(),
-            thinking: summary_thinking,
+            reasoning_effort_selection: summary_reasoning_effort_selection,
             reasoning_effort: summary_reasoning_effort,
             total_input_tokens: self.total_input_tokens,
             total_output_tokens: self.total_output_tokens,
@@ -1397,7 +1400,7 @@ pub(crate) fn build_turn_record(
         kind: turn.kind.clone(),
         model: turn.model.clone(),
         model_binding_id: turn.model_binding_id.clone(),
-        thinking: turn.thinking.clone(),
+        reasoning_effort_selection: turn.reasoning_effort_selection.clone(),
         request_model: turn.request_model.clone(),
         request_thinking: turn.request_thinking.clone(),
         input_token_estimate: None,
@@ -1419,7 +1422,7 @@ fn turn_metadata_from_record(turn: &TurnRecord) -> TurnMetadata {
         kind: turn.kind.clone(),
         model: turn.model.clone(),
         model_binding_id: turn.model_binding_id.clone(),
-        thinking: turn.thinking.clone(),
+        reasoning_effort_selection: turn.reasoning_effort_selection.clone(),
         reasoning_effort: turn
             .turn_context
             .as_ref()
@@ -1616,7 +1619,7 @@ mod tests {
                     kind: TurnKind::Regular,
                     model: "model-a".into(),
                     model_binding_id: None,
-                    thinking: None,
+                    reasoning_effort_selection: None,
                     request_model: "model-a".into(),
                     request_thinking: None,
                     input_token_estimate: None,
@@ -1702,7 +1705,7 @@ mod tests {
                     kind: TurnKind::Regular,
                     model: "model-a".into(),
                     model_binding_id: None,
-                    thinking: None,
+                    reasoning_effort_selection: None,
                     request_model: "model-a".into(),
                     request_thinking: None,
                     input_token_estimate: None,
@@ -2026,7 +2029,7 @@ mod tests {
                 slug: "model-a".into(),
                 ..Model::default()
             },
-            thinking_selection: None,
+            reasoning_effort_selection: None,
             reasoning_effort: None,
             system_prompt_mode: devo_core::SystemPromptMode::CodingAgent,
         };
@@ -2042,7 +2045,7 @@ mod tests {
                 slug: "model-b".into(),
                 ..Model::default()
             },
-            thinking_selection: Some("enabled".into()),
+            reasoning_effort_selection: Some("enabled".into()),
             reasoning_effort: None,
             observed_agents_snapshot: None,
             collaboration_mode: devo_core::CollaborationMode::Build,
@@ -2064,7 +2067,7 @@ mod tests {
                     model_provider: "test".into(),
                     model: Some("model-a".into()),
                     model_binding_id: None,
-                    thinking: None,
+                    reasoning_effort_selection: None,
                     cwd: PathBuf::from("/tmp/root"),
                     additional_directories: Vec::new(),
                     cli_version: "0.1.0".into(),
@@ -2098,7 +2101,7 @@ mod tests {
                     kind: devo_core::TurnKind::Regular,
                     model: "model-b".into(),
                     model_binding_id: None,
-                    thinking: Some("enabled".into()),
+                    reasoning_effort_selection: Some("enabled".into()),
                     request_model: "model-b".into(),
                     request_thinking: Some("enabled".into()),
                     input_token_estimate: None,

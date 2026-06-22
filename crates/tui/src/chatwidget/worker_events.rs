@@ -115,7 +115,7 @@ impl ChatWidget {
             WorkerEvent::TurnStarted {
                 model,
                 model_binding_id,
-                thinking,
+                reasoning_effort_selection,
                 reasoning_effort,
                 turn_id,
                 ..
@@ -129,7 +129,7 @@ impl ChatWidget {
                 self.pending_proposed_plan_actions = false;
                 self.current_turn_has_user_shell_command = false;
                 self.update_session_model_selection(model, model_binding_id);
-                self.thinking_selection = thinking;
+                self.reasoning_effort_selection = reasoning_effort_selection;
                 self.session.reasoning_effort = reasoning_effort;
                 self.refresh_header_box();
                 self.busy = true;
@@ -1052,7 +1052,7 @@ impl ChatWidget {
                 cwd,
                 model,
                 model_binding_id,
-                thinking,
+                reasoning_effort_selection,
                 reasoning_effort,
                 active_agent_label,
                 last_query_total_tokens: _,
@@ -1062,7 +1062,7 @@ impl ChatWidget {
                 self.resume_browser_loading = false;
                 self.session.cwd = cwd;
                 self.update_session_model_selection(model, model_binding_id);
-                self.thinking_selection = thinking;
+                self.reasoning_effort_selection = reasoning_effort_selection;
                 self.session.reasoning_effort = reasoning_effort;
                 self.session.active_agent_label = active_agent_label.clone();
                 self.bottom_pane.set_active_agent_label(active_agent_label);
@@ -1099,7 +1099,7 @@ impl ChatWidget {
                 title,
                 model,
                 model_binding_id,
-                thinking,
+                reasoning_effort_selection,
                 reasoning_effort,
                 active_agent_label,
                 total_input_tokens,
@@ -1118,7 +1118,7 @@ impl ChatWidget {
                 if let Some(model) = model {
                     self.update_session_model_selection(model, model_binding_id);
                 }
-                self.thinking_selection = thinking;
+                self.reasoning_effort_selection = reasoning_effort_selection;
                 self.session.reasoning_effort = reasoning_effort;
                 self.session.active_agent_label = active_agent_label.clone();
                 self.bottom_pane.set_active_agent_label(active_agent_label);

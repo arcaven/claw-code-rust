@@ -470,7 +470,7 @@ impl SessionProjector for DefaultProjection {
             ephemeral,
             model: session.model.clone(),
             model_binding_id: session.model_binding_id.clone(),
-            thinking: session.thinking.clone(),
+            reasoning_effort_selection: session.reasoning_effort_selection.clone(),
             reasoning_effort: session
                 .latest_turn_context
                 .as_ref()
@@ -502,7 +502,7 @@ impl TurnProjector for DefaultProjection {
             kind: turn.kind.clone(),
             model: turn.model.clone(),
             model_binding_id: turn.model_binding_id.clone(),
-            thinking: turn.thinking.clone(),
+            reasoning_effort_selection: turn.reasoning_effort_selection.clone(),
             reasoning_effort: turn
                 .turn_context
                 .as_ref()

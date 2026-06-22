@@ -147,10 +147,10 @@ impl ServerRuntimeDependencies {
     pub(crate) fn resolve_turn_config(
         &self,
         requested_model: Option<&str>,
-        thinking_selection: Option<String>,
+        reasoning_effort_selection: Option<String>,
     ) -> TurnConfig {
         self.process_context
-            .resolve_turn_config(requested_model, thinking_selection)
+            .resolve_turn_config(requested_model, reasoning_effort_selection)
     }
 
     /// Should move the discover skill main logic to skills crate, and server just keep a simple wrapper.
@@ -447,8 +447,10 @@ invocation_method = "openai_chat_completions"
             .cloned();
         eprintln!("loaded provider web_search: {loaded:?}");
 
-        let turn_config =
-            deps.resolve_turn_config(Some("vendor/model-name"), /*thinking_selection*/ None);
+        let turn_config = deps.resolve_turn_config(
+            Some("vendor/model-name"),
+            /*reasoning_effort_selection*/ None,
+        );
 
         assert_eq!(turn_config.model.slug, "catalog-slug");
         assert_eq!(turn_config.request_model, "vendor/model-name");
@@ -532,8 +534,10 @@ invocation_method = "openai_chat_completions"
 "#,
         );
 
-        let turn_config =
-            deps.resolve_turn_config(Some("vendor/model-name"), /*thinking_selection*/ None);
+        let turn_config = deps.resolve_turn_config(
+            Some("vendor/model-name"),
+            /*reasoning_effort_selection*/ None,
+        );
 
         assert_eq!(
             turn_config.web_search,
@@ -571,8 +575,10 @@ mode = "disabled"
 "#,
         );
 
-        let turn_config =
-            deps.resolve_turn_config(Some("vendor/model-name"), /*thinking_selection*/ None);
+        let turn_config = deps.resolve_turn_config(
+            Some("vendor/model-name"),
+            /*reasoning_effort_selection*/ None,
+        );
 
         assert_eq!(
             turn_config.web_search,

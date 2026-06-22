@@ -41,13 +41,14 @@ impl ServerRuntime {
             let (turn_config, resolved_request) = {
                 let session = session_arc.lock().await;
                 let requested_model = session_model_selection(&session.summary);
-                let requested_thinking = session.summary.thinking.clone();
+                let requested_reasoning_effort_selection =
+                    session.summary.reasoning_effort_selection.clone();
                 let turn_config = session
                     .runtime_context
-                    .resolve_turn_config(requested_model, requested_thinking);
-                let resolved_request = turn_config
-                    .model
-                    .resolve_thinking_selection(turn_config.thinking_selection.as_deref());
+                    .resolve_turn_config(requested_model, requested_reasoning_effort_selection);
+                let resolved_request = turn_config.model.resolve_reasoning_effort_selection(
+                    turn_config.reasoning_effort_selection.as_deref(),
+                );
                 (turn_config, resolved_request)
             };
             let request_model = turn_config.provider_request_model(&resolved_request.request_model);
@@ -69,7 +70,7 @@ impl ServerRuntime {
                     kind: devo_core::TurnKind::Regular,
                     model: turn_config.model.slug.clone(),
                     model_binding_id: turn_config.model_binding_id.clone(),
-                    thinking: turn_config.thinking_selection.clone(),
+                    reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
                     reasoning_effort: resolved_request.effective_reasoning_effort,
                     request_model,
                     request_thinking: resolved_request.request_thinking.clone(),
@@ -807,7 +808,7 @@ mod tests {
             kind: devo_core::TurnKind::Regular,
             model: "model-a".into(),
             model_binding_id: None,
-            thinking: None,
+            reasoning_effort_selection: None,
             reasoning_effort: None,
             request_model: "provider/model-a".into(),
             request_thinking: None,

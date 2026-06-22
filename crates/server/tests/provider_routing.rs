@@ -192,6 +192,7 @@ async fn session_model_switch_routes_turn_and_title_to_selected_provider_binding
 }
 
 fn write_duplicate_slug_provider_config(data_root: &std::path::Path) -> Result<()> {
+    write_test_auth_config(data_root)?;
     std::fs::write(
         data_root.join("config.toml"),
         r#"
@@ -201,11 +202,13 @@ model_binding = "deepseek-v4-flash-deepseek-ac"
 [providers.deepseek]
 enabled = true
 name = "DeepSeek"
+credential = "test_api_key"
 wire_apis = ["openai_chat_completions"]
 
 [providers.deepseek-ac]
 enabled = true
 name = "DeepSeek Anthropic"
+credential = "test_api_key"
 wire_apis = ["anthropic_messages"]
 
 [model_bindings.deepseek-v4-flash-deepseek]
@@ -227,6 +230,7 @@ invocation_method = "anthropic_messages"
 }
 
 fn write_provider_config(data_root: &std::path::Path) -> Result<()> {
+    write_test_auth_config(data_root)?;
     std::fs::write(
         data_root.join("config.toml"),
         r#"
@@ -236,11 +240,13 @@ model_binding = "main"
 [providers.default]
 enabled = true
 name = "Default"
+credential = "test_api_key"
 wire_apis = ["openai_chat_completions"]
 
 [providers.alternate]
 enabled = true
 name = "Alternate"
+credential = "test_api_key"
 wire_apis = ["openai_chat_completions"]
 
 [model_bindings.main]
@@ -257,6 +263,22 @@ provider = "alternate"
 model_name = "vendor/alt-model"
 invocation_method = "openai_chat_completions"
 "#,
+    )?;
+    Ok(())
+}
+
+fn write_test_auth_config(data_root: &std::path::Path) -> Result<()> {
+    std::fs::write(
+        data_root.join("auth.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": 1,
+            "credentials": {
+                "test_api_key": {
+                    "kind": "api_key",
+                    "value": "test-secret"
+                }
+            }
+        }))?,
     )?;
     Ok(())
 }
@@ -391,8 +413,10 @@ async fn start_session_with_binding(
         )
         .await
         .context("session/start response")?;
+    let response_value = response.clone();
     let response: devo_server::SuccessResponse<devo_server::SessionStartResult> =
-        serde_json::from_value(response)?;
+        serde_json::from_value(response)
+            .with_context(|| format!("decode session/start response: {response_value}"))?;
     Ok(response.result.session.session_id)
 }
 
@@ -407,7 +431,7 @@ async fn update_session_model(
             connection_id,
             serde_json::json!({
                 "id": 3,
-                "method": "session/metadata/update",
+                "method": "_devo/session/metadata/update",
                 "params": {
                     "session_id": session_id,
                     "model": model,
@@ -418,8 +442,11 @@ async fn update_session_model(
         )
         .await
         .context("session/metadata/update response")?;
+    let response_value = response.clone();
     let _: devo_server::SuccessResponse<devo_server::SessionMetadataUpdateResult> =
-        serde_json::from_value(response)?;
+        serde_json::from_value(response).with_context(|| {
+            format!("decode session/metadata/update response: {response_value}")
+        })?;
     Ok(())
 }
 
@@ -431,8 +458,10 @@ async fn start_turn(
     let response = send_turn_start(runtime, connection_id, session_id, 4)
         .await?
         .context("turn/start response")?;
+    let response_value = response.clone();
     let _: devo_server::SuccessResponse<devo_server::TurnStartResult> =
-        serde_json::from_value(response)?;
+        serde_json::from_value(response)
+            .with_context(|| format!("decode turn/start response: {response_value}"))?;
     Ok(())
 }
 
@@ -447,7 +476,7 @@ async fn send_turn_start(
             connection_id,
             serde_json::json!({
                 "id": id,
-                "method": "turn/start",
+                "method": "_devo/turn/start",
                 "params": {
                     "session_id": session_id,
                     "input": [{ "type": "text", "text": "use the selected provider" }],
@@ -470,7 +499,7 @@ async fn wait_for_notification_value(
     let wanted = serde_json::json!(method);
     timeout(Duration::from_secs(5), async {
         while let Some(value) = notifications_rx.recv().await {
-            if value.get("method") == Some(&wanted) {
+            if value.get("method") == Some(&wanted) || has_original_method(&value, method) {
                 return Ok(value);
             }
         }
@@ -491,6 +520,11 @@ async fn wait_for_complete_request(router: &RecordingRouter) -> Result<()> {
     })
     .await
     .context("timed out waiting for title completion request")?
+}
+
+fn has_original_method(value: &serde_json::Value, method: &str) -> bool {
+    value.get("method") == Some(&serde_json::json!("session/update"))
+        && value["params"]["_meta"]["devo/originalMethod"].as_str() == Some(method)
 }
 
 fn model_response(text: &str) -> ModelResponse {

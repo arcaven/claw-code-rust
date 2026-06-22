@@ -36,8 +36,9 @@ pub struct SessionRecord {
     /// The latest selected provider model binding id for the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding_id: Option<String>,
-    /// The logical thinking selection used as the default for the next turn.
-    pub thinking: Option<String>,
+    /// The logical reasoning effort selection used as the default for the next turn.
+    #[serde(default, alias = "thinking", skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort_selection: Option<String>,
     /// The working directory associated with the session.
     pub cwd: PathBuf,
     /// Additional absolute workspace roots associated with the session.
@@ -100,8 +101,9 @@ pub struct TurnRecord {
     /// The selected provider model binding id used for the turn, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding_id: Option<String>,
-    /// The logical thinking selection used for the turn.
-    pub thinking: Option<String>,
+    /// The logical reasoning effort selection used for the turn.
+    #[serde(default, alias = "thinking", skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort_selection: Option<String>,
     /// The concrete request model used to execute the turn.
     pub request_model: String,
     /// The concrete request thinking parameter used to execute the turn.
@@ -518,7 +520,7 @@ mod tests {
             model_provider: "test".into(),
             model: None,
             model_binding_id: None,
-            thinking: None,
+            reasoning_effort_selection: None,
             cwd: ".".into(),
             additional_directories: Vec::new(),
             cli_version: "0.1.0".into(),
@@ -562,6 +564,23 @@ mod tests {
         assert_eq!(session, restored);
     }
 
+    #[test]
+    fn session_record_reads_legacy_thinking_field() {
+        let mut expected = make_test_session();
+        expected.reasoning_effort_selection = Some("high".into());
+        let mut value = serde_json::to_value(&expected).expect("serialize value");
+        let object = value.as_object_mut().expect("session json object");
+        object.remove("reasoning_effort_selection");
+        object.insert("thinking".to_string(), serde_json::json!("high"));
+
+        let restored: SessionRecord = serde_json::from_value(value).expect("deserialize legacy");
+        assert_eq!(restored, expected);
+
+        let serialized = serde_json::to_value(&restored).expect("serialize restored");
+        assert_eq!(serialized["reasoning_effort_selection"], "high");
+        assert_eq!(serialized.get("thinking"), None);
+    }
+
     // ── TurnRecord ────────────────────────────────────────────
 
     #[test]
@@ -576,6 +595,23 @@ mod tests {
         let json = serde_json::to_string(&turn).expect("serialize");
         let restored: TurnRecord = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(turn, restored);
+    }
+
+    #[test]
+    fn turn_record_reads_legacy_thinking_field() {
+        let mut expected = make_test_turn(TurnStatus::Running);
+        expected.reasoning_effort_selection = Some("high".into());
+        let mut value = serde_json::to_value(&expected).expect("serialize value");
+        let object = value.as_object_mut().expect("turn json object");
+        object.remove("reasoning_effort_selection");
+        object.insert("thinking".to_string(), serde_json::json!("high"));
+
+        let restored: TurnRecord = serde_json::from_value(value).expect("deserialize legacy");
+        assert_eq!(restored, expected);
+
+        let serialized = serde_json::to_value(&restored).expect("serialize restored");
+        assert_eq!(serialized["reasoning_effort_selection"], "high");
+        assert_eq!(serialized.get("thinking"), None);
     }
 
     #[test]
@@ -1004,7 +1040,7 @@ mod tests {
             model_provider: "test-provider".into(),
             model: Some("test-model".into()),
             model_binding_id: Some("test-binding".into()),
-            thinking: None,
+            reasoning_effort_selection: None,
             cwd: "/tmp/test".into(),
             additional_directories: Vec::new(),
             cli_version: "0.1.0".into(),
@@ -1036,7 +1072,7 @@ mod tests {
             kind: crate::TurnKind::Regular,
             model: "test-model".into(),
             model_binding_id: Some("test-binding".into()),
-            thinking: None,
+            reasoning_effort_selection: None,
             request_model: "test-model".into(),
             request_thinking: None,
             input_token_estimate: Some(100),

@@ -186,15 +186,18 @@ impl ServerRuntime {
             .map_or(1, |turn| turn.sequence + 1);
         let requested_model =
             requested_model_selection(None, None, &session.summary).map(str::to_string);
-        let requested_thinking = session.summary.thinking.clone();
+        let requested_reasoning_effort_selection =
+            session.summary.reasoning_effort_selection.clone();
         let runtime_context = Arc::clone(&session.runtime_context);
         drop(session);
 
-        let turn_config = runtime_context
-            .resolve_turn_config(requested_model.as_deref(), requested_thinking.clone());
+        let turn_config = runtime_context.resolve_turn_config(
+            requested_model.as_deref(),
+            requested_reasoning_effort_selection.clone(),
+        );
         let resolved_request = turn_config
             .model
-            .resolve_thinking_selection(turn_config.thinking_selection.as_deref());
+            .resolve_reasoning_effort_selection(turn_config.reasoning_effort_selection.as_deref());
         let request_model = turn_config.provider_request_model(&resolved_request.request_model);
         let replacement_message_id = ItemId::new();
         let records = devo_core::create_edit_records(
@@ -263,7 +266,7 @@ impl ServerRuntime {
             kind: devo_core::TurnKind::Regular,
             model: turn_config.model.slug.clone(),
             model_binding_id: turn_config.model_binding_id.clone(),
-            thinking: turn_config.thinking_selection.clone(),
+            reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
             reasoning_effort: resolved_request.effective_reasoning_effort,
             request_model,
             request_thinking: resolved_request.request_thinking.clone(),

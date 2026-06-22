@@ -18,7 +18,7 @@ use devo_protocol::SessionId;
 
 const ACP_MODE_CONFIG_ID: &str = "mode";
 const ACP_MODEL_CONFIG_ID: &str = "model";
-const ACP_THOUGHT_LEVEL_CONFIG_ID: &str = "thought_level";
+const ACP_REASONING_EFFORT_CONFIG_ID: &str = "thought_level";
 
 impl ServerRuntime {
     pub(super) async fn acp_session_config_options(
@@ -65,11 +65,11 @@ impl ServerRuntime {
 
                     let mut turn_config = session.runtime_context.resolve_turn_config(
                         Some(params.value.as_str()),
-                        session.summary.thinking.clone(),
+                        session.summary.reasoning_effort_selection.clone(),
                     );
-                    turn_config.thinking_selection = current_thinking_value(
+                    turn_config.reasoning_effort_selection = current_reasoning_effort_value(
                         &turn_config.model,
-                        session.summary.thinking.as_deref(),
+                        session.summary.reasoning_effort_selection.as_deref(),
                     );
                     apply_turn_config_to_session_summary(&mut session.summary, &turn_config);
                     let updated_at = Utc::now();
@@ -86,16 +86,16 @@ impl ServerRuntime {
                         acp_config_options_for_session(&session),
                     )
                 }
-                ACP_THOUGHT_LEVEL_CONFIG_ID => {
-                    let Some(thought_option) =
-                        acp_thought_level_config_option_for_session(&session)
+                ACP_REASONING_EFFORT_CONFIG_ID => {
+                    let Some(reasoning_effort_option) =
+                        acp_reasoning_effort_config_option_for_session(&session)
                     else {
                         return Err((
                             AcpErrorCode::InvalidParams,
                             format!("unknown session config option '{}'", params.config_id),
                         ));
                     };
-                    let value_is_allowed = match &thought_option {
+                    let value_is_allowed = match &reasoning_effort_option {
                         AcpSessionConfigOption::Select { options, .. } => {
                             select_options_contain_value(options, &params.value)
                         }
@@ -114,7 +114,7 @@ impl ServerRuntime {
                         session_model_selection(&session.summary),
                         Some(params.value.clone()),
                     );
-                    turn_config.thinking_selection = Some(params.value.clone());
+                    turn_config.reasoning_effort_selection = Some(params.value.clone());
                     apply_turn_config_to_session_summary(&mut session.summary, &turn_config);
                     let updated_at = Utc::now();
                     session.summary.updated_at = updated_at;
@@ -183,8 +183,8 @@ impl ServerRuntime {
 
 fn acp_config_options_for_session(session: &RuntimeSession) -> Vec<AcpSessionConfigOption> {
     let mut options = vec![acp_model_config_option_for_session(session)];
-    if let Some(thought_option) = acp_thought_level_config_option_for_session(session) {
-        options.push(thought_option);
+    if let Some(reasoning_effort_option) = acp_reasoning_effort_config_option_for_session(session) {
+        options.push(reasoning_effort_option);
     }
     options.push(acp_mode_config_option_for_session(session));
     options
@@ -241,7 +241,7 @@ fn acp_mode_config_option_for_session(session: &RuntimeSession) -> AcpSessionCon
 fn acp_model_config_option_for_session(session: &RuntimeSession) -> AcpSessionConfigOption {
     let turn_config = session.runtime_context.resolve_turn_config(
         session_model_selection(&session.summary),
-        session.summary.thinking.clone(),
+        session.summary.reasoning_effort_selection.clone(),
     );
     let current_value = turn_config
         .model_binding_id
@@ -316,18 +316,20 @@ fn acp_model_config_option_for_session(session: &RuntimeSession) -> AcpSessionCo
     }
 }
 
-fn acp_thought_level_config_option_for_session(
+fn acp_reasoning_effort_config_option_for_session(
     session: &RuntimeSession,
 ) -> Option<AcpSessionConfigOption> {
     let turn_config = session.runtime_context.resolve_turn_config(
         session_model_selection(&session.summary),
-        session.summary.thinking.clone(),
+        session.summary.reasoning_effort_selection.clone(),
     );
-    let current_value =
-        current_thinking_value(&turn_config.model, session.summary.thinking.as_deref())?;
+    let current_value = current_reasoning_effort_value(
+        &turn_config.model,
+        session.summary.reasoning_effort_selection.as_deref(),
+    )?;
     let mut seen_values = BTreeSet::new();
     let mut options = Vec::new();
-    for preset in turn_config.model.effective_thinking_capability().options() {
+    for preset in turn_config.model.effective_reasoning_capability().options() {
         if !seen_values.insert(preset.value.clone()) {
             continue;
         }
@@ -356,7 +358,7 @@ fn acp_thought_level_config_option_for_session(
     }
 
     Some(AcpSessionConfigOption::Select {
-        id: ACP_THOUGHT_LEVEL_CONFIG_ID.to_string(),
+        id: ACP_REASONING_EFFORT_CONFIG_ID.to_string(),
         name: "Reasoning Effort".to_string(),
         description: Some("Controls the model reasoning effort used for this session".to_string()),
         category: Some(AcpSessionConfigOptionCategory::Known(
@@ -367,9 +369,9 @@ fn acp_thought_level_config_option_for_session(
     })
 }
 
-fn current_thinking_value(model: &Model, selection: Option<&str>) -> Option<String> {
+fn current_reasoning_effort_value(model: &Model, selection: Option<&str>) -> Option<String> {
     let option_values = model
-        .effective_thinking_capability()
+        .effective_reasoning_capability()
         .options()
         .into_iter()
         .map(|option| option.value)
@@ -378,11 +380,11 @@ fn current_thinking_value(model: &Model, selection: Option<&str>) -> Option<Stri
         return None;
     }
     model
-        .normalize_thinking_selection(selection)
+        .normalize_reasoning_effort_selection(selection)
         .filter(|value| option_values.contains(value))
         .or_else(|| {
             model
-                .default_thinking_selection()
+                .default_reasoning_effort_selection()
                 .filter(|value| option_values.contains(value))
         })
         .or_else(|| option_values.first().cloned())
@@ -395,11 +397,11 @@ fn persist_session_config_summary(
 ) -> Result<(), String> {
     let model = session.summary.model.clone();
     let model_binding_id = session.summary.model_binding_id.clone();
-    let thinking = session.summary.thinking.clone();
+    let reasoning_effort_selection = session.summary.reasoning_effort_selection.clone();
     if let Some(record) = session.record.as_mut() {
         record.model = model;
         record.model_binding_id = model_binding_id;
-        record.thinking = thinking;
+        record.reasoning_effort_selection = reasoning_effort_selection;
         record.updated_at = updated_at;
         if let Err(error) = rollout_store.append_session_meta(record) {
             return Err(format!(

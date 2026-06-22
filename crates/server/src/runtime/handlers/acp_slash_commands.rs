@@ -367,7 +367,7 @@ impl ServerRuntime {
                     input,
                     model: None,
                     model_binding_id: None,
-                    thinking: None,
+                    reasoning_effort_selection: None,
                     sandbox: None,
                     approval_policy: None,
                     cwd: None,

@@ -267,7 +267,7 @@ fn requested_model_selection<'a>(
 fn apply_turn_config_to_session_summary(summary: &mut SessionMetadata, turn_config: &TurnConfig) {
     summary.model = Some(turn_config.model.slug.clone());
     summary.model_binding_id = turn_config.model_binding_id.clone();
-    summary.thinking = turn_config.thinking_selection.clone();
+    summary.reasoning_effort_selection = turn_config.reasoning_effort_selection.clone();
 }
 
 fn string_field_from_pending_metadata(

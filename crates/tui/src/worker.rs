@@ -114,7 +114,7 @@ struct EnsureSessionOutcome {
     session_id: SessionId,
     model: Option<String>,
     model_binding_id: Option<String>,
-    thinking: Option<String>,
+    reasoning_effort_selection: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     created: bool,
 }
@@ -145,8 +145,8 @@ pub(crate) struct QueryWorkerConfig {
     pub(crate) cwd: PathBuf,
     /// Optional log-level override forwarded to the server child process.
     pub(crate) server_log_level: Option<String>,
-    /// Initial thinking mode used for new turns.
-    pub(crate) thinking_selection: Option<String>,
+    /// Initial reasoning effort selection used for new turns.
+    pub(crate) reasoning_effort_selection: Option<String>,
     /// Permission preset to apply to the server session when it exists.
     pub(crate) permission_preset: PermissionPreset,
 }
@@ -175,8 +175,8 @@ enum OperationCommand {
         model_binding_id: Option<String>,
     },
     /// TODO: Same with model, should bind at session metadata.
-    /// Update the thinking mode used for future turns.
-    SetThinking(Option<String>),
+    /// Update the reasoning effort selection used for future turns.
+    SetReasoningEffort(Option<String>),
     /// Replace the provider connection settings and restart the server client.
     ReconfigureProvider {
         /// Provider wire protocol to use for future turns.
@@ -414,10 +414,15 @@ impl QueryWorkerHandle {
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
-    /// Updates the thinking mode used for future turns.
-    pub(crate) fn set_thinking(&self, thinking: Option<String>) -> Result<()> {
+    /// Updates the reasoning effort selection used for future turns.
+    pub(crate) fn set_reasoning_effort(
+        &self,
+        reasoning_effort_selection: Option<String>,
+    ) -> Result<()> {
         self.command_tx
-            .send(OperationCommand::SetThinking(thinking))
+            .send(OperationCommand::SetReasoningEffort(
+                reasoning_effort_selection,
+            ))
             .map_err(|_| anyhow::anyhow!("interactive worker is no longer running"))
     }
 
@@ -754,7 +759,7 @@ async fn run_worker_inner(
     let mut session_cwd = config.cwd.clone();
     let mut model = config.model;
     let mut model_binding_id = config.model_binding_id;
-    let mut thinking_selection = config.thinking_selection;
+    let mut reasoning_effort_selection = config.reasoning_effort_selection;
     let mut permission_preset = config.permission_preset;
     let mut active_turn_id: Option<TurnId> = None;
     let mut synthetic_acp_turn_id: Option<TurnId> = None;
@@ -796,7 +801,7 @@ async fn run_worker_inner(
                     title: resumed.session.title,
                     model: resumed.session.model.clone(),
                     model_binding_id: resumed.session.model_binding_id.clone(),
-                    thinking: resumed.session.thinking.clone(),
+                    reasoning_effort_selection: resumed.session.reasoning_effort_selection.clone(),
                     reasoning_effort: resumed.session.reasoning_effort,
                     active_agent_label,
                     total_input_tokens: resumed.session.total_input_tokens,
@@ -817,7 +822,7 @@ async fn run_worker_inner(
                 });
                 model = resumed.session.model.clone().unwrap_or(model);
                 model_binding_id = resumed.session.model_binding_id.clone();
-                thinking_selection = resumed.session.thinking.clone();
+                reasoning_effort_selection = resumed.session.reasoning_effort_selection.clone();
                 total_input_tokens = resumed.session.total_input_tokens;
                 total_output_tokens = resumed.session.total_output_tokens;
                 total_cache_read_tokens = resumed.session.total_cache_read_tokens;
@@ -864,10 +869,10 @@ async fn run_worker_inner(
                             .model_binding_id
                             .clone()
                             .or(model_binding_id);
-                        thinking_selection = session_start
-                            .thinking
+                        reasoning_effort_selection = session_start
+                            .reasoning_effort_selection
                             .clone()
-                            .or(thinking_selection);
+                            .or(reasoning_effort_selection);
                         let active_session_id = session_start.session_id;
                         if session_start.created {
                             let _ = event_tx.send(WorkerEvent::SessionActivated {
@@ -885,7 +890,7 @@ async fn run_worker_inner(
                             input,
                             model: Some(model.clone()),
                             model_binding_id: model_binding_id.clone(),
-                            thinking: thinking_selection.clone(),
+                            reasoning_effort_selection: reasoning_effort_selection.clone(),
                             sandbox: None,
                             approval_policy,
                             cwd: None,
@@ -958,20 +963,20 @@ async fn run_worker_inner(
                                     session_id: active_session_id,
                                     model: Some(model.clone()),
                                     model_binding_id: model_binding_id.clone(),
-                                    thinking: thinking_selection.clone(),
+                                    reasoning_effort_selection: reasoning_effort_selection.clone(),
                                 })
                                 .await;
                         }
                     }
-                    Some(OperationCommand::SetThinking(next_thinking)) => {
-                        thinking_selection = next_thinking;
+                    Some(OperationCommand::SetReasoningEffort(next_reasoning_effort_selection)) => {
+                        reasoning_effort_selection = next_reasoning_effort_selection;
                         if let Some(active_session_id) = session_id {
                             let _ = client
                                 .session_metadata_update(devo_server::SessionMetadataUpdateParams {
                                     session_id: active_session_id,
                                     model: Some(model.clone()),
                                     model_binding_id: model_binding_id.clone(),
-                                    thinking: thinking_selection.clone(),
+                                    reasoning_effort_selection: reasoning_effort_selection.clone(),
                                 })
                                 .await;
                         }
@@ -1229,7 +1234,7 @@ async fn run_worker_inner(
                                     .clone()
                                     .unwrap_or(model);
                                 model_binding_id = result.session.model_binding_id.clone();
-                                thinking_selection = result.session.thinking.clone();
+                                reasoning_effort_selection = result.session.reasoning_effort_selection.clone();
                                 let _ = event_tx.send(WorkerEvent::SessionCompactionStarted);
                             }
                             Err(error) => {
@@ -1312,7 +1317,7 @@ async fn run_worker_inner(
                             .model_binding_id
                             .clone()
                             .or(model_binding_id);
-                        thinking_selection = session_start.thinking.clone().or(thinking_selection);
+                        reasoning_effort_selection = session_start.reasoning_effort_selection.clone().or(reasoning_effort_selection);
                         let active_session_id = session_start.session_id;
                         if session_start.created {
                             let _ = event_tx.send(WorkerEvent::SessionActivated {
@@ -1509,7 +1514,7 @@ async fn run_worker_inner(
                             cwd: session_cwd.clone(),
                             model: model.clone(),
                             model_binding_id: model_binding_id.clone(),
-                            thinking: thinking_selection.clone(),
+                            reasoning_effort_selection: reasoning_effort_selection.clone(),
                             reasoning_effort: None,
                             active_agent_label: None,
                             last_query_total_tokens,
@@ -1560,7 +1565,7 @@ async fn run_worker_inner(
                                     title: result.session.title,
                                     model: result.session.model.clone(),
                                     model_binding_id: result.session.model_binding_id.clone(),
-                                    thinking: result.session.thinking.clone(),
+                                    reasoning_effort_selection: result.session.reasoning_effort_selection.clone(),
                                     reasoning_effort: result.session.reasoning_effort,
                                     active_agent_label,
                                     total_input_tokens: result.session.total_input_tokens,
@@ -1587,7 +1592,7 @@ async fn run_worker_inner(
                                     .clone()
                                     .unwrap_or(model);
                                 model_binding_id = result.session.model_binding_id.clone();
-                                thinking_selection = result.session.thinking.clone();
+                                reasoning_effort_selection = result.session.reasoning_effort_selection.clone();
                                 total_input_tokens = result.session.total_input_tokens;
                                 total_output_tokens = result.session.total_output_tokens;
                                 let _ =
@@ -1697,7 +1702,7 @@ async fn run_worker_inner(
                                     title: result.session.title,
                                     model: result.session.model.clone(),
                                     model_binding_id: result.session.model_binding_id.clone(),
-                                    thinking: result.session.thinking.clone(),
+                                    reasoning_effort_selection: result.session.reasoning_effort_selection.clone(),
                                     reasoning_effort: result.session.reasoning_effort,
                                     active_agent_label,
                                     total_input_tokens: result.session.total_input_tokens,
@@ -1720,7 +1725,7 @@ async fn run_worker_inner(
                                 });
                                 model = result.session.model.clone().unwrap_or(model);
                                 model_binding_id = result.session.model_binding_id.clone();
-                                thinking_selection = result.session.thinking.clone();
+                                reasoning_effort_selection = result.session.reasoning_effort_selection.clone();
                                 total_input_tokens = result.session.total_input_tokens;
                                 total_output_tokens = result.session.total_output_tokens;
                                 last_query_total_tokens =
@@ -1798,7 +1803,7 @@ async fn run_worker_inner(
                                             title: resumed.session.title,
                                             model: resumed.session.model.clone(),
                                             model_binding_id: resumed.session.model_binding_id.clone(),
-                                            thinking: resumed.session.thinking.clone(),
+                                            reasoning_effort_selection: resumed.session.reasoning_effort_selection.clone(),
                                             reasoning_effort: resumed.session.reasoning_effort,
                                             active_agent_label,
                                             total_input_tokens: resumed.session.total_input_tokens,
@@ -1821,7 +1826,7 @@ async fn run_worker_inner(
                                         });
                                         model = resumed.session.model.clone().unwrap_or(model);
                                         model_binding_id = resumed.session.model_binding_id.clone();
-                                        thinking_selection = resumed.session.thinking.clone();
+                                        reasoning_effort_selection = resumed.session.reasoning_effort_selection.clone();
                                         total_input_tokens = resumed.session.total_input_tokens;
                                         total_output_tokens = resumed.session.total_output_tokens;
                                         last_query_total_tokens =
@@ -1928,7 +1933,7 @@ async fn run_worker_inner(
                             .model_binding_id
                             .clone()
                             .or(model_binding_id);
-                        thinking_selection = session_start.thinking.clone().or(thinking_selection);
+                        reasoning_effort_selection = session_start.reasoning_effort_selection.clone().or(reasoning_effort_selection);
                         let active_session_id = session_start.session_id;
                         if session_start.created {
                             let _ = event_tx.send(WorkerEvent::SessionActivated {
@@ -1947,7 +1952,7 @@ async fn run_worker_inner(
                                 input: vec![InputItem::Text { text: question }],
                                 model: Some(model.clone()),
                                 model_binding_id: model_binding_id.clone(),
-                                thinking: thinking_selection.clone(),
+                                reasoning_effort_selection: reasoning_effort_selection.clone(),
                                 sandbox: None,
                                 approval_policy: None,
                                 cwd: Some(session_cwd.clone()),
@@ -2190,7 +2195,7 @@ async fn run_worker_inner(
                                     session_id,
                                     &model,
                                     &model_binding_id,
-                                    &thinking_selection,
+                                    &reasoning_effort_selection,
                                 )
                             {
                                 active_turn_id = Some(turn_id);
@@ -2288,11 +2293,11 @@ async fn run_worker_inner(
                                     saw_usage_update_for_turn = false;
                                     model = payload.turn.model.clone();
                                     model_binding_id = payload.turn.model_binding_id.clone();
-                                    thinking_selection = payload.turn.thinking.clone();
+                                    reasoning_effort_selection = payload.turn.reasoning_effort_selection.clone();
                                     let _ = event_tx.send(WorkerEvent::TurnStarted {
                                         model: payload.turn.model,
                                         model_binding_id: payload.turn.model_binding_id,
-                                        thinking: payload.turn.thinking,
+                                        reasoning_effort_selection: payload.turn.reasoning_effort_selection,
                                         reasoning_effort: payload.turn.reasoning_effort,
                                         turn_id: payload.turn.turn_id,
                                     });
@@ -2801,7 +2806,7 @@ async fn ensure_session_started(
             session_id: *session_id,
             model: Some(model.to_string()),
             model_binding_id: model_binding_id.clone(),
-            thinking: None,
+            reasoning_effort_selection: None,
             reasoning_effort: None,
             created: false,
         });
@@ -2822,7 +2827,7 @@ async fn ensure_session_started(
         session_id: session.session.session_id,
         model: session.session.model,
         model_binding_id: session.session.model_binding_id,
-        thinking: session.session.thinking,
+        reasoning_effort_selection: session.session.reasoning_effort_selection,
         reasoning_effort: session.session.reasoning_effort,
         created: true,
     })
@@ -4006,7 +4011,7 @@ fn acp_prompt_started_event(
     active_session_id: Option<SessionId>,
     model: &str,
     model_binding_id: &Option<String>,
-    thinking: &Option<String>,
+    reasoning_effort_selection: &Option<String>,
 ) -> Option<(TurnId, WorkerEvent)> {
     acp_prompt_lifecycle_notification(params, active_session_id)?;
     let turn_id = TurnId::new();
@@ -4015,7 +4020,7 @@ fn acp_prompt_started_event(
         WorkerEvent::TurnStarted {
             model: model.to_string(),
             model_binding_id: model_binding_id.clone(),
-            thinking: thinking.clone(),
+            reasoning_effort_selection: reasoning_effort_selection.clone(),
             reasoning_effort: None,
             turn_id,
         },
@@ -4931,7 +4936,7 @@ mod tests {
             WorkerEvent::TurnStarted {
                 model: "test-model".to_string(),
                 model_binding_id: Some("binding".to_string()),
-                thinking: Some("high".to_string()),
+                reasoning_effort_selection: Some("high".to_string()),
                 reasoning_effort: None,
                 turn_id,
             }
@@ -5767,7 +5772,7 @@ mod tests {
             ephemeral: false,
             model: Some("test-model".to_string()),
             model_binding_id: None,
-            thinking: None,
+            reasoning_effort_selection: None,
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -5850,7 +5855,7 @@ mod tests {
                 kind: TurnKind::Regular,
                 model: "test-model".to_string(),
                 model_binding_id: None,
-                thinking: None,
+                reasoning_effort_selection: None,
                 reasoning_effort: None,
                 request_model: "test-model".to_string(),
                 request_thinking: None,
@@ -5941,7 +5946,7 @@ mod tests {
             ephemeral: false,
             model: Some("test-model".to_string()),
             model_binding_id: None,
-            thinking: None,
+            reasoning_effort_selection: None,
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -5982,7 +5987,7 @@ mod tests {
             ephemeral: false,
             model: Some("test-model".to_string()),
             model_binding_id: None,
-            thinking: None,
+            reasoning_effort_selection: None,
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,

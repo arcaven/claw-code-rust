@@ -18,7 +18,8 @@ pub struct TurnMetadata {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding_id: Option<String>,
-    pub thinking: Option<String>,
+    #[serde(default, alias = "thinking", skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort_selection: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub request_model: String,
     pub request_thinking: Option<String>,
@@ -115,7 +116,8 @@ pub struct TurnStartParams {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding_id: Option<String>,
-    pub thinking: Option<String>,
+    #[serde(default, alias = "thinking", skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort_selection: Option<String>,
     pub sandbox: Option<String>,
     pub approval_policy: Option<String>,
     pub cwd: Option<PathBuf>,
@@ -365,7 +367,7 @@ mod tests {
             kind: TurnKind::Regular,
             model: "logical-model".to_string(),
             model_binding_id: Some("provider-binding".to_string()),
-            thinking: Some("high".to_string()),
+            reasoning_effort_selection: Some("high".to_string()),
             reasoning_effort: Some(ReasoningEffort::High),
             request_model: "provider-model".to_string(),
             request_thinking: Some("medium".to_string()),
@@ -435,7 +437,7 @@ mod tests {
             }],
             model: None,
             model_binding_id: None,
-            thinking: None,
+            reasoning_effort_selection: None,
             sandbox: None,
             approval_policy: None,
             cwd: None,

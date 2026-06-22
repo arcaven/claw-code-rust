@@ -105,7 +105,7 @@ impl ServerRuntime {
         let agent_path = AgentPath::new(parent_path).join(&nickname).0;
         let model = parent_summary.model.clone();
         let model_binding_id = parent_summary.model_binding_id.clone();
-        let thinking = parent_summary.thinking.clone();
+        let reasoning_effort_selection = parent_summary.reasoning_effort_selection.clone();
 
         let mut record = self.rollout_store.create_session_record(
             child_session_id,
@@ -115,7 +115,7 @@ impl ServerRuntime {
             Some(nickname.clone()),
             model.clone(),
             model_binding_id.clone(),
-            thinking.clone(),
+            reasoning_effort_selection.clone(),
             runtime_context.provider.name().to_string(),
             Some(parent_session_id),
         );
@@ -180,7 +180,7 @@ impl ServerRuntime {
             ephemeral: params.ephemeral,
             model: model.clone(),
             model_binding_id: model_binding_id.clone(),
-            thinking,
+            reasoning_effort_selection,
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -191,8 +191,10 @@ impl ServerRuntime {
             status: SessionRuntimeStatus::Idle,
         };
         if effective_context_mode == AgentContextMode::DeepResearch {
-            let turn_config = runtime_context
-                .resolve_turn_config(session_model_selection(&summary), summary.thinking.clone());
+            let turn_config = runtime_context.resolve_turn_config(
+                session_model_selection(&summary),
+                summary.reasoning_effort_selection.clone(),
+            );
             core_session.session_context = Some(research::research_session_context(
                 &core_session,
                 &turn_config,
@@ -477,11 +479,11 @@ impl ServerRuntime {
             let session = session_arc.lock().await;
             let turn_config = session.runtime_context.resolve_turn_config(
                 session_model_selection(&session.summary),
-                session.summary.thinking.clone(),
+                session.summary.reasoning_effort_selection.clone(),
             );
-            let resolved_request = turn_config
-                .model
-                .resolve_thinking_selection(turn_config.thinking_selection.as_deref());
+            let resolved_request = turn_config.model.resolve_reasoning_effort_selection(
+                turn_config.reasoning_effort_selection.as_deref(),
+            );
             (turn_config, resolved_request)
         };
         let request_model = turn_config.provider_request_model(&resolved_request.request_model);
@@ -499,7 +501,7 @@ impl ServerRuntime {
                 kind: devo_core::TurnKind::Regular,
                 model: turn_config.model.slug.clone(),
                 model_binding_id: turn_config.model_binding_id.clone(),
-                thinking: turn_config.thinking_selection.clone(),
+                reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
                 reasoning_effort: resolved_request.effective_reasoning_effort,
                 request_model,
                 request_thinking: resolved_request.request_thinking.clone(),

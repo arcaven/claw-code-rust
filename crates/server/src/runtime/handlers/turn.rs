@@ -266,16 +266,17 @@ impl ServerRuntime {
                 params.model.as_deref(),
                 &session.summary,
             );
-            let requested_thinking = params
-                .thinking
+            let requested_reasoning_effort_selection = params
+                .reasoning_effort_selection
                 .clone()
-                .or_else(|| session.summary.thinking.clone());
-            let turn_config = session
-                .runtime_context
-                .resolve_turn_config(requested_model, requested_thinking.clone());
-            let resolved_request = turn_config
-                .model
-                .resolve_thinking_selection(turn_config.thinking_selection.as_deref());
+                .or_else(|| session.summary.reasoning_effort_selection.clone());
+            let turn_config = session.runtime_context.resolve_turn_config(
+                requested_model,
+                requested_reasoning_effort_selection.clone(),
+            );
+            let resolved_request = turn_config.model.resolve_reasoning_effort_selection(
+                turn_config.reasoning_effort_selection.as_deref(),
+            );
             let request_model = turn_config.provider_request_model(&resolved_request.request_model);
             apply_turn_config_to_session_summary(&mut session.summary, &turn_config);
             let turn = TurnMetadata {
@@ -289,7 +290,7 @@ impl ServerRuntime {
                 kind: devo_core::TurnKind::Regular,
                 model: turn_config.model.slug.clone(),
                 model_binding_id: turn_config.model_binding_id.clone(),
-                thinking: turn_config.thinking_selection.clone(),
+                reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
                 reasoning_effort: resolved_request.effective_reasoning_effort,
                 request_model,
                 request_thinking: resolved_request.request_thinking,
@@ -517,10 +518,10 @@ impl ServerRuntime {
                 kind: devo_core::TurnKind::Other("shell_command".to_string()),
                 model: model.clone(),
                 model_binding_id: session.summary.model_binding_id.clone(),
-                thinking: session.summary.thinking.clone(),
+                reasoning_effort_selection: session.summary.reasoning_effort_selection.clone(),
                 reasoning_effort: session.summary.reasoning_effort,
                 request_model: model,
-                request_thinking: session.summary.thinking.clone(),
+                request_thinking: session.summary.reasoning_effort_selection.clone(),
                 started_at: now,
                 completed_at: None,
                 usage: None,

@@ -2450,13 +2450,14 @@ impl ServerRuntime {
             let model_override = queued_model_selection
                 .as_deref()
                 .or_else(|| session_model_selection(&session.summary));
-            let thinking_override = session.summary.thinking.clone();
+            let reasoning_effort_selection_override =
+                session.summary.reasoning_effort_selection.clone();
             let turn_config = session
                 .runtime_context
-                .resolve_turn_config(model_override, thinking_override);
-            let resolved_request = turn_config
-                .model
-                .resolve_thinking_selection(turn_config.thinking_selection.as_deref());
+                .resolve_turn_config(model_override, reasoning_effort_selection_override);
+            let resolved_request = turn_config.model.resolve_reasoning_effort_selection(
+                turn_config.reasoning_effort_selection.as_deref(),
+            );
             (turn_config, resolved_request)
         };
         let request_model = turn_config.provider_request_model(&resolved_request.request_model);
@@ -2479,7 +2480,7 @@ impl ServerRuntime {
             kind: devo_core::TurnKind::Regular,
             model: turn_config.model.slug.clone(),
             model_binding_id: turn_config.model_binding_id.clone(),
-            thinking: turn_config.thinking_selection.clone(),
+            reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
             reasoning_effort: resolved_request.effective_reasoning_effort,
             request_model,
             request_thinking: resolved_request.request_thinking.clone(),
@@ -2589,11 +2590,13 @@ impl ServerRuntime {
             let model = queued_model_selection
                 .as_deref()
                 .or_else(|| session_model_selection(&session.summary));
-            let thinking = session.summary.thinking.clone();
-            let tc = session.runtime_context.resolve_turn_config(model, thinking);
+            let reasoning_effort_selection = session.summary.reasoning_effort_selection.clone();
+            let tc = session
+                .runtime_context
+                .resolve_turn_config(model, reasoning_effort_selection);
             let rr = tc
                 .model
-                .resolve_thinking_selection(tc.thinking_selection.as_deref());
+                .resolve_reasoning_effort_selection(tc.reasoning_effort_selection.as_deref());
             (tc, rr)
         };
         let request_model = turn_config.provider_request_model(&resolved_request.request_model);
@@ -2616,7 +2619,7 @@ impl ServerRuntime {
             kind: devo_core::TurnKind::Regular,
             model: turn_config.model.slug.clone(),
             model_binding_id: turn_config.model_binding_id.clone(),
-            thinking: turn_config.thinking_selection.clone(),
+            reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
             reasoning_effort: resolved_request.effective_reasoning_effort,
             request_model,
             request_thinking: resolved_request.request_thinking.clone(),

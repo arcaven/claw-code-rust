@@ -103,9 +103,10 @@ impl ServerRuntime {
                 .model
                 .as_deref()
                 .unwrap_or(model_selection);
-            let turn_config = runtime_session
-                .runtime_context
-                .resolve_turn_config(Some(model_selection), /*thinking_selection*/ None);
+            let turn_config = runtime_session.runtime_context.resolve_turn_config(
+                Some(model_selection),
+                /*reasoning_effort_selection*/ None,
+            );
             let request_model = turn_config.request_model.clone();
             let max_tokens = runtime_session
                 .runtime_context
