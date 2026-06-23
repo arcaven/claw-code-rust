@@ -158,6 +158,13 @@ pub(crate) struct UserMessage {
     pub(crate) mention_bindings: Vec<MentionBinding>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResearchTaskPreview {
+    item_id: ItemId,
+    title: String,
+    preview: String,
+}
+
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
@@ -258,6 +265,7 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     status_message: String,
     active_text_items: Vec<ActiveTextItem>,
+    research_task_previews: Vec<ResearchTaskPreview>,
     stream_chunking_policy: AdaptiveChunkingPolicy,
     available_models: Vec<Model>,
     saved_models: Vec<SavedModelEntry>,
@@ -410,6 +418,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             status_message: "Ready".to_string(),
             active_text_items: Vec::new(),
+            research_task_previews: Vec::new(),
             stream_chunking_policy: AdaptiveChunkingPolicy::default(),
             available_models,
             current_model_binding_id,

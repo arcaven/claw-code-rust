@@ -33,6 +33,7 @@ use super::DotStatus;
 use super::TranscriptOverlayCell;
 use super::subagent_live_list;
 use super::subagent_live_list::SubagentLiveListRow;
+use super::subagent_live_list::SubagentLiveListRowKey;
 
 #[derive(Debug, Default)]
 pub(super) struct SubagentMonitorState {
@@ -52,6 +53,7 @@ struct SubagentSessionView {
     active_tools: HashMap<String, MonitorToolItem>,
     active_turn: Option<devo_core::TurnId>,
     latest_preview: String,
+    has_runtime_update: bool,
     revision: u64,
 }
 
@@ -59,6 +61,7 @@ struct SubagentSessionView {
 struct MonitorTextItem {
     kind: TextItemKind,
     text: String,
+    preview_tail: String,
 }
 
 #[derive(Debug)]
@@ -381,29 +384,44 @@ impl ChatWidget {
     }
 
     fn subagent_live_list_rows(&self) -> Vec<SubagentLiveListRow> {
-        self.subagent_monitor
+        let mut rows = self
+            .subagent_monitor
             .agents
             .iter()
             .filter(|agent| is_live_status(&self.subagent_status_for_agent(agent)))
             .map(|agent| {
                 let view = self.subagent_monitor.sessions.get(&agent.session_id);
-                let preview = view
-                    .and_then(|view| single_line_preview(&view.latest_preview))
-                    .or_else(|| {
-                        agent
-                            .last_task_message
-                            .as_deref()
-                            .and_then(single_line_preview)
-                    })
-                    .unwrap_or_else(|| "Waiting for updates".to_string());
+                let preview = if let Some(view) = view
+                    && view.has_runtime_update
+                {
+                    single_line_preview(&view.latest_preview)
+                        .unwrap_or_else(|| "Waiting for updates".to_string())
+                } else {
+                    agent
+                        .last_task_message
+                        .as_deref()
+                        .and_then(tail_preview)
+                        .unwrap_or_else(|| "Waiting for updates".to_string())
+                };
                 SubagentLiveListRow {
-                    session_id: agent.session_id,
+                    key: SubagentLiveListRowKey::Session(agent.session_id),
                     name: agent.nickname.clone(),
                     status: self.subagent_status_for_agent(agent),
                     preview,
                 }
             })
-            .collect()
+            .collect::<Vec<_>>();
+        rows.extend(
+            self.research_task_previews
+                .iter()
+                .map(|preview| SubagentLiveListRow {
+                    key: SubagentLiveListRowKey::Research(preview.item_id),
+                    name: preview.title.clone(),
+                    status: "working".to_string(),
+                    preview: preview.preview.clone(),
+                }),
+        );
+        rows
     }
 
     fn subagent_agent(&self, session_id: SessionId) -> Option<&SubagentMonitorAgent> {
@@ -566,6 +584,7 @@ impl SubagentSessionView {
                     MonitorTextItem {
                         kind,
                         text: String::new(),
+                        preview_tail: String::new(),
                     },
                 );
                 self.set_latest_preview(format!("{} started", text_title(kind)));
@@ -577,18 +596,20 @@ impl SubagentSessionView {
                 delta,
             } => {
                 let latest_preview = {
-                    let latest = &mut self
+                    let latest = self
                         .active_text
                         .entry(text_key(item_id, kind))
                         .or_insert_with(|| MonitorTextItem {
                             kind,
                             text: String::new(),
-                        })
-                        .text;
-                    latest.push_str(&delta);
-                    latest.clone()
+                            preview_tail: String::new(),
+                        });
+                    latest.text.push_str(&delta);
+                    update_preview_tail(&mut latest.preview_tail, &delta)
                 };
-                self.set_latest_preview(latest_preview);
+                if let Some(latest_preview) = latest_preview {
+                    self.set_latest_preview_tail(latest_preview);
+                }
             }
             SubagentMonitorEvent::TextItemCompleted {
                 session_id: _,
@@ -597,7 +618,7 @@ impl SubagentSessionView {
                 final_text,
             } => {
                 self.active_text.remove(&text_key(item_id, kind));
-                self.set_latest_preview(final_text.clone());
+                self.set_latest_preview_tail(final_text.clone());
                 self.transcript.push(MonitorTranscriptItem {
                     kind: transcript_kind_for_text(kind),
                     title: text_title(kind).to_string(),
@@ -624,7 +645,7 @@ impl SubagentSessionView {
                         output: String::new(),
                         is_error: false,
                     });
-                self.set_latest_preview(latest_preview);
+                self.set_latest_preview_tail(latest_preview);
             }
             SubagentMonitorEvent::ToolOutputDelta {
                 session_id: _,
@@ -647,7 +668,7 @@ impl SubagentSessionView {
                         format!("{}: {}", tool.title, tool.output)
                     }
                 };
-                self.set_latest_preview(latest_preview);
+                self.set_latest_preview_tail(latest_preview);
             }
             SubagentMonitorEvent::ToolResult {
                 session_id: _,
@@ -658,9 +679,9 @@ impl SubagentSessionView {
             } => {
                 self.active_tools.remove(&tool_use_id);
                 if preview.trim().is_empty() {
-                    self.set_latest_preview(title.clone());
+                    self.set_latest_preview_tail(title.clone());
                 } else {
-                    self.set_latest_preview(preview.clone());
+                    self.set_latest_preview_tail(preview.clone());
                 }
                 self.transcript.push(MonitorTranscriptItem {
                     kind: MonitorTranscriptKind::Tool,
@@ -690,7 +711,7 @@ impl SubagentSessionView {
                 if body.trim().is_empty() {
                     self.set_latest_preview("Plan updated");
                 } else {
-                    self.set_latest_preview(body.clone());
+                    self.set_latest_preview_tail(body.clone());
                 }
                 self.transcript.push(MonitorTranscriptItem {
                     kind: MonitorTranscriptKind::Plan,
@@ -721,7 +742,7 @@ impl SubagentSessionView {
                 self.status = "failed".to_string();
                 self.active_turn = None;
                 self.flush_active_items();
-                self.set_latest_preview(message.clone());
+                self.set_latest_preview_tail(message.clone());
                 self.transcript.push(MonitorTranscriptItem {
                     kind: MonitorTranscriptKind::Status,
                     title: "Turn failed".to_string(),
@@ -749,6 +770,15 @@ impl SubagentSessionView {
         let preview = preview.into();
         if let Some(preview) = single_line_preview(&preview) {
             self.latest_preview = preview;
+            self.has_runtime_update = true;
+        }
+    }
+
+    fn set_latest_preview_tail(&mut self, preview: impl Into<String>) {
+        let preview = preview.into();
+        if let Some(preview) = tail_preview(&preview) {
+            self.latest_preview = preview;
+            self.has_runtime_update = true;
         }
     }
 
@@ -812,6 +842,48 @@ fn single_line_preview(text: &str) -> Option<String> {
         .trim()
         .to_string();
     (!preview.is_empty()).then_some(preview)
+}
+
+fn tail_preview(text: &str) -> Option<String> {
+    let last_line = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    let normalized = last_line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    Some(tail_chars(&normalized, MAX_PREVIEW_TAIL_CHARS))
+}
+
+const MAX_PREVIEW_TAIL_CHARS: usize = 80;
+
+fn update_preview_tail(current: &mut String, delta: &str) -> Option<String> {
+    if delta.contains('\n') {
+        if let Some(last_line) = delta
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+        {
+            let normalized = last_line.split_whitespace().collect::<Vec<_>>().join(" ");
+            *current = tail_chars(&normalized, MAX_PREVIEW_TAIL_CHARS);
+        }
+    } else {
+        current.push_str(delta);
+        let normalized = current.split_whitespace().collect::<Vec<_>>().join(" ");
+        *current = tail_chars(&normalized, MAX_PREVIEW_TAIL_CHARS);
+    }
+    (!current.is_empty()).then(|| current.clone())
+}
+
+fn tail_chars(text: &str, max_chars: usize) -> String {
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
+        return text.to_string();
+    }
+    text.chars().skip(total_chars - max_chars).collect()
 }
 
 fn text_key(item_id: Option<ItemId>, kind: TextItemKind) -> String {

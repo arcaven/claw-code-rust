@@ -177,18 +177,24 @@ pub(crate) enum WorkerEvent {
     },
     /// A steer (/btw) was accepted by the server.
     SteerAccepted { turn_id: TurnId },
-    /// A streamed assistant or reasoning text item started.
-    TextItemStarted { item_id: ItemId, kind: TextItemKind },
+    /// A streamed assistant, reasoning, or research artifact text item started.
+    TextItemStarted {
+        item_id: ItemId,
+        kind: TextItemKind,
+        research: Option<ResearchArtifactMetadata>,
+    },
     /// Incremental text for a streamed assistant or reasoning item.
     TextItemDelta {
         item_id: ItemId,
         kind: TextItemKind,
+        research: Option<ResearchArtifactMetadata>,
         delta: String,
     },
-    /// A streamed assistant or reasoning text item completed.
+    /// A streamed assistant, reasoning, or research artifact text item completed.
     TextItemCompleted {
         item_id: ItemId,
         kind: TextItemKind,
+        research: Option<ResearchArtifactMetadata>,
         final_text: String,
     },
     /// A streamed Plan Mode proposal item started.
@@ -599,6 +605,18 @@ pub(crate) enum TextItemKind {
     Assistant,
     Reasoning,
     ResearchArtifact,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResearchArtifactMetadata {
+    pub(crate) artifact_type: String,
+    pub(crate) title: String,
+}
+
+impl ResearchArtifactMetadata {
+    pub(crate) fn is_delegated_finding(&self) -> bool {
+        self.artifact_type.eq_ignore_ascii_case("finding")
+    }
 }
 
 /// One rendered transcript item shown in the history pane.

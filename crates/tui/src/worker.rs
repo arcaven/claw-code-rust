@@ -85,6 +85,7 @@ use crate::bottom_pane::SkillInterfaceMetadata;
 use crate::bottom_pane::SkillMetadata;
 use crate::events::PlanStep;
 use crate::events::PlanStepStatus;
+use crate::events::ResearchArtifactMetadata;
 use crate::events::SessionListEntry;
 use crate::events::TextItemKind;
 use crate::events::TranscriptItem;
@@ -774,6 +775,8 @@ async fn run_worker_inner(
     let mut child_agent_sessions: HashSet<SessionId> = HashSet::new();
     let mut latest_completed_agent_messages_by_child: HashMap<SessionId, String> = HashMap::new();
     let mut btw_agent_sessions: HashMap<SessionId, BtwQuestionState> = HashMap::new();
+    let mut research_artifacts: HashMap<devo_core::ItemId, ResearchArtifactMetadata> =
+        HashMap::new();
     let mut input_history_cursor: Option<usize> = None;
     let mut active_reference_search_id: Option<ReferenceSearchId> = None;
     let mut active_shell_process_ids: HashSet<String> = HashSet::new();
@@ -2316,18 +2319,27 @@ async fn run_worker_inner(
                                             let _ = event_tx.send(WorkerEvent::TextItemStarted {
                                                 item_id: payload.item.item_id,
                                                 kind: TextItemKind::Assistant,
+                                                research: None,
                                             });
                                         }
                                         ItemKind::Reasoning => {
                                             let _ = event_tx.send(WorkerEvent::TextItemStarted {
                                                 item_id: payload.item.item_id,
                                                 kind: TextItemKind::Reasoning,
+                                                research: None,
                                             });
                                         }
                                         ItemKind::ResearchArtifact => {
+                                            let research =
+                                                research_artifact_metadata(&payload.item.payload);
+                                            if let Some(research) = research.clone() {
+                                                research_artifacts
+                                                    .insert(payload.item.item_id, research);
+                                            }
                                             let _ = event_tx.send(WorkerEvent::TextItemStarted {
                                                 item_id: payload.item.item_id,
                                                 kind: TextItemKind::ResearchArtifact,
+                                                research,
                                             });
                                         }
                                         ItemKind::Plan => {
@@ -2406,6 +2418,7 @@ async fn run_worker_inner(
                                         let _ = event_tx.send(WorkerEvent::TextItemDelta {
                                             item_id,
                                             kind: TextItemKind::Assistant,
+                                            research: None,
                                             delta: payload.delta,
                                         });
                                     } else {
@@ -2416,7 +2429,7 @@ async fn run_worker_inner(
                             "item/researchArtifact/delta" => {
                                 if let ServerEvent::ItemDelta { payload, .. } = event
                                     && let Some(worker_event) =
-                                        research_artifact_delta_event(payload)
+                                        research_artifact_delta_event(payload, &research_artifacts)
                                 {
                                     let _ = event_tx.send(worker_event);
                                 }
@@ -2511,6 +2524,7 @@ async fn run_worker_inner(
                                         let _ = event_tx.send(WorkerEvent::TextItemDelta {
                                             item_id,
                                             kind: TextItemKind::Reasoning,
+                                            research: None,
                                             delta: payload.delta,
                                         });
                                     } else {
@@ -2527,6 +2541,9 @@ async fn run_worker_inner(
                                     );
                                     if let Some(text) = completed_agent_message_text(&payload) {
                                         latest_completed_agent_message = Some(text);
+                                    }
+                                    if payload.item.item_kind == ItemKind::ResearchArtifact {
+                                        research_artifacts.remove(&payload.item.item_id);
                                     }
                                     // Completed tool items are mapped into compact UI events
                                     // with pre-rendered summaries and previews.
@@ -3062,15 +3079,42 @@ fn completed_agent_message_text(payload: &ItemEventPayload) -> Option<String> {
     }
 }
 
-fn research_artifact_delta_event(payload: devo_server::ItemDeltaPayload) -> Option<WorkerEvent> {
-    payload
-        .context
-        .item_id
-        .map(|item_id| WorkerEvent::TextItemDelta {
+fn research_artifact_delta_event(
+    payload: devo_server::ItemDeltaPayload,
+    research_artifacts: &HashMap<devo_core::ItemId, ResearchArtifactMetadata>,
+) -> Option<WorkerEvent> {
+    payload.context.item_id.map(|item_id| {
+        let research = research_artifacts.get(&item_id).cloned();
+        WorkerEvent::TextItemDelta {
             item_id,
             kind: TextItemKind::ResearchArtifact,
+            research,
             delta: payload.delta,
+        }
+    })
+}
+
+fn research_artifact_metadata(payload: &serde_json::Value) -> Option<ResearchArtifactMetadata> {
+    let artifact_type = payload
+        .get("artifact_type")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            payload
+                .get("artifactType")
+                .and_then(serde_json::Value::as_str)
         })
+        .map(str::trim)
+        .filter(|artifact_type| !artifact_type.is_empty())?;
+    let title = payload
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or("Research Artifact");
+    Some(ResearchArtifactMetadata {
+        artifact_type: artifact_type.to_string(),
+        title: title.to_string(),
+    })
 }
 
 fn btw_agent_prompt(question: &str) -> String {
@@ -3184,6 +3228,7 @@ pub(crate) fn handle_completed_item(
                 let _ = event_tx.send(WorkerEvent::TextItemCompleted {
                     item_id,
                     kind: TextItemKind::Assistant,
+                    research: None,
                     final_text: text,
                 });
             }
@@ -3209,6 +3254,7 @@ pub(crate) fn handle_completed_item(
                 let _ = event_tx.send(WorkerEvent::TextItemCompleted {
                     item_id,
                     kind: TextItemKind::Reasoning,
+                    research: None,
                     final_text: text,
                 });
             }
@@ -3230,6 +3276,7 @@ pub(crate) fn handle_completed_item(
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|text| !text.is_empty());
+            let research = research_artifact_metadata(&payload);
             let final_text = match content {
                 Some(content) => format!("### {title}\n\n{content}"),
                 None => format!("### {title}"),
@@ -3237,6 +3284,7 @@ pub(crate) fn handle_completed_item(
             let _ = event_tx.send(WorkerEvent::TextItemCompleted {
                 item_id,
                 kind: TextItemKind::ResearchArtifact,
+                research,
                 final_text,
             });
         }
@@ -4369,23 +4417,27 @@ mod tests {
         let session_id = SessionId::new();
         let turn_id = TurnId::new();
         let item_id = ItemId::new();
-        let event = research_artifact_delta_event(ItemDeltaPayload {
-            context: EventContext {
-                session_id,
-                turn_id: Some(turn_id),
-                item_id: Some(item_id),
-                seq: 0,
+        let event = research_artifact_delta_event(
+            ItemDeltaPayload {
+                context: EventContext {
+                    session_id,
+                    turn_id: Some(turn_id),
+                    item_id: Some(item_id),
+                    seq: 0,
+                },
+                delta: "partial finding".to_string(),
+                stream_index: None,
+                channel: None,
             },
-            delta: "partial finding".to_string(),
-            stream_index: None,
-            channel: None,
-        });
+            &HashMap::new(),
+        );
 
         assert_eq!(
             event,
             Some(WorkerEvent::TextItemDelta {
                 item_id,
                 kind: TextItemKind::ResearchArtifact,
+                research: None,
                 delta: "partial finding".to_string()
             })
         );
@@ -5130,6 +5182,7 @@ mod tests {
             vec![WorkerEvent::TextItemDelta {
                 item_id,
                 kind: TextItemKind::Assistant,
+                research: None,
                 delta: "streamed answer".to_string()
             }]
         );
