@@ -159,6 +159,7 @@ impl ServerRuntime {
         if params.execution_mode == devo_protocol::TurnExecutionMode::Research {
             return self
                 .handle_research_turn_start(
+                    connection_id,
                     request_id,
                     params,
                     display_input,

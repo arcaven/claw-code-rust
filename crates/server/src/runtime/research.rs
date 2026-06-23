@@ -312,6 +312,7 @@ impl ResearchUsageLedger {
 impl ServerRuntime {
     pub(crate) async fn handle_research_turn_start(
         self: &Arc<Self>,
+        connection_id: Option<u64>,
         request_id: serde_json::Value,
         params: TurnStartParams,
         display_input: String,
@@ -472,6 +473,12 @@ impl ServerRuntime {
             .lock()
             .await
             .insert(params.session_id, CancellationToken::new());
+        if let Some(connection_id) = connection_id {
+            self.active_turn_connections
+                .lock()
+                .await
+                .insert(params.session_id, connection_id);
+        }
         let research_display_input = research_display_input(&display_input);
         self.maybe_assign_provisional_title(params.session_id, &research_display_input)
             .await;
@@ -514,10 +521,8 @@ impl ServerRuntime {
                 build_turn_record(&turn, session_context, turn_context),
             )
         {
-            self.active_turn_cancellations
-                .lock()
-                .await
-                .remove(&params.session_id);
+            self.clear_active_turn_runtime_handles(params.session_id)
+                .await;
             {
                 let mut session = session_arc.lock().await;
                 if session
@@ -624,11 +629,7 @@ impl ServerRuntime {
             self.clear_research_child_agents(session_id).await;
         }
         let final_usage = usage_ledger.lock().await.aggregate();
-        self.active_tasks.lock().await.remove(&session_id);
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .remove(&session_id);
+        self.clear_active_turn_runtime_handles(session_id).await;
 
         match result {
             Ok(()) => {
