@@ -5,6 +5,7 @@
 //! methods without owning process I/O or response demultiplexing.
 
 mod acp_fs;
+mod acp_permissions;
 mod acp_terminal;
 mod stdio;
 

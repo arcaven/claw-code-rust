@@ -2,6 +2,8 @@ use super::super::*;
 
 use std::sync::Arc;
 
+use super::acp::legacy_error_to_acp;
+
 use devo_protocol::GoalClearParams;
 use devo_protocol::GoalClearResult;
 use devo_protocol::GoalSetParams;
@@ -18,14 +20,11 @@ use crate::ACP_SESSION_UPDATE_METHOD;
 use crate::AcpClientNotification;
 use crate::AcpContentBlock;
 use crate::AcpErrorCode;
-use crate::AcpErrorResponse;
 use crate::AcpPromptResult;
 use crate::AcpSessionNotification;
 use crate::AcpSessionUpdate;
 use crate::AcpStopReason;
-use crate::AcpSuccessResponse;
 use crate::CollaborationMode;
-use crate::ErrorResponse;
 use crate::InputItem;
 use crate::SessionCompactParams;
 use crate::SessionCompactResult;
@@ -33,6 +32,8 @@ use crate::SuccessResponse;
 use crate::TurnExecutionMode;
 use crate::TurnStartParams;
 use crate::TurnStartResult;
+use crate::acp_error_response;
+use crate::acp_success_response;
 
 pub(super) enum AcpSlashCommandPromptResult {
     NotCommand,
@@ -41,22 +42,11 @@ pub(super) enum AcpSlashCommandPromptResult {
 }
 
 impl ServerRuntime {
-    pub(super) fn schedule_acp_session_state_snapshot_after_response(
-        self: &Arc<Self>,
+    pub(crate) async fn send_acp_session_state_snapshot(
+        &self,
         connection_id: u64,
         session_id: SessionId,
     ) {
-        let runtime = Arc::clone(self);
-        tokio::spawn(async move {
-            // Let the request handler return and the transport enqueue the JSON-RPC response first.
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            runtime
-                .send_acp_session_state_snapshot(connection_id, session_id)
-                .await;
-        });
-    }
-
-    async fn send_acp_session_state_snapshot(&self, connection_id: u64, session_id: SessionId) {
         self.send_acp_session_update(
             connection_id,
             session_id,
@@ -413,14 +403,13 @@ impl ServerRuntime {
             runtime
                 .send_raw_to_connection(
                     connection_id,
-                    serde_json::to_value(AcpSuccessResponse::new(
+                    acp_success_response(
                         request_id,
                         AcpPromptResult {
                             stop_reason,
                             meta: None,
                         },
-                    ))
-                    .expect("serialize ACP prompt response"),
+                    ),
                 )
                 .await;
         });
@@ -506,43 +495,13 @@ fn input_items_from_research_prompt(
 }
 
 fn acp_prompt_success_response(request_id: serde_json::Value) -> serde_json::Value {
-    serde_json::to_value(AcpSuccessResponse::new(
+    acp_success_response(
         request_id,
         AcpPromptResult {
             stop_reason: AcpStopReason::EndTurn,
             meta: None,
         },
-    ))
-    .expect("serialize ACP prompt success response")
-}
-
-fn acp_error_response(
-    request_id: serde_json::Value,
-    code: AcpErrorCode,
-    message: impl Into<String>,
-) -> serde_json::Value {
-    serde_json::to_value(AcpErrorResponse::new(
-        request_id,
-        code,
-        message,
-        serde_json::Value::Null,
-    ))
-    .expect("serialize ACP error response")
-}
-
-fn legacy_error_to_acp(
-    request_id: serde_json::Value,
-    legacy_response: serde_json::Value,
-) -> serde_json::Value {
-    if let Ok(error) = serde_json::from_value::<ErrorResponse>(legacy_response) {
-        acp_error_response(request_id, AcpErrorCode::ServerError, error.error.message)
-    } else {
-        acp_error_response(
-            request_id,
-            AcpErrorCode::InternalError,
-            "failed to decode internal runtime response",
-        )
-    }
+    )
 }
 
 fn goal_summary_message(goal: &ThreadGoal) -> String {
