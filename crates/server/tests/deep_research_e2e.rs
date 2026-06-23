@@ -537,6 +537,7 @@ async fn deep_research_turn_streams_artifact_reasoning_and_final_report() -> Res
         serde_json::json!({
             "input_tokens": 5,
             "output_tokens": 5,
+            "total_tokens": 10,
             "cache_creation_input_tokens": null,
             "cache_read_input_tokens": null
         })
@@ -1385,6 +1386,8 @@ fn model_response(text: impl Into<String>) -> ModelResponse {
             output_tokens: 1,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
+            reasoning_output_tokens: None,
+            total_tokens: None,
         },
         metadata: ResponseMetadata::default(),
     }

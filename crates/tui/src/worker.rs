@@ -740,6 +740,7 @@ async fn run_worker(
             turn_count: 0,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            total_tokens: 0,
             total_cache_read_tokens: 0,
             prompt_token_estimate: 0,
             last_query_input_tokens: 0,
@@ -767,6 +768,7 @@ async fn run_worker_inner(
     let mut turn_count = 0usize;
     let mut total_input_tokens = 0usize;
     let mut total_output_tokens = 0usize;
+    let mut total_tokens = 0usize;
     let mut total_cache_read_tokens = 0usize;
     let mut last_query_total_tokens = 0usize;
     let mut last_query_input_tokens = 0usize;
@@ -809,6 +811,7 @@ async fn run_worker_inner(
                     active_agent_label,
                     total_input_tokens: resumed.session.total_input_tokens,
                     total_output_tokens: resumed.session.total_output_tokens,
+                    total_tokens: resumed.session.total_tokens,
                     total_cache_read_tokens: resumed.session.total_cache_read_tokens,
                     last_query_total_tokens: resumed.session.last_query_total_tokens,
                     last_query_input_tokens: resumed
@@ -828,6 +831,7 @@ async fn run_worker_inner(
                 reasoning_effort_selection = resumed.session.reasoning_effort_selection.clone();
                 total_input_tokens = resumed.session.total_input_tokens;
                 total_output_tokens = resumed.session.total_output_tokens;
+                total_tokens = resumed.session.total_tokens;
                 total_cache_read_tokens = resumed.session.total_cache_read_tokens;
                 last_query_total_tokens = resumed.session.last_query_total_tokens;
             }
@@ -837,6 +841,7 @@ async fn run_worker_inner(
                     turn_count,
                     total_input_tokens,
                     total_output_tokens,
+                    total_tokens,
                     total_cache_read_tokens,
                     prompt_token_estimate: total_input_tokens,
                     last_query_input_tokens,
@@ -908,6 +913,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -925,6 +931,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -1034,6 +1041,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1045,6 +1053,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1143,6 +1152,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1154,6 +1164,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1170,6 +1181,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -1206,6 +1218,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -1218,6 +1231,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -1246,6 +1260,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1479,6 +1494,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1510,6 +1526,7 @@ async fn run_worker_inner(
                         turn_count = 0;
                         total_input_tokens = 0;
                         total_output_tokens = 0;
+                        total_tokens = 0;
                         total_cache_read_tokens = 0;
                         last_query_total_tokens = 0;
                         last_query_input_tokens = 0;
@@ -1573,6 +1590,7 @@ async fn run_worker_inner(
                                     active_agent_label,
                                     total_input_tokens: result.session.total_input_tokens,
                                     total_output_tokens: result.session.total_output_tokens,
+                                    total_tokens: result.session.total_tokens,
                                     total_cache_read_tokens: result.session.total_cache_read_tokens,
                                     last_query_total_tokens: result
                                         .session
@@ -1598,6 +1616,7 @@ async fn run_worker_inner(
                                 reasoning_effort_selection = result.session.reasoning_effort_selection.clone();
                                 total_input_tokens = result.session.total_input_tokens;
                                 total_output_tokens = result.session.total_output_tokens;
+                                total_tokens = result.session.total_tokens;
                                 let _ =
                                     emit_skills_list(&mut client, &session_cwd, event_tx, false)
                                         .await;
@@ -1610,6 +1629,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1624,6 +1644,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -1652,6 +1673,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1669,6 +1691,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -1710,6 +1733,7 @@ async fn run_worker_inner(
                                     active_agent_label,
                                     total_input_tokens: result.session.total_input_tokens,
                                     total_output_tokens: result.session.total_output_tokens,
+                                    total_tokens: result.session.total_tokens,
                                     total_cache_read_tokens: result.session.total_cache_read_tokens,
                                     last_query_total_tokens: result
                                         .session
@@ -1731,6 +1755,7 @@ async fn run_worker_inner(
                                 reasoning_effort_selection = result.session.reasoning_effort_selection.clone();
                                 total_input_tokens = result.session.total_input_tokens;
                                 total_output_tokens = result.session.total_output_tokens;
+                                total_tokens = result.session.total_tokens;
                                 last_query_total_tokens =
                                     result.session.last_query_total_tokens;
                             }
@@ -1740,6 +1765,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1754,6 +1780,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -1811,6 +1838,7 @@ async fn run_worker_inner(
                                             active_agent_label,
                                             total_input_tokens: resumed.session.total_input_tokens,
                                             total_output_tokens: resumed.session.total_output_tokens,
+                                            total_tokens: resumed.session.total_tokens,
                                             total_cache_read_tokens: resumed.session.total_cache_read_tokens,
                                             last_query_total_tokens: resumed
                                                 .session
@@ -1832,6 +1860,7 @@ async fn run_worker_inner(
                                         reasoning_effort_selection = resumed.session.reasoning_effort_selection.clone();
                                         total_input_tokens = resumed.session.total_input_tokens;
                                         total_output_tokens = resumed.session.total_output_tokens;
+                                        total_tokens = resumed.session.total_tokens;
                                         last_query_total_tokens =
                                             resumed.session.last_query_total_tokens;
                                     }
@@ -1841,6 +1870,7 @@ async fn run_worker_inner(
                                             turn_count,
                                             total_input_tokens,
                                             total_output_tokens,
+                                            total_tokens,
                                             total_cache_read_tokens,
                                             prompt_token_estimate: total_input_tokens,
                                             last_query_input_tokens,
@@ -1854,6 +1884,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -1876,6 +1907,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -1971,6 +2003,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -2002,6 +2035,7 @@ async fn run_worker_inner(
                                     turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     prompt_token_estimate: total_input_tokens,
                                     last_query_input_tokens,
@@ -2032,6 +2066,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -2058,6 +2093,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -2077,6 +2113,7 @@ async fn run_worker_inner(
                                 turn_count,
                                 total_input_tokens,
                                 total_output_tokens,
+                                total_tokens,
                                 total_cache_read_tokens,
                                 prompt_token_estimate: total_input_tokens,
                                 last_query_input_tokens,
@@ -2134,6 +2171,7 @@ async fn run_worker_inner(
                                         turn_count,
                                         total_input_tokens,
                                         total_output_tokens,
+                                        total_tokens,
                                         total_cache_read_tokens,
                                         prompt_token_estimate: total_input_tokens,
                                         last_query_input_tokens,
@@ -2217,6 +2255,7 @@ async fn run_worker_inner(
                                     &mut turn_count,
                                     total_input_tokens,
                                     total_output_tokens,
+                                    total_tokens,
                                     total_cache_read_tokens,
                                     last_query_total_tokens,
                                     last_query_input_tokens,
@@ -2564,11 +2603,11 @@ async fn run_worker_inner(
                                         turn_count += 1;
                                         if let Some(usage) = &payload.turn.usage {
                                             last_query_input_tokens = usage.input_tokens as usize;
-                                            last_query_total_tokens = usage.input_tokens as usize
-                                                + usage.output_tokens as usize;
+                                            last_query_total_tokens = usage.display_total_tokens();
                                             if !saw_usage_update_for_turn {
                                                 total_input_tokens += usage.input_tokens as usize;
                                                 total_output_tokens += usage.output_tokens as usize;
+                                                total_tokens += usage.display_total_tokens();
                                                 total_cache_read_tokens += usage
                                                     .cache_read_input_tokens
                                                     .unwrap_or(0) as usize;
@@ -2580,6 +2619,7 @@ async fn run_worker_inner(
                                         turn_count,
                                         total_input_tokens,
                                         total_output_tokens,
+                                        total_tokens,
                                         total_cache_read_tokens,
                                         last_query_total_tokens,
                                         last_query_input_tokens,
@@ -2598,14 +2638,15 @@ async fn run_worker_inner(
                                     saw_usage_update_for_turn = true;
                                     total_input_tokens = payload.total_input_tokens;
                                     total_output_tokens = payload.total_output_tokens;
+                                    total_tokens = payload.total_tokens;
                                     total_cache_read_tokens = payload.total_cache_read_tokens;
                                     last_query_input_tokens = payload.last_query_input_tokens;
                                     let _ = event_tx.send(WorkerEvent::UsageUpdated {
                                         total_input_tokens: payload.total_input_tokens,
                                         total_output_tokens: payload.total_output_tokens,
+                                        total_tokens: payload.total_tokens,
                                         total_cache_read_tokens: payload.total_cache_read_tokens,
-                                        last_query_total_tokens: payload.usage.input_tokens as usize
-                                            + payload.usage.output_tokens as usize,
+                                        last_query_total_tokens: payload.usage.display_total_tokens(),
                                         last_query_input_tokens: payload.last_query_input_tokens,
                                     });
                                 }
@@ -2618,11 +2659,11 @@ async fn run_worker_inner(
                                         .unwrap_or_else(|| format!("turn failed with status {:?}", turn.status));
                                     if let Some(usage) = &turn.usage {
                                         last_query_input_tokens = usage.input_tokens as usize;
-                                        last_query_total_tokens = usage.input_tokens as usize
-                                            + usage.output_tokens as usize;
+                                        last_query_total_tokens = usage.display_total_tokens();
                                         if !saw_usage_update_for_turn {
                                             total_input_tokens += usage.input_tokens as usize;
                                             total_output_tokens += usage.output_tokens as usize;
+                                            total_tokens += usage.display_total_tokens();
                                             total_cache_read_tokens += usage
                                                 .cache_read_input_tokens
                                                 .unwrap_or(0) as usize;
@@ -2633,6 +2674,7 @@ async fn run_worker_inner(
                                         turn_count,
                                         total_input_tokens,
                                         total_output_tokens,
+                                        total_tokens,
                                         total_cache_read_tokens,
                                         prompt_token_estimate: turn
                                             .usage
@@ -2731,9 +2773,11 @@ async fn run_worker_inner(
                                 if let ServerEvent::SessionCompactionCompleted(payload) = event {
                                     total_input_tokens = payload.session.total_input_tokens;
                                     total_output_tokens = payload.session.total_output_tokens;
+                                    total_tokens = payload.session.total_tokens;
                                     let _ = event_tx.send(WorkerEvent::SessionCompacted {
                                         total_input_tokens,
                                         total_output_tokens,
+                                        total_tokens,
                                         prompt_token_estimate: payload.session.prompt_token_estimate,
                                     });
                                 }
@@ -4092,6 +4136,7 @@ fn acp_prompt_completed_event(
     turn_count: &mut usize,
     total_input_tokens: usize,
     total_output_tokens: usize,
+    total_tokens: usize,
     total_cache_read_tokens: usize,
     last_query_total_tokens: usize,
     last_query_input_tokens: usize,
@@ -4104,6 +4149,7 @@ fn acp_prompt_completed_event(
             turn_count: *turn_count,
             total_input_tokens,
             total_output_tokens,
+            total_tokens,
             total_cache_read_tokens,
             prompt_token_estimate: total_input_tokens,
             last_query_input_tokens,
@@ -4117,6 +4163,7 @@ fn acp_prompt_completed_event(
         turn_count: *turn_count,
         total_input_tokens,
         total_output_tokens,
+        total_tokens,
         total_cache_read_tokens,
         last_query_total_tokens,
         last_query_input_tokens,
@@ -5020,6 +5067,7 @@ mod tests {
             &mut turn_count,
             11,
             13,
+            24,
             17,
             19,
             23,
@@ -5035,6 +5083,7 @@ mod tests {
                 turn_count: 3,
                 total_input_tokens: 11,
                 total_output_tokens: 13,
+                total_tokens: 24,
                 total_cache_read_tokens: 17,
                 last_query_total_tokens: 19,
                 last_query_input_tokens: 23,
@@ -5059,6 +5108,7 @@ mod tests {
             &mut turn_count,
             11,
             13,
+            24,
             17,
             19,
             23,
@@ -5074,6 +5124,7 @@ mod tests {
                 turn_count: 2,
                 total_input_tokens: 11,
                 total_output_tokens: 13,
+                total_tokens: 24,
                 total_cache_read_tokens: 17,
                 prompt_token_estimate: 11,
                 last_query_input_tokens: 23,
@@ -5838,6 +5889,7 @@ mod tests {
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            total_tokens: 0,
             total_cache_creation_tokens: 0,
             total_cache_read_tokens: 0,
             prompt_token_estimate: 0,
@@ -6012,6 +6064,7 @@ mod tests {
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            total_tokens: 0,
             total_cache_creation_tokens: 0,
             total_cache_read_tokens: 0,
             prompt_token_estimate: 0,
@@ -6053,6 +6106,7 @@ mod tests {
             reasoning_effort: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            total_tokens: 0,
             total_cache_creation_tokens: 0,
             total_cache_read_tokens: 0,
             prompt_token_estimate: 0,

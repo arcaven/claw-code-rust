@@ -330,6 +330,8 @@ pub(crate) enum WorkerEvent {
         total_input_tokens: usize,
         /// Total output tokens accumulated in the session.
         total_output_tokens: usize,
+        /// Display total tokens accumulated in the session.
+        total_tokens: usize,
         /// Total cached input tokens accumulated in the session.
         total_cache_read_tokens: usize,
         /// Last completed query token usage, measured as input plus output tokens.
@@ -347,6 +349,8 @@ pub(crate) enum WorkerEvent {
         total_input_tokens: usize,
         /// Total output tokens accumulated in the session.
         total_output_tokens: usize,
+        /// Display total tokens accumulated in the session.
+        total_tokens: usize,
         /// Total cached input tokens accumulated in the session.
         total_cache_read_tokens: usize,
         /// Last completed turn token usage, measured as input plus output tokens.
@@ -366,6 +370,8 @@ pub(crate) enum WorkerEvent {
         total_input_tokens: usize,
         /// Total output tokens accumulated in the session.
         total_output_tokens: usize,
+        /// Display total tokens accumulated in the session.
+        total_tokens: usize,
         /// Total cached input tokens accumulated in the session.
         total_cache_read_tokens: usize,
         /// Estimated prompt tokens for the last attempted request.
@@ -539,6 +545,8 @@ pub(crate) enum WorkerEvent {
         total_input_tokens: usize,
         /// Total output tokens accumulated for the resumed session.
         total_output_tokens: usize,
+        /// Display total tokens accumulated for the resumed session.
+        total_tokens: usize,
         /// Total cached input tokens accumulated for the resumed session.
         total_cache_read_tokens: usize,
         /// Last completed turn token usage, measured as input plus output tokens.
@@ -571,6 +579,8 @@ pub(crate) enum WorkerEvent {
         total_input_tokens: usize,
         /// Total output tokens accumulated in the compacted session.
         total_output_tokens: usize,
+        /// Display total tokens accumulated in the compacted session.
+        total_tokens: usize,
         /// Estimated prompt tokens currently visible to the model.
         prompt_token_estimate: usize,
     },
