@@ -18,7 +18,6 @@ const COMPRESS_TEMPLATE: &str = include_str!("../../prompts/research/compress.md
 const FINAL_REPORT_TEMPLATE: &str = include_str!("../../prompts/research/final_report.md");
 const SUMMARIZE_WEBPAGE_TEMPLATE: &str =
     include_str!("../../prompts/research/summarize_webpage.md");
-const MAX_TASKS_PLACEHOLDER: &str = "{{ max_tasks }}";
 const MAX_ITERATIONS_PLACEHOLDER: &str = "{{ max_iterations }}";
 const MAX_SUMMARY_CHARS_PLACEHOLDER: &str = "{{ max_summary_chars }}";
 
@@ -88,9 +87,8 @@ pub fn research_brief() -> String {
     RESEARCH_BRIEF_TEMPLATE.trim_end().to_string()
 }
 
-pub fn supervisor(max_tasks: usize) -> String {
-    let max_tasks = max_tasks.to_string();
-    render(SUPERVISOR_TEMPLATE, &[(MAX_TASKS_PLACEHOLDER, &max_tasks)])
+pub fn supervisor() -> String {
+    SUPERVISOR_TEMPLATE.trim_end().to_string()
 }
 
 pub fn researcher(max_iterations: usize) -> String {
