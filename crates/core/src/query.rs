@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +31,7 @@ use crate::tools::ToolRegistry;
 use crate::tools::ToolRuntime;
 use crate::tools::deferred_loading::is_subagent_agent_coordination_tool;
 use devo_provider::ModelProviderSDK;
+use devo_provider::error::ProviderError;
 
 use crate::AgentError;
 use crate::ContentBlock;
@@ -164,9 +166,10 @@ pub enum QueryEvent {
 pub type EventCallback = Arc<dyn Fn(QueryEvent) + Send + Sync>;
 
 // ---------------------------------------------------------------------------
-// Error classification (capability 3.2)
+// Error classification
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, PartialEq, Eq)]
 enum ErrorClass {
     ContextTooLong,
     ParameterError,
@@ -178,6 +181,7 @@ enum ErrorClass {
     NoApiPermission,
     FileTooLarge,
     ServerError,
+    NetworkError,
     Unretryable,
 }
 
@@ -188,6 +192,74 @@ enum ProviderRetryDecision {
 }
 
 fn classify_error(e: &anyhow::Error) -> ErrorClass {
+    for cause in e.chain() {
+        let Some(provider_error) = cause.downcast_ref::<ProviderError>() else {
+            continue;
+        };
+        match provider_error {
+            ProviderError::AuthenticationError { .. } => return ErrorClass::AuthenticationFailure,
+            ProviderError::RateLimitError { .. } => return ErrorClass::RateLimit,
+            ProviderError::ProviderServerError {
+                status_code: Some(429),
+                ..
+            } => return ErrorClass::RateLimit,
+            ProviderError::ProviderServerError {
+                status_code: Some(408),
+                ..
+            }
+            | ProviderError::ProviderTimeoutError { .. }
+            | ProviderError::StreamError { .. } => return ErrorClass::NetworkError,
+            ProviderError::ProviderServerError { .. } => return ErrorClass::ServerError,
+            ProviderError::ContextLimitError { .. } => return ErrorClass::ContextTooLong,
+            ProviderError::ModelNotFoundError { .. } => return ErrorClass::TaskNotFound,
+            ProviderError::InvalidRequestError { .. } => return ErrorClass::ParameterError,
+            ProviderError::QuotaExceededError { .. }
+            | ProviderError::ContentFilteredError { .. } => {
+                return ErrorClass::Unretryable;
+            }
+            ProviderError::UnknownError {
+                status_code: Some(429),
+                ..
+            } => return ErrorClass::RateLimit,
+            ProviderError::UnknownError {
+                status_code: Some(408),
+                ..
+            } => return ErrorClass::NetworkError,
+            ProviderError::UnknownError {
+                status_code: Some(500..=599),
+                ..
+            } => return ErrorClass::ServerError,
+            ProviderError::UnknownError { .. } => {}
+        }
+    }
+
+    if e.chain().any(|cause| {
+        cause.downcast_ref::<reqwest::Error>().is_some_and(|error| {
+            error.is_timeout()
+                || error.is_connect()
+                || error.status() == Some(reqwest::StatusCode::REQUEST_TIMEOUT)
+        })
+    }) {
+        return ErrorClass::NetworkError;
+    }
+
+    if e.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                ErrorKind::TimedOut
+                    | ErrorKind::ConnectionRefused
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::NotConnected
+                    | ErrorKind::BrokenPipe
+                    | ErrorKind::UnexpectedEof
+            )
+        })
+    }) {
+        return ErrorClass::NetworkError;
+    }
+
     let msg = e.to_string().to_lowercase();
     // TODO: Expand the error of ContextTooLong
     if msg.contains("context_too_long") {
@@ -226,6 +298,41 @@ fn classify_error(e: &anyhow::Error) -> ErrorClass {
             || msg.contains("jsonl"))
     {
         ErrorClass::FileContentAnomaly
+    } else if msg.contains("408")
+        || msg.contains("request timeout")
+        || msg.contains("request timed out")
+        || msg.contains("operation timed out")
+        || msg.contains("timed out")
+        || msg.contains("deadline has elapsed")
+        || msg.contains("deadline exceeded")
+        || msg.contains("provider timeout")
+        || msg.contains("network error")
+        || msg.contains("network is unreachable")
+        || msg.contains("network unreachable")
+        || msg.contains("host unreachable")
+        || msg.contains("destination unreachable")
+        || msg.contains("unreachable host")
+        || msg.contains("no route to host")
+        || msg.contains("connection refused")
+        || msg.contains("connection reset")
+        || msg.contains("connection closed")
+        || msg.contains("connection aborted")
+        || msg.contains("connection timed out")
+        || msg.contains("connection failure")
+        || msg.contains("connection failed")
+        || msg.contains("failed to connect")
+        || msg.contains("connect error")
+        || msg.contains("error trying to connect")
+        || msg.contains("error sending request")
+        || msg.contains("dns error")
+        || msg.contains("failed to lookup address information")
+        || msg.contains("temporary failure in name resolution")
+        || msg.contains("name or service not known")
+        || msg.contains("nodename nor servname")
+        || msg.contains("could not resolve host")
+        || msg.contains("unexpected eof")
+    {
+        ErrorClass::NetworkError
     } else if msg.contains("400")
         || msg.contains("parameter error")
         || msg.contains("invalid parameter")
@@ -260,7 +367,7 @@ fn provider_retry_decision(
                 ProviderRetryDecision::CompactAndRetry
             }
         }
-        ErrorClass::RateLimit | ErrorClass::ServerError => {
+        ErrorClass::RateLimit | ErrorClass::ServerError | ErrorClass::NetworkError => {
             if *retry_count >= MAX_RETRIES {
                 ProviderRetryDecision::Fail
             } else {
@@ -1658,6 +1765,62 @@ mod tests {
     }
     use crate::ReasoningCapability;
     use crate::ReasoningImplementation;
+
+    #[test]
+    fn network_errors_are_retryable() {
+        let cases = [
+            anyhow::anyhow!("request timed out while connecting"),
+            anyhow::anyhow!(
+                "error sending request for url (https://api.example.test): connection refused"
+            ),
+            anyhow::anyhow!("dns error: failed to lookup address information"),
+            anyhow::anyhow!("network is unreachable"),
+            anyhow::anyhow!("Invalid status code: 408 Request Timeout"),
+            anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "socket timed out",
+            )),
+            anyhow::Error::new(devo_provider::error::ProviderError::ProviderTimeoutError {
+                message: "provider request timed out".into(),
+                provider_name: Some("test-provider".into()),
+            }),
+        ];
+
+        for error in cases {
+            assert_eq!(
+                super::classify_error(&error),
+                super::ErrorClass::NetworkError
+            );
+
+            let mut retry_count = 0;
+            let mut context_compacted = false;
+            assert!(matches!(
+                super::provider_retry_decision(&error, &mut retry_count, &mut context_compacted),
+                super::ProviderRetryDecision::RetryAfter(_)
+            ));
+            assert_eq!(retry_count, 1);
+            assert!(!context_compacted);
+        }
+    }
+
+    #[test]
+    fn token_timeout_remains_authentication_failure() {
+        let error = anyhow::anyhow!("token timeout");
+
+        assert_eq!(
+            super::classify_error(&error),
+            super::ErrorClass::AuthenticationFailure
+        );
+
+        let mut retry_count = 0;
+        let mut context_compacted = false;
+        assert!(matches!(
+            super::provider_retry_decision(&error, &mut retry_count, &mut context_compacted),
+            super::ProviderRetryDecision::Fail
+        ));
+        assert_eq!(retry_count, 0);
+        assert!(!context_compacted);
+    }
     use crate::ReasoningVariant;
     use crate::ReasoningVariantConfig;
     use crate::SessionConfig;
