@@ -9,6 +9,7 @@ import {
 	useRef,
 	useState,
 } from "react"
+import { optionMenuContentClass, optionMenuItemClass } from "./option-menu-styles"
 import { ScrollArea } from "./scroll-area"
 
 // ============================================================
@@ -118,7 +119,8 @@ function SearchableListPopoverContent({
 				<PopoverPrimitive.Popup
 					data-slot="searchable-list-popover-content"
 					className={cn(
-						"bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 origin-(--transform-origin) overflow-hidden rounded-md border p-0 shadow-md outline-hidden",
+						"text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 origin-(--transform-origin) overflow-hidden outline-hidden",
+						optionMenuContentClass,
 						width,
 						className,
 					)}
@@ -247,7 +249,8 @@ function SearchableListPopoverItem({
 			type="button"
 			onClick={onSelect}
 			className={cn(
-				"flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-muted",
+				"flex w-full min-w-0 items-center text-left transition-colors hover:bg-muted",
+				optionMenuItemClass,
 				isActive && "bg-accent text-accent-foreground",
 				className,
 			)}

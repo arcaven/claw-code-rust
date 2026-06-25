@@ -4,6 +4,11 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "@devo/ui/lib/utils"
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react"
 import type * as React from "react"
+import {
+	optionMenuContentClass,
+	optionMenuItemClass,
+	optionMenuSeparatorClass,
+} from "./option-menu-styles"
 
 const Select = SelectPrimitive.Root
 
@@ -81,7 +86,8 @@ function SelectContent({
 					data-slot="select-content"
 					data-align-trigger={alignItemWithTrigger}
 					className={cn(
-						"bg-popover text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 ring-foreground/10 min-w-36 rounded-md shadow-md ring-1 duration-100 data-[side=inline-start]:slide-in-from-right-2 data-[side=inline-end]:slide-in-from-left-2 relative isolate z-50 max-h-(--available-height) w-(--anchor-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto data-[align-trigger=true]:animate-none",
+						"text-popover-foreground data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 min-w-36 duration-100 data-[side=inline-start]:slide-in-from-right-2 data-[side=inline-end]:slide-in-from-left-2 relative isolate z-50 max-h-(--available-height) w-(--anchor-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto data-[align-trigger=true]:animate-none",
+						optionMenuContentClass,
 						className,
 					)}
 					{...props}
@@ -110,7 +116,8 @@ function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Prop
 		<SelectPrimitive.Item
 			data-slot="select-item"
 			className={cn(
-				"focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2 relative flex w-full cursor-default items-center outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+				"focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground pr-9 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2 relative flex w-full cursor-default items-center outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+				optionMenuItemClass,
 				className,
 			)}
 			{...props}
@@ -133,7 +140,7 @@ function SelectSeparator({ className, ...props }: SelectPrimitive.Separator.Prop
 	return (
 		<SelectPrimitive.Separator
 			data-slot="select-separator"
-			className={cn("bg-border -mx-1 my-1 h-px pointer-events-none", className)}
+			className={cn("bg-border -mx-1 h-px pointer-events-none", optionMenuSeparatorClass, className)}
 			{...props}
 		/>
 	)

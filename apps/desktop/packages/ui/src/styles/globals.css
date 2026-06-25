@@ -804,6 +804,40 @@
     background-color: var(--ring);
   }
 
+  /* Comfort scrollbar — larger hit target for primary navigation panes */
+  .scrollbar-comfort {
+    scrollbar-width: auto;
+    scrollbar-color: color-mix(in srgb, var(--muted-foreground) 34%, transparent) transparent;
+    transition: scrollbar-color var(--duration-fast, 0.15s);
+  }
+  .scrollbar-comfort:hover {
+    scrollbar-color: color-mix(in srgb, var(--muted-foreground) 48%, transparent) transparent;
+  }
+  .scrollbar-comfort:active {
+    scrollbar-color: color-mix(in srgb, var(--muted-foreground) 64%, transparent) transparent;
+  }
+  .scrollbar-comfort::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+  }
+  .scrollbar-comfort::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-comfort::-webkit-scrollbar-thumb {
+    min-height: 72px;
+    background-color: color-mix(in srgb, var(--muted-foreground) 34%, transparent);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+    transition: background-color var(--duration-fast, 0.15s);
+  }
+  .scrollbar-comfort::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--muted-foreground) 48%, transparent);
+  }
+  .scrollbar-comfort::-webkit-scrollbar-thumb:active {
+    background-color: color-mix(in srgb, var(--muted-foreground) 64%, transparent);
+  }
+
   /* Hide scrollbar entirely (for command palette list etc.) */
   .scrollbar-none {
     scrollbar-width: none;
