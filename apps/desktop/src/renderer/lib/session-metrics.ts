@@ -67,6 +67,8 @@ export interface SessionMetricsExtended extends SessionMetrics {
 	retryCount: number
 }
 
+const MAX_COMPLETED_TURN_WORK_TIME_MS = 24 * 60 * 60 * 1000
+
 // ============================================================
 // Extraction helpers
 // ============================================================
@@ -100,42 +102,74 @@ export function computeAgentWorkTime(messages: Message[]): number {
 	return total
 }
 
-/**
- * Compute agent work time for a single turn.
- * Sums `(completed - created)` for each assistant message in the turn,
- * which is the actual agent work time (excluding gaps between messages).
- */
-export function computeTurnWorkTime(turn: ChatTurn): number {
-	let total = 0
-	for (const entry of turn.assistantMessages) {
-		if (entry.info.role !== "assistant") continue
-		const end = entry.info.time.completed ?? Date.now()
-		total += Math.max(0, end - entry.info.time.created)
+function partTimestamp(part: Part): number | undefined {
+	if (part.type === "tool") {
+		const time = part.state?.time
+		return typeof time?.end === "number"
+			? time.end
+			: typeof time?.start === "number"
+				? time.start
+				: undefined
 	}
-	return total
+
+	const time = part.time
+	return typeof time?.end === "number"
+		? time.end
+		: typeof time?.start === "number"
+			? time.start
+			: undefined
+}
+
+function completedTurnEnd(turn: ChatTurn): number | undefined {
+	for (let i = turn.assistantMessages.length - 1; i >= 0; i--) {
+		const completed = turn.assistantMessages[i].info.time.completed
+		if (typeof completed === "number") return completed
+	}
+
+	let fallback: number | undefined
+	for (const entry of turn.assistantMessages) {
+		if (typeof entry.info.time.created === "number") {
+			fallback =
+				fallback === undefined ? entry.info.time.created : Math.max(fallback, entry.info.time.created)
+		}
+		for (const part of entry.parts) {
+			const timestamp = partTimestamp(part)
+			if (timestamp !== undefined) {
+				fallback = fallback === undefined ? timestamp : Math.max(fallback, timestamp)
+			}
+		}
+	}
+	return fallback
 }
 
 /**
- * Compute the completed vs in-progress work time split for a single turn.
- * Used by the LiveTurnTimer to show accurate ticking work time.
- * Returns `completedMs` (sum of finished assistant messages) and
- * `activeStartMs` (created time of the in-progress message, or null if idle).
+ * Compute end-to-end elapsed time for a single turn.
+ * Starts at the user message creation time and ends at the turn completion time.
+ * Active turns may use `Date.now()`; completed turns fall back to persisted
+ * message/part timestamps so historical durations do not keep growing.
+ */
+export function computeTurnWorkTime(
+	turn: ChatTurn,
+	options: { active?: boolean; now?: () => number } = {},
+): number {
+	const start = turn.userMessage.info.time.created
+	const end = options.active ? (options.now?.() ?? Date.now()) : completedTurnEnd(turn)
+	if (typeof start !== "number" || typeof end !== "number") return 0
+	const elapsed = Math.max(0, end - start)
+	if (!options.active && elapsed > MAX_COMPLETED_TURN_WORK_TIME_MS) return 0
+	return elapsed
+}
+
+/**
+ * Compute the live elapsed-time split for a single active turn.
+ * The submit button timer uses the same user-message start as completed turn
+ * duration, so active and completed displays share one semantic.
  */
 export function computeTurnWorkTimeSplit(turn: ChatTurn): {
 	completedMs: number
 	activeStartMs: number | null
 } {
-	let completedMs = 0
-	let activeStartMs: number | null = null
-	for (const entry of turn.assistantMessages) {
-		if (entry.info.role !== "assistant") continue
-		if (entry.info.time.completed != null) {
-			completedMs += Math.max(0, entry.info.time.completed - entry.info.time.created)
-		} else {
-			activeStartMs = entry.info.time.created
-		}
-	}
-	return { completedMs, activeStartMs }
+	return { completedMs: 0, activeStartMs: turn.userMessage.info.time.created ?? null }
 }
 
 /**

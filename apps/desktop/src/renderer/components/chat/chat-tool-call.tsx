@@ -42,7 +42,6 @@ import type { ReactNode } from "react"
 import { memo, useCallback, useMemo } from "react"
 import { useToolElapsedTime } from "../../hooks/use-elapsed-time"
 import type { BundledLanguage } from "shiki"
-import { getPartFirstSeenAt } from "../../atoms/parts"
 import { viewFileInDiffPanelAtom } from "../../atoms/ui"
 import { detectContentLanguage, detectLanguage, prettyPrintJson } from "../../lib/language"
 import type { FilePart, ToolPart, ToolStateCompleted } from "../../lib/types"
@@ -356,23 +355,11 @@ function shortenPath(path: string | undefined): string | undefined {
 	return parts.slice(-2).join("/")
 }
 
-/**
- * Compute tool duration from state times.
- *
- * Prefers the client-side "first seen" timestamp (when the tool card first
- * appeared to the user, typically at the "pending" state) over the server-side
- * `time.start` (which only marks when execution began, after argument streaming).
- * This gives a wall-clock duration that matches what the user experienced.
- *
- * Falls back to `state.time.start` for parts loaded from REST (page refresh,
- * reconnect) where no client-side timestamp is available.
- */
+/** Compute completed tool duration from the SDK tool-state timestamps. */
 export function getToolDuration(part: ToolPart): string | undefined {
 	const state = part.state
 	if (state.status === "completed" || state.status === "error") {
-		const firstSeen = getPartFirstSeenAt(part.id)
-		const start = firstSeen ?? state.time.start
-		const ms = state.time.end - start
+		const ms = Math.max(0, state.time.end - state.time.start)
 		if (ms < 1000) return `${ms}ms`
 		const seconds = Math.floor(ms / 1000)
 		if (seconds < 60) return `${seconds}s`
@@ -818,30 +805,10 @@ function GenericContent({ part }: { part: ToolPart }) {
 /**
  * Returns whether a tool should default to expanded in the active turn.
  */
-export function shouldDefaultOpen(tool: string, status: string): boolean {
-	// Errors are always expanded
-	if (status === "error") return true
-
-	switch (tool) {
-		// High-information tools: default open in active turn
-		case "bash":
-		case "edit":
-		case "write":
-		case "read":
-		case "apply_patch":
-		case "task":
-		case "question":
-			return true
-		// Todos: always collapsed — the pinned SessionTaskList shows live state.
-		// Inline cards serve as timeline breadcrumbs for session review only.
-		case "todowrite":
-		case "todoread":
-			return false
-		default:
-			return false
-	}
+export function shouldDefaultOpen(_tool: string, status: string): boolean {
+	// Errors stay expanded so failure output remains visible for recovery.
+	return status === "error"
 }
-
 /**
  * Returns whether a tool has expandable content.
  */
@@ -1137,10 +1104,8 @@ export const ChatToolCall = memo(
 					forceOpen={status === "error"}
 					hasContent={hasContent}
 					status={status}
-				>
-					{/* Tool-specific content */}
-					{hasContent && getToolContent(part)}
-				</ToolCard>
+					renderContent={hasContent ? () => getToolContent(part) : undefined}
+				/>
 
 				{/* Tool attachments (images, etc.) */}
 				{attachments.length > 0 && <ToolAttachments attachments={attachments} />}

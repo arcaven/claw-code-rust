@@ -350,7 +350,7 @@ export function ChatInput({
 					onClose={() => setMentionOpen(false)}
 				/>
 				<PromptInput
-					className="rounded-xl"
+					className="devo-composer"
 					onSubmit={(message) => {
 						if (message.text.trim() && isConnected && !sending)
 							handleSend(message.text, message.files.length > 0 ? message.files : undefined)

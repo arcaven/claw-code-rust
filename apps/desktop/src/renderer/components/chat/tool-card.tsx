@@ -72,6 +72,8 @@ interface ToolCardProps {
 	status?: "running" | "error" | "completed" | "pending"
 	/** Expandable content */
 	children?: ReactNode
+	/** Lazily renders expandable content only after the card opens. */
+	renderContent?: () => ReactNode
 }
 
 export const ToolCard = memo(function ToolCard({
@@ -84,9 +86,12 @@ export const ToolCard = memo(function ToolCard({
 	hasContent = false,
 	status,
 	children,
+	renderContent,
 }: ToolCardProps) {
 	const [isOpen, setIsOpen] = useState(defaultOpen || forceOpen)
-	const showContent = hasContent && children != null
+	const open = forceOpen || isOpen
+	const showContent = hasContent && (children != null || renderContent != null)
+	const content = open ? (renderContent ? renderContent() : children) : null
 
 	const isError = status === "error"
 	const isRunning = status === "running" || status === "pending"
@@ -137,7 +142,7 @@ export const ToolCard = memo(function ToolCard({
 
 	// Expandable: collapsible card
 	return (
-		<Collapsible open={forceOpen || isOpen} onOpenChange={forceOpen ? undefined : setIsOpen}>
+		<Collapsible open={open} onOpenChange={forceOpen ? undefined : setIsOpen}>
 			<div
 				className={cn(
 					"overflow-hidden rounded-md",
@@ -155,7 +160,7 @@ export const ToolCard = memo(function ToolCard({
 					<ChevronRightIcon
 						className={cn(
 							"size-3 shrink-0 text-muted-foreground/50 transition-transform",
-							(forceOpen || isOpen) && "rotate-90",
+							open && "rotate-90",
 						)}
 					/>
 					<span
@@ -186,7 +191,7 @@ export const ToolCard = memo(function ToolCard({
 					)}
 				</CollapsibleTrigger>
 				<CollapsibleContent>
-					<div className="border-t border-border/50">{children}</div>
+					{open && <div className="border-t border-border/50">{content}</div>}
 				</CollapsibleContent>
 			</div>
 		</Collapsible>

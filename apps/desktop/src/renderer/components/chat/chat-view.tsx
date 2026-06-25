@@ -16,6 +16,7 @@ import {
 	usePromptInputController,
 } from "@devo/ui/components/ai-elements/prompt-input"
 import { cn } from "@devo/ui/lib/utils"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { useAtomValue, useSetAtom } from "jotai"
 import {
 	ArrowUpToLineIcon,
@@ -29,6 +30,8 @@ import {
 	XIcon,
 } from "lucide-react"
 import {
+	type CSSProperties,
+	type ReactNode,
 	useCallback,
 	useEffect,
 	useImperativeHandle,
@@ -67,6 +70,9 @@ import type { Agent, FileAttachment, FilePart, QuestionAnswer, TextPart } from "
 import { getProjectClient } from "../../services/connection-manager"
 
 const log = createLogger("chat-view")
+
+const VIRTUALIZE_TURN_THRESHOLD = 30
+const VIRTUAL_TURN_GAP = 40
 
 import {
 	type DiffComment,
@@ -177,6 +183,70 @@ function ScrollBridge({ scrollRef }: { scrollRef: React.RefObject<ScrollHandle |
 	return null
 }
 
+function estimateTurnSize(turn: ChatTurn): number {
+	let partCount = turn.userMessage.parts.length
+	for (const message of turn.assistantMessages) {
+		partCount += message.parts.length
+	}
+	const assistantTextLength = turn.assistantMessages.reduce((total, message) => {
+		return (
+			total +
+			message.parts.reduce((messageTotal, part) => {
+				return messageTotal + (part.type === "text" || part.type === "reasoning" ? part.text.length : 0)
+			}, 0)
+		)
+	}, 0)
+	return Math.min(960, 180 + turn.assistantMessages.length * 72 + partCount * 36 + assistantTextLength / 12)
+}
+
+interface VirtualizedTurnListProps {
+	turns: ChatTurn[]
+	renderTurn: (turn: ChatTurn, index: number) => ReactNode
+}
+
+function VirtualizedTurnList({ turns, renderTurn }: VirtualizedTurnListProps) {
+	const { scrollRef } = useStickToBottomContext()
+	const virtualizer = useVirtualizer({
+		count: turns.length,
+		getScrollElement: () => scrollRef.current,
+		getItemKey: (index) => turns[index]?.id ?? index,
+		estimateSize: (index) => estimateTurnSize(turns[index]),
+		overscan: 5,
+	})
+
+	return (
+		<div
+			style={{
+				height: `${virtualizer.getTotalSize()}px`,
+				position: "relative",
+				width: "100%",
+			}}
+		>
+			{virtualizer.getVirtualItems().map((virtualRow) => {
+				const turn = turns[virtualRow.index]
+				return (
+					<div
+						key={virtualRow.key}
+						data-index={virtualRow.index}
+						ref={virtualizer.measureElement}
+						style={{
+							position: "absolute",
+							top: 0,
+							left: 0,
+							width: "100%",
+							transform: `translateY(${virtualRow.start}px)`,
+						}}
+					>
+						<div style={{ paddingBottom: VIRTUAL_TURN_GAP }}>
+							{renderTurn(turn, virtualRow.index)}
+						</div>
+					</div>
+				)
+			})}
+		</div>
+	)
+}
+
 /**
  * Floating pill button that appears when the agent finishes working.
  * Scrolls to the beginning of the last assistant response so the user
@@ -244,7 +314,7 @@ function ScrollToResponseStart({
 		<button
 			type="button"
 			onClick={handleClick}
-			className="absolute bottom-14 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground shadow-md transition-colors hover:bg-muted hover:text-foreground"
+			className="absolute bottom-[calc(var(--chat-composer-inset)+3.5rem)] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground shadow-md transition-colors hover:bg-muted hover:text-foreground"
 		>
 			<ArrowUpToLineIcon className="size-3" />
 			<span>Jump to start of response</span>
@@ -470,13 +540,63 @@ export function ChatView({
 	// Ref to imperatively scroll the conversation to bottom from outside the
 	// <Conversation> tree (e.g. after sending a message or answering a question).
 	const scrollRef = useRef<ScrollHandle | null>(null)
+	const composerRef = useRef<HTMLDivElement | null>(null)
+	const [composerInset, setComposerInset] = useState(0)
+	const [expandedStepTurnIds, setExpandedStepTurnIds] = useState<Set<string>>(() => new Set())
 
 	// Session-level error and setup phase from the session atom
 	const sessionEntry = useAtomValue(sessionFamily(agent.sessionId))
 	const sessionError = sessionEntry?.error
 	const setupPhase = sessionEntry?.setupPhase
+
+	useLayoutEffect(() => {
+		if (setupPhase) {
+			setComposerInset(0)
+			return
+		}
+
+		const composer = composerRef.current
+		if (!composer) return
+
+		const updateComposerInset = () => {
+			const nextInset = Math.ceil(composer.getBoundingClientRect().height)
+			setComposerInset((currentInset) =>
+				currentInset === nextInset ? currentInset : nextInset,
+			)
+		}
+
+		updateComposerInset()
+
+		if (typeof ResizeObserver === "undefined") {
+			if (typeof window !== "undefined") {
+				window.addEventListener("resize", updateComposerInset)
+			}
+			return () => {
+				if (typeof window !== "undefined") {
+					window.removeEventListener("resize", updateComposerInset)
+				}
+			}
+		}
+
+		const resizeObserver = new ResizeObserver(updateComposerInset)
+		resizeObserver.observe(composer)
+		if (typeof window !== "undefined") {
+			window.addEventListener("resize", updateComposerInset)
+		}
+
+		return () => {
+			resizeObserver.disconnect()
+			if (typeof window !== "undefined") {
+				window.removeEventListener("resize", updateComposerInset)
+			}
+		}
+	}, [setupPhase])
 	const effectivePermission = useAtomValue(effectivePermissionFamily(agent.sessionId))
 	const removePermission = useSetAtom(removePermissionAtom)
+
+	useEffect(() => {
+		setExpandedStepTurnIds(new Set())
+	}, [agent.sessionId])
 	// Format the session-level error for display. Only shown when the last
 	// turn doesn't already carry an assistant-level error (the server emits
 	// both session.error and message.updated for the same failure, so showing
@@ -611,16 +731,82 @@ export function ChatView({
 	// Width constraint class: remove max-w when review panel is open
 	const contentWidthClass = reviewPanelOpen
 		? "mx-auto w-full min-w-0"
-		: "mx-auto w-full min-w-0 max-w-4xl"
+		: "mx-auto w-full min-w-0 max-w-3xl"
+
+	const handleStepsExpandedChange = useCallback((turnId: string, expanded: boolean) => {
+		setExpandedStepTurnIds((current) => {
+			const next = new Set(current)
+			if (expanded) {
+				next.add(turnId)
+			} else {
+				next.delete(turnId)
+			}
+			return next
+		})
+	}, [])
+
+	const renderTurn = useCallback(
+		(turn: ChatTurn, index: number) => (
+			<ChatTurnComponent
+				key={turn.id}
+				turn={turn}
+				isLast={index === turns.length - 1}
+				isWorking={isWorking}
+				agent={agent}
+				pendingPermission={index === turns.length - 1 ? effectivePermission : undefined}
+				isConnected={isConnected}
+				stepsExpanded={expandedStepTurnIds.has(turn.id)}
+				onStepsExpandedChange={handleStepsExpandedChange}
+				onApprovePermission={handleApprovePermission}
+				onDenyPermission={handleDenyPermission}
+				onRevertToMessage={onRevertToMessage}
+				onSendNow={isWorking ? handleSendNow : undefined}
+				onForkFromTurn={
+					onForkFromTurn
+						? () => {
+								const nextTurn = turns[index + 1]
+								return onForkFromTurn(nextTurn?.userMessage.info.id)
+							}
+						: undefined
+				}
+				onDeletePart={onDeletePart}
+			/>
+		),
+		[
+			agent,
+			effectivePermission,
+			expandedStepTurnIds,
+			handleApprovePermission,
+			handleDenyPermission,
+			handleSendNow,
+			handleStepsExpandedChange,
+			isConnected,
+			isWorking,
+			onDeletePart,
+			onForkFromTurn,
+			onRevertToMessage,
+			turns,
+		],
+	)
 
 	return (
-		<div className="flex h-full min-w-0 flex-col overflow-hidden">
+		<div
+			className="relative flex h-full min-w-0 flex-col overflow-hidden"
+			style={
+				{
+					"--chat-composer-inset": setupPhase ? "0px" : `${composerInset}px`,
+				} as CSSProperties
+			}
+		>
 			{/* Chat messages -- constrained width for readability */}
 			<div className="relative min-h-0 min-w-0 flex-1">
 				<Conversation key={agent.sessionId} className="h-full">
 					<ScrollOnLoad loading={loading} sessionId={agent.sessionId} />
 					<ScrollBridge scrollRef={scrollRef} />
-					<ConversationContent className="gap-10 px-6 py-2 sm:px-8 sm:py-6 lg:px-10">
+					<ConversationContent
+						scrollClassName="scrollbar-comfort"
+						className="gap-10 px-6 pt-2 pb-[calc(var(--chat-composer-inset)+1rem)] sm:px-8 sm:pt-6 sm:pb-[calc(var(--chat-composer-inset)+1.5rem)] lg:px-10"
+					>
 						<div className={cn(contentWidthClass, "space-y-10")}>
 							{/* Load earlier messages button */}
 							{hasEarlierMessages && (
@@ -647,30 +833,11 @@ export function ChatView({
 									<span className="ml-2 text-sm text-muted-foreground">Loading chat...</span>
 								</div>
 							) : turns.length > 0 ? (
-							turns.map((turn, index) => (
-								<ChatTurnComponent
-									key={turn.id}
-									turn={turn}
-									isLast={index === turns.length - 1}
-									isWorking={isWorking}
-									agent={agent}
-									pendingPermission={index === turns.length - 1 ? effectivePermission : undefined}
-									isConnected={isConnected}
-									onApprovePermission={handleApprovePermission}
-									onDenyPermission={handleDenyPermission}
-									onRevertToMessage={onRevertToMessage}
-									onSendNow={isWorking ? handleSendNow : undefined}
-									onForkFromTurn={
-										onForkFromTurn
-											? () => {
-													const nextTurn = turns[index + 1]
-													return onForkFromTurn(nextTurn?.userMessage.info.id)
-												}
-											: undefined
-									}
-									onDeletePart={onDeletePart}
-								/>
-							))
+								turns.length > VIRTUALIZE_TURN_THRESHOLD ? (
+									<VirtualizedTurnList turns={turns} renderTurn={renderTurn} />
+								) : (
+									turns.map(renderTurn)
+								)
 							) : setupPhase ? (
 								<WorktreeSetupProgress phase={setupPhase} />
 							) : (
@@ -688,7 +855,7 @@ export function ChatView({
 						</div>
 					</ConversationContent>
 					<ScrollToResponseStart isWorking={isWorking} scrollRef={scrollRef} />
-					<ConversationScrollButton />
+					<ConversationScrollButton className="!bottom-[calc(var(--chat-composer-inset)+1rem)]" />
 				</Conversation>
 
 				{/* Top fade */}
@@ -701,7 +868,7 @@ export function ChatView({
 				<div
 					data-slot="scroll-fade"
 					aria-hidden="true"
-					className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-background/30 to-transparent"
+					className="pointer-events-none absolute inset-x-0 bottom-[var(--chat-composer-inset)] z-10 h-6 bg-gradient-to-t from-background/30 to-transparent"
 				/>
 			</div>
 
@@ -710,28 +877,33 @@ export function ChatView({
 			   popover, mention, and model-selection state changes don't re-render the
 			   conversation turn list above. */}
 			{!setupPhase && (
-				<ChatInputSection
-					agent={agent}
-					turns={turns}
-					isConnected={isConnected}
-					isWorking={isWorking}
-					onSendMessage={onSendMessage}
-					onStop={onStop}
-					providers={providers}
-					config={config}
-					devoAgents={devoAgents}
-					onApprove={handleApprovePermission}
-					onDeny={handleDenyPermission}
-					onReplyQuestion={onReplyQuestion}
-					onRejectQuestion={onRejectQuestion}
-					canRedo={canRedo}
-					onUndo={onUndo}
-					onRedo={onRedo}
-					isReverted={isReverted}
-					scrollRef={scrollRef}
-					reviewPanelOpen={reviewPanelOpen}
-					onForkFromTurn={onForkFromTurn}
-				/>
+				<div
+					ref={composerRef}
+					className="pointer-events-none absolute bottom-0 left-0 right-3.5 z-30 overflow-visible pt-3"
+				>
+					<ChatInputSection
+						agent={agent}
+						turns={turns}
+						isConnected={isConnected}
+						isWorking={isWorking}
+						onSendMessage={onSendMessage}
+						onStop={onStop}
+						providers={providers}
+						config={config}
+						devoAgents={devoAgents}
+						onApprove={handleApprovePermission}
+						onDeny={handleDenyPermission}
+						onReplyQuestion={onReplyQuestion}
+						onRejectQuestion={onRejectQuestion}
+						canRedo={canRedo}
+						onUndo={onUndo}
+						onRedo={onRedo}
+						isReverted={isReverted}
+						scrollRef={scrollRef}
+						reviewPanelOpen={reviewPanelOpen}
+						onForkFromTurn={onForkFromTurn}
+					/>
+				</div>
 			)}
 		</div>
 	)
@@ -805,7 +977,7 @@ function ChatInputSection({
 	const diffComments = useAtomValue(diffCommentsFamily(agent.sessionId))
 	const setDiffComments = useSetAtom(diffCommentsFamily(agent.sessionId))
 
-	// Work time split for the current (last) turn — used for the live timer on the submit button.
+	// Elapsed-time split for the current turn — used for the live timer on the submit button.
 	const currentTurnWorkSplit = useMemo(() => {
 		if (!isWorking || turns.length === 0) return null
 		const lastTurn = turns[turns.length - 1]
@@ -1319,12 +1491,12 @@ function ChatInputSection({
 	// Width constraint class: remove max-w when review panel is open
 	const inputWidthClass = reviewPanelOpen
 		? "mx-auto w-full min-w-0"
-		: "mx-auto w-full min-w-0 max-w-4xl"
+		: "mx-auto w-full min-w-0 max-w-3xl"
 
 	return (
 		<>
-			<div className="min-w-0 px-6 pb-4 pt-1 sm:px-8 sm:pt-2 lg:px-10">
-				<div className={inputWidthClass}>
+			<div className="pointer-events-none min-w-0 px-6 pb-4 pt-0 sm:px-8 lg:px-10">
+				<div className={cn(inputWidthClass, "pointer-events-auto")}>
 					{/* Session task list — collapsible todo progress */}
 					<SessionTaskList sessionId={agent.sessionId} />
 
@@ -1409,7 +1581,7 @@ function ChatInputSection({
 									onClose={handleMentionClose}
 								/>
 								<PromptInput
-									className="rounded-xl"
+									className="devo-composer bg-background/95 shadow-[0_18px_52px_rgba(0,0,0,0.10)] dark:shadow-[0_18px_58px_rgba(0,0,0,0.34)]"
 									accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
 									multiple
 									maxFileSize={10 * 1024 * 1024}
@@ -1497,10 +1669,7 @@ function ChatInputSection({
 // ============================================================
 
 /**
- * Compact live timer that shows how long the current exchange has been working.
- * Uses the same completed + active split as the header's LiveWorkTime, so it
- * shows actual agent work time (sum of assistant message durations) rather than
- * wall-clock elapsed time.
+ * Compact live timer that shows elapsed time from the user prompt to now.
  */
 function LiveTurnTimer({
 	completedMs,

@@ -10,6 +10,7 @@ import {
 	ReasoningContent,
 	ReasoningText,
 	ReasoningTrigger,
+	useReasoning,
 } from "@devo/ui/components/ai-elements/reasoning"
 import { Shimmer } from "@devo/ui/components/ai-elements/shimmer"
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@devo/ui/components/dialog"
@@ -28,7 +29,7 @@ import {
 	Undo2Icon,
 	XIcon,
 } from "lucide-react"
-import { memo, useCallback, useDeferredValue, useMemo, useRef, useState } from "react"
+import { memo, type ReactNode, useCallback, useDeferredValue, useMemo, useRef, useState } from "react"
 import { useDisplayMode } from "../../hooks/use-agents"
 import type { ChatMessageEntry, ChatTurn as ChatTurnType } from "../../hooks/use-session-chat"
 import {
@@ -328,6 +329,18 @@ function getError(assistantMessages: ChatMessageEntry[]): string | undefined {
 	return undefined
 }
 
+function LazyReasoningContent({
+	children,
+	animated,
+}: {
+	children: ReactNode
+	animated?: boolean
+}) {
+	const { isOpen, isStreaming } = useReasoning()
+	if (!isOpen && !isStreaming) return null
+	return <ReasoningContent animated={animated}>{children}</ReasoningContent>
+}
+
 // ============================================================
 // Turn comparison for memo
 // ============================================================
@@ -605,6 +618,9 @@ interface ChatTurnProps {
 	onForkFromTurn?: () => Promise<void>
 	/** Delete a specific part from a message (for error recovery) */
 	onDeletePart?: (sessionId: string, messageId: string, partId: string) => Promise<void>
+	/** Controlled verbose step expansion state, used by virtualized transcripts. */
+	stepsExpanded?: boolean
+	onStepsExpandedChange?: (turnId: string, expanded: boolean) => void
 }
 
 function pendingPermissionFingerprint(permission: PendingPermission | undefined): string {
@@ -647,11 +663,24 @@ export const ChatTurnComponent = memo(
 		onSendNow,
 		onForkFromTurn,
 		onDeletePart,
+		stepsExpanded: controlledStepsExpanded,
+		onStepsExpandedChange,
 	}: ChatTurnProps) {
-		const [stepsExpanded, setStepsExpanded] = useState(false)
+		const [uncontrolledStepsExpanded, setUncontrolledStepsExpanded] = useState(false)
 		const [copied, setCopied] = useState(false)
 		const displayMode = useDisplayMode()
 		const turnRef = useRef<HTMLDivElement>(null)
+		const stepsExpanded = controlledStepsExpanded ?? uncontrolledStepsExpanded
+		const setStepsExpanded = useCallback(
+			(expanded: boolean) => {
+				if (onStepsExpandedChange) {
+					onStepsExpandedChange(turn.id, expanded)
+				} else {
+					setUncontrolledStepsExpanded(expanded)
+				}
+			},
+			[onStepsExpandedChange, turn.id],
+		)
 
 		const isSynthetic = useMemo(() => isSyntheticMessage(turn.userMessage), [turn.userMessage])
 		const userText = useMemo(() => getUserText(turn.userMessage), [turn.userMessage])
@@ -690,9 +719,9 @@ export const ChatTurnComponent = memo(
 		const hasReasoning = orderedParts.some((p) => p.kind === "reasoning")
 
 		const duration = useMemo(() => {
-			const workTimeMs = computeTurnWorkTime(turn)
+			const workTimeMs = computeTurnWorkTime(turn, { active: working })
 			return workTimeMs >= 1000 ? formatWorkDuration(workTimeMs) : ""
-		}, [turn])
+		}, [turn, working])
 		const turnCostStr = useMemo(() => {
 			const cost = computeTurnCost(turn)
 			return cost > 0 ? formatCost(cost) : ""
@@ -715,6 +744,13 @@ export const ChatTurnComponent = memo(
 		// In verbose mode, we render full tool cards.
 		// stepsExpanded forces verbose rendering on a per-turn basis.
 		const showVerboseTools = isVerbose || stepsExpanded
+
+		const verboseOrderedParts = useMemo(() => {
+			if (!stepsExpanded || isVerbose || working) return orderedParts
+			const stepParts = orderedParts.filter((part) => part.kind !== "text")
+			const textParts = orderedParts.filter((part) => part.kind === "text")
+			return [...stepParts, ...textParts]
+		}, [isVerbose, orderedParts, stepsExpanded, working])
 
 		// Grouped stream items for the default (non-verbose) rendering path
 		const defaultOrderedParts = useMemo(
@@ -792,6 +828,26 @@ export const ChatTurnComponent = memo(
 			[onDeletePart],
 		)
 
+		const stepsToggle =
+			!isVerbose && !isActiveTurn && hasSteps ? (
+				<button
+					type="button"
+					onClick={() => setStepsExpanded(!stepsExpanded)}
+					className="flex items-center gap-1.5 text-[11px] text-muted-foreground/40 transition-colors hover:text-foreground"
+				>
+					<ChevronDownIcon className={showVerboseTools ? "size-3" : "size-3 -rotate-90"} />
+					<span>
+						{showVerboseTools ? "Hide" : "Show"} {toolParts.length}{" "}
+						{toolParts.length === 1 ? "step" : "steps"}
+					</span>
+					<span>
+						{turnModel && `· ${turnModel} `}
+						{duration && `· ${duration} `}
+						{turnCostStr && `· ${turnCostStr}`}
+					</span>
+				</button>
+			) : null
+
 		return (
 			<div ref={turnRef} className="group/turn space-y-4">
 				{/* User message */}
@@ -842,6 +898,8 @@ export const ChatTurnComponent = memo(
 							</div>
 						)}
 
+						{stepsToggle}
+
 						{/* ── Default mode: interleaved text + grouped tool summaries ── */}
 						{!showVerboseTools && (
 							<div className="space-y-3">
@@ -874,7 +932,7 @@ export const ChatTurnComponent = memo(
 												defaultOpen={isStreaming ? undefined : false}
 											>
 												<ReasoningTrigger />
-												<ReasoningContent animated={isStreaming}>
+												<LazyReasoningContent animated={isStreaming}>
 													<div className="flex flex-col gap-4">
 														{item.items.map((processItem, i) => {
 															if (processItem.kind === "reasoning") {
@@ -898,7 +956,7 @@ export const ChatTurnComponent = memo(
 															return null
 														})}
 													</div>
-												</ReasoningContent>
+												</LazyReasoningContent>
 											</Reasoning>
 										)
 									}
@@ -933,49 +991,12 @@ export const ChatTurnComponent = memo(
 							</div>
 						)}
 
-						{/* Toggle to verbose view on completed turns in default mode */}
-						{!showVerboseTools && !isActiveTurn && hasSteps && (
-							<button
-								type="button"
-								onClick={() => setStepsExpanded(true)}
-								className="flex items-center gap-1.5 text-[11px] text-muted-foreground/40 transition-colors hover:text-foreground"
-							>
-								<ChevronDownIcon className="size-3 -rotate-90" />
-								<span>
-									Show {toolParts.length} {toolParts.length === 1 ? "step" : "steps"}
-								</span>
-								<span>
-									{turnModel && `· ${turnModel} `}
-									{duration && `· ${duration} `}
-									{turnCostStr && `· ${turnCostStr}`}
-								</span>
-							</button>
-						)}
 
 						{/* ── Verbose mode: full tool cards ──────────────────────── */}
 
-						{/* Collapse back to default view */}
-						{showVerboseTools && !isVerbose && !isActiveTurn && hasSteps && (
-							<button
-								type="button"
-								onClick={() => setStepsExpanded(false)}
-								className="flex items-center gap-1.5 text-[11px] text-muted-foreground/40 transition-colors hover:text-foreground"
-							>
-								<ChevronDownIcon className="size-3" />
-								<span>
-									Hide {toolParts.length} {toolParts.length === 1 ? "step" : "steps"}
-								</span>
-								<span>
-									{turnModel && `· ${turnModel} `}
-									{duration && `· ${duration} `}
-									{turnCostStr && `· ${turnCostStr}`}
-								</span>
-							</button>
-						)}
-
 						{showVerboseTools && (
 							<div className="space-y-3.5">
-								{orderedParts.map((item) => {
+								{verboseOrderedParts.map((item) => {
 									if (item.kind === "tool") {
 										return (
 											<ChatToolCall
@@ -1002,11 +1023,11 @@ export const ChatTurnComponent = memo(
 												defaultOpen={isReasoningStreaming ? undefined : false}
 											>
 												<ReasoningTrigger />
-												<ReasoningContent animated={isReasoningStreaming}>
+												<LazyReasoningContent animated={isReasoningStreaming}>
 													<ReasoningText animated={isReasoningStreaming}>
 														{reasoningText}
 													</ReasoningText>
-												</ReasoningContent>
+												</LazyReasoningContent>
 											</Reasoning>
 										)
 									}
@@ -1064,17 +1085,13 @@ export const ChatTurnComponent = memo(
 				)}
 
 				{/* Per-turn metadata — shown on completed turns so badges are visible after long responses */}
-				{!working &&
-					turn.assistantMessages.length > 0 &&
-					(turnModel || duration || turnCostStr) && (
-						<div className="flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground/40">
-							{turnModel && <span>{turnModel}</span>}
-							{turnModel && duration && <span>·</span>}
-							{duration && <span>{duration}</span>}
-							{turnCostStr && <span>·</span>}
-							{turnCostStr && <span>{turnCostStr}</span>}
-						</div>
-					)}
+				{!working && turn.assistantMessages.length > 0 && (turnModel || turnCostStr) && (
+					<div className="flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground/40">
+						{turnModel && <span>{turnModel}</span>}
+						{turnModel && turnCostStr && <span>·</span>}
+						{turnCostStr && <span>{turnCostStr}</span>}
+					</div>
+				)}
 
 				{/* Turn-level message actions — always visible across all display modes */}
 				{responseText && (
@@ -1113,6 +1130,7 @@ export const ChatTurnComponent = memo(
 		if (prev.isWorking !== next.isWorking) return false
 		if (prev.agent?.sessionId !== next.agent?.sessionId) return false
 		if (prev.isConnected !== next.isConnected) return false
+		if (prev.stepsExpanded !== next.stepsExpanded) return false
 		if (
 			pendingPermissionFingerprint(prev.pendingPermission) !==
 			pendingPermissionFingerprint(next.pendingPermission)

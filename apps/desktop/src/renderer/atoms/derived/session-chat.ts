@@ -57,32 +57,38 @@ export function groupIntoTurns(entries: ChatMessageEntry[], prevTurns: ChatTurn[
 	}
 
 	const turns: ChatTurn[] = []
+	let currentUser: ChatMessageEntry | null = null
+	let currentAssistantMessages: ChatMessageEntry[] = []
 
-	for (let i = 0; i < entries.length; i++) {
-		const entry = entries[i]
-		if (entry.info.role !== "user") continue
-
-		const assistantMessages: ChatMessageEntry[] = []
-		for (let j = i + 1; j < entries.length; j++) {
-			const next = entries[j]
-			if (next.info.role === "user") break
-			if (next.info.role === "assistant") {
-				if (!next.info.parentID || next.info.parentID === entry.info.id) {
-					assistantMessages.push(next)
-				}
-			}
-		}
-
+	const flushTurn = () => {
+		if (!currentUser) return
 		const newTurn: ChatTurn = {
-			id: entry.info.id,
-			userMessage: entry,
-			assistantMessages,
+			id: currentUser.info.id,
+			userMessage: currentUser,
+			assistantMessages: currentAssistantMessages,
 		}
 
 		const fp = turnFingerprint(newTurn)
 		const prevTurn = prevMap.get(fp)
 		turns.push(prevTurn ?? newTurn)
 	}
+
+	for (const entry of entries) {
+		if (entry.info.role === "user") {
+			flushTurn()
+			currentUser = entry
+			currentAssistantMessages = []
+			continue
+		}
+		if (
+			entry.info.role === "assistant" &&
+			currentUser &&
+			(!entry.info.parentID || entry.info.parentID === currentUser.info.id)
+		) {
+			currentAssistantMessages.push(entry)
+		}
+	}
+	flushTurn()
 
 	return turns
 }

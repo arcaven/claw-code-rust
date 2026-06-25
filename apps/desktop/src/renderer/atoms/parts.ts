@@ -2,43 +2,11 @@ import { atom } from "jotai"
 import { atomFamily } from "jotai-family"
 import type { Part } from "../lib/types"
 
-// ============================================================
-// First-seen timestamps for tool parts
-// ============================================================
-
-/**
- * Module-scoped map tracking when each tool part was first observed by the
- * client. This records the wall-clock time from when the tool card first
- * appeared (typically at the "pending" state, when the LLM starts streaming
- * tool arguments) rather than the server-side execution start time.
- *
- * Used by `getToolDuration()` to show wall-clock durations that match
- * what the user actually experiences, falling back to the server-side
- * `state.time.start` for parts loaded from REST (page refresh, reconnect).
- */
-const partFirstSeenAt = new Map<string, number>()
-
 const PART_STORAGE_SEPARATOR = "\u001f"
 
 export function partStorageKey(sessionId: string, messageId: string): string {
 	return `${sessionId}${PART_STORAGE_SEPARATOR}${messageId}`
 }
-
-/** Record the first-seen timestamp for a part, only if not already tracked. */
-function trackFirstSeen(part: Part): void {
-	if (part.type === "tool" && !partFirstSeenAt.has(part.id)) {
-		partFirstSeenAt.set(part.id, Date.now())
-	}
-}
-
-/** Look up the first-seen timestamp for a part. */
-export function getPartFirstSeenAt(partId: string): number | undefined {
-	return partFirstSeenAt.get(partId)
-}
-
-// ============================================================
-// Helpers
-// ============================================================
 
 function binarySearch<T>(
 	arr: T[],
@@ -116,7 +84,6 @@ function removePart(existing: Part[] | undefined, partId: string): Part[] | unde
 
 /** Upsert a single part */
 export const upsertPartAtom = atom(null, (get, set, part: Part) => {
-	trackFirstSeen(part)
 	const scopedKey = partStorageKey(part.sessionID, part.messageID)
 	set(partsFamily(scopedKey), upsertPart(get(partsFamily(scopedKey)), part))
 	set(partsFamily(part.messageID), upsertPart(get(partsFamily(part.messageID)), part))
@@ -137,7 +104,6 @@ export const batchUpsertPartsAtom = atom(null, (get, set, parts: Part[]) => {
 	for (const [messageId, messageParts] of byMessage) {
 		let legacy = get(partsFamily(messageId))
 		for (const part of messageParts) {
-			trackFirstSeen(part)
 			const scopedKey = partStorageKey(part.sessionID, part.messageID)
 			set(partsFamily(scopedKey), upsertPart(get(partsFamily(scopedKey)), part))
 			legacy = upsertPart(legacy, part)

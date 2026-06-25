@@ -36,6 +36,7 @@ import {
 	useState,
 } from "react"
 import { useServerCommands } from "../../hooks/use-devo-data"
+import { formatShortcut } from "../../lib/shortcut-display"
 
 // ============================================================
 // Types
@@ -88,14 +89,14 @@ const CLIENT_COMMANDS: SlashCommand[] = [
 		description: "Undo the last turn",
 		icon: Undo2Icon,
 		source: "client",
-		shortcut: "⌘Z",
+		shortcut: formatShortcut(["mod", "Z"]),
 	},
 	{
 		name: "redo",
 		description: "Redo previously undone turn",
 		icon: Redo2Icon,
 		source: "client",
-		shortcut: "⇧⌘Z",
+		shortcut: formatShortcut(["shift", "mod", "Z"]),
 	},
 	{
 		name: "compact",

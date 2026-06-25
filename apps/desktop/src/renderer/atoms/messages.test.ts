@@ -96,4 +96,154 @@ describe("message ordering", () => {
 		expect(firstEntries).toEqual([{ info: firstMessage, parts: [firstPart] }])
 		expect(secondEntries).toEqual([{ info: secondMessage, parts: [secondPart] }])
 	})
+
+	test("groups turns once and skips orphan or mismatched assistant messages", () => {
+		const orphanAssistant = {
+			id: "orphan",
+			sessionID: "s1",
+			role: "assistant",
+			time: { created: 1 },
+		}
+		const firstUser = {
+			id: "u1",
+			sessionID: "s1",
+			role: "user",
+			time: { created: 2 },
+		}
+		const firstAssistant = {
+			id: "a1",
+			sessionID: "s1",
+			role: "assistant",
+			parentID: "u1",
+			time: { created: 3 },
+		}
+		const mismatchedAssistant = {
+			id: "a-mismatch",
+			sessionID: "s1",
+			role: "assistant",
+			parentID: "u2",
+			time: { created: 4 },
+		}
+		const secondUser = {
+			id: "u2",
+			sessionID: "s1",
+			role: "user",
+			time: { created: 5 },
+		}
+		const secondAssistant = {
+			id: "a2",
+			sessionID: "s1",
+			role: "assistant",
+			time: { created: 6 },
+		}
+		const entries = [
+			orphanAssistant,
+			firstUser,
+			firstAssistant,
+			mismatchedAssistant,
+			secondUser,
+			secondAssistant,
+		].map((info) => ({ info, parts: [] }))
+
+		expect(groupIntoTurns(entries, [])).toEqual([
+			{
+				id: "u1",
+				userMessage: { info: firstUser, parts: [] },
+				assistantMessages: [{ info: firstAssistant, parts: [] }],
+			},
+			{
+				id: "u2",
+				userMessage: { info: secondUser, parts: [] },
+				assistantMessages: [{ info: secondAssistant, parts: [] }],
+			},
+		])
+	})
+
+	test("keeps tool messages in their parent turn", () => {
+		const firstUser = {
+			id: "u1",
+			sessionID: "s1",
+			role: "user",
+			time: { created: 1 },
+		}
+		const firstTool = {
+			id: "tool-a",
+			sessionID: "s1",
+			role: "assistant",
+			parentID: "u1",
+			time: { created: 2 },
+		}
+		const firstAssistant = {
+			id: "a1",
+			sessionID: "s1",
+			role: "assistant",
+			parentID: "u1",
+			time: { created: 3 },
+		}
+		const secondUser = {
+			id: "u2",
+			sessionID: "s1",
+			role: "user",
+			time: { created: 4 },
+		}
+		const secondTool = {
+			id: "tool-b",
+			sessionID: "s1",
+			role: "assistant",
+			parentID: "u2",
+			time: { created: 5 },
+		}
+		const secondAssistant = {
+			id: "a2",
+			sessionID: "s1",
+			role: "assistant",
+			parentID: "u2",
+			time: { created: 6 },
+		}
+		const firstToolPart = {
+			id: "tool-a-part",
+			sessionID: "s1",
+			messageID: "tool-a",
+			type: "tool",
+			callID: "call-a",
+			tool: "read",
+			state: { status: "completed", input: {}, output: "", title: "Read A", metadata: {} },
+		}
+		const secondToolPart = {
+			id: "tool-b-part",
+			sessionID: "s1",
+			messageID: "tool-b",
+			type: "tool",
+			callID: "call-b",
+			tool: "read",
+			state: { status: "completed", input: {}, output: "", title: "Read B", metadata: {} },
+		}
+		const entries = [
+			{ info: firstUser, parts: [] },
+			{ info: firstTool, parts: [firstToolPart] },
+			{ info: firstAssistant, parts: [] },
+			{ info: secondUser, parts: [] },
+			{ info: secondTool, parts: [secondToolPart] },
+			{ info: secondAssistant, parts: [] },
+		]
+
+		expect(groupIntoTurns(entries, [])).toEqual([
+			{
+				id: "u1",
+				userMessage: { info: firstUser, parts: [] },
+				assistantMessages: [
+					{ info: firstTool, parts: [firstToolPart] },
+					{ info: firstAssistant, parts: [] },
+				],
+			},
+			{
+				id: "u2",
+				userMessage: { info: secondUser, parts: [] },
+				assistantMessages: [
+					{ info: secondTool, parts: [secondToolPart] },
+					{ info: secondAssistant, parts: [] },
+				],
+			},
+		])
+	})
 })
