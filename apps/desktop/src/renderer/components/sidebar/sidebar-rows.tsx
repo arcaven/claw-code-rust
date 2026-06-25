@@ -15,9 +15,7 @@ import {
 } from "@devo/ui/components/dropdown-menu"
 import { Input } from "@devo/ui/components/input"
 import {
-	optionMenuContentClass,
 	optionMenuIconClass,
-	optionMenuItemClass,
 	optionMenuSeparatorClass,
 } from "@devo/ui/components/option-menu-styles"
 import { cn } from "@devo/ui/lib/utils"
@@ -60,6 +58,11 @@ import {
 	type SessionRowActionId,
 	type SidebarRowAction,
 } from "./sidebar-row-actions"
+import {
+	projectMenuContentClass,
+	rowMenuItemClass,
+	sessionMenuContentClass,
+} from "./sidebar-menu-styles"
 
 const STATUS_ICON: Record<AgentStatus, typeof Loader2Icon> = {
 	running: Loader2Icon,
@@ -88,9 +91,6 @@ function statusIndicatorClass(status: AgentStatus): string {
 	return "bg-transparent"
 }
 
-const rowMenuContentClass =
-	cn(optionMenuContentClass, "w-[232px]")
-const rowMenuItemClass = cn(optionMenuItemClass, "focus:bg-accent")
 const rowMenuIconClass = optionMenuIconClass
 const sidebarPrimaryIconClass = "size-4 stroke-[1.6]"
 const floatingRowActionButtonBaseClass =
@@ -163,6 +163,7 @@ function RowActionsDropdown<TId extends string>({
 	triggerIconClassName = "size-4",
 	contentSide = "right",
 	contentAlign = "start",
+	contentClassName = projectMenuContentClass,
 }: {
 	actions: SidebarRowAction<TId>[]
 	label: string
@@ -172,6 +173,7 @@ function RowActionsDropdown<TId extends string>({
 	triggerIconClassName?: string
 	contentSide?: "top" | "right" | "bottom" | "left"
 	contentAlign?: "start" | "center" | "end"
+	contentClassName?: string
 }) {
 	if (actions.length === 0) return null
 
@@ -195,7 +197,7 @@ function RowActionsDropdown<TId extends string>({
 				alignOffset={-4}
 				side={contentSide}
 				sideOffset={6}
-				className={rowMenuContentClass}
+				className={contentClassName}
 			>
 				<DropdownMenuGroup>
 					<ActionMenuItems actions={actions} iconForAction={iconForAction} onAction={onAction} />
@@ -335,6 +337,7 @@ export const ProjectRow = memo(function ProjectRow({
 					triggerIconClassName={projectInlineRowActionIconClass}
 					contentSide="bottom"
 					contentAlign="end"
+					contentClassName={projectMenuContentClass}
 				/>
 				<button
 					type="button"
@@ -469,12 +472,7 @@ export const SessionRow = memo(function SessionRow({
 				)}
 			</button>
 			{!isEditing && (
-				<span
-					className={cn(
-						"pointer-events-none absolute right-2 top-1/2 flex h-7 min-w-7 -translate-y-1/2 items-center justify-center gap-1.5 rounded-lg px-1 text-[13px] tabular-nums text-muted-foreground transition-opacity duration-150 group-focus-within/sidebar-row:opacity-0",
-						!isSelected && "group-hover/sidebar-row:opacity-0",
-					)}
-				>
+				<span className="pointer-events-none absolute right-2 top-1/2 flex h-7 min-w-7 -translate-y-1/2 items-center justify-center gap-1.5 rounded-lg px-1 text-[13px] tabular-nums text-muted-foreground transition-opacity duration-150 group-hover/sidebar-row:opacity-0 group-focus-within/sidebar-row:opacity-0">
 					{agent.status === "running" || agent.status === "waiting" || agent.status === "failed" ? (
 						<span className={cn("size-2 rounded-full", statusIndicatorClass(agent.status))} />
 					) : (
@@ -490,7 +488,7 @@ export const SessionRow = memo(function SessionRow({
 					label={`Session actions for ${agent.name}`}
 					iconForAction={sessionActionIcon}
 					onAction={handleSessionAction}
-					triggerClassName={isSelected ? floatingRowActionButtonBaseClass : undefined}
+					contentClassName={sessionMenuContentClass}
 				/>
 			)}
 		</div>
@@ -499,7 +497,7 @@ export const SessionRow = memo(function SessionRow({
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger render={row} />
-			<ContextMenuContent className={rowMenuContentClass}>
+			<ContextMenuContent className={sessionMenuContentClass}>
 				<SessionContextMenuItems actions={sessionActions} onAction={handleSessionAction} />
 			</ContextMenuContent>
 		</ContextMenu>

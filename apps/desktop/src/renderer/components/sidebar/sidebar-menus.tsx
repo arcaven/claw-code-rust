@@ -10,9 +10,7 @@ import {
 	DropdownMenuTrigger,
 } from "@devo/ui/components/dropdown-menu"
 import {
-	optionMenuContentClass,
 	optionMenuIconClass,
-	optionMenuItemClass,
 	optionMenuSeparatorClass,
 } from "@devo/ui/components/option-menu-styles"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@devo/ui/components/tooltip"
@@ -31,16 +29,17 @@ import {
 	MoreHorizontalIcon,
 } from "lucide-react"
 import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react"
+import { projectMenuContentClass, rowMenuItemClass } from "./sidebar-menu-styles"
 import type {
 	SidebarOrganization,
 	SidebarPreferences,
 	SidebarSort,
 } from "./sidebar-data"
 
-const menuContentClass =
-	cn(optionMenuContentClass, "w-[232px]")
-const menuItemClass = cn(optionMenuItemClass, "focus:bg-accent")
+const menuContentClass = projectMenuContentClass
+const menuItemClass = rowMenuItemClass
 const menuIconClass = optionMenuIconClass
+const headerIconClass = "size-4 stroke-[1.6]"
 
 type HeaderIconButtonProps = ComponentPropsWithoutRef<"button"> & {
 	label: string
@@ -125,7 +124,7 @@ export function SidebarMainMenu({
 			<DropdownMenuTrigger
 				render={
 					<HeaderIconButton label="Sidebar options">
-						<MoreHorizontalIcon className="size-[18px]" />
+						<MoreHorizontalIcon className={headerIconClass} />
 					</HeaderIconButton>
 				}
 			/>
@@ -217,7 +216,7 @@ export function AddProjectMenu({
 			<DropdownMenuTrigger
 				render={
 					<HeaderIconButton label="Add project">
-						<FolderPlusIcon className="size-[18px]" />
+						<FolderPlusIcon className={headerIconClass} />
 					</HeaderIconButton>
 				}
 			/>

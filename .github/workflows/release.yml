@@ -101,10 +101,67 @@ jobs:
           name: devo-${{ github.ref_name }}-${{ matrix.target }}
           path: devo-${{ github.ref_name }}-${{ matrix.target }}.*
 
+  # ── Desktop app builds ───────────────────────────────────────────────────
+  desktop:
+    name: Build desktop ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            script: package:mac
+          - os: windows-latest
+            platform: windows
+            script: package:win
+          - os: ubuntu-latest
+            platform: linux
+            script: package:linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.platform }}
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: bun install --frozen-lockfile
+
+      - name: Build desktop package
+        working-directory: apps/desktop
+        run: bun run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devo-desktop-${{ github.ref_name }}-${{ matrix.platform }}
+          path: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.rpm
+            apps/desktop/release/*.yml
+            apps/desktop/release/*.zip
+
   # ── Create GitHub Release ──────────────────────────────────────────────
   release:
     name: Create Release
-    needs: build
+    needs: [build, desktop]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

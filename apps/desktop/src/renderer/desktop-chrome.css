@@ -16,7 +16,10 @@
 }
 
 :root[data-platform="win32"][data-window-focused="true"] {
-	--devo-windows-chrome-bg: var(--devo-titlebar-tint, var(--devo-windows-focus-chrome-bg));
+	--devo-windows-chrome-bg: var(
+		--devo-titlebar-tint,
+		var(--devo-windows-focus-chrome-bg)
+	);
 	--sidebar: var(--devo-windows-chrome-bg);
 }
 
@@ -25,8 +28,10 @@
 	--sidebar: var(--devo-windows-unfocused-chrome-bg);
 }
 
-:root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-inset"],
-:root[data-platform="win32"][data-window-focused="false"] [data-slot="sidebar-inset"] {
+:root[data-platform="win32"][data-window-focused="true"]
+	[data-slot="sidebar-inset"],
+:root[data-platform="win32"][data-window-focused="false"]
+	[data-slot="sidebar-inset"] {
 	background: var(--devo-windows-chrome-bg) !important;
 	background-color: var(--devo-windows-chrome-bg) !important;
 }
@@ -45,20 +50,32 @@
 	transition: background-color var(--duration-fast, 150ms) ease;
 }
 
-:root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-wrapper"],
+:root[data-platform="win32"][data-window-focused="true"]
+	[data-slot="sidebar-wrapper"],
 :root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar"],
-:root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-container"],
-:root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-inner"],
-:root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-header"],
-:root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-content"],
-:root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-footer"],
-:root[data-platform="win32"][data-window-focused="false"] [data-slot="sidebar-wrapper"],
+:root[data-platform="win32"][data-window-focused="true"]
+	[data-slot="sidebar-container"],
+:root[data-platform="win32"][data-window-focused="true"]
+	[data-slot="sidebar-inner"],
+:root[data-platform="win32"][data-window-focused="true"]
+	[data-slot="sidebar-header"],
+:root[data-platform="win32"][data-window-focused="true"]
+	[data-slot="sidebar-content"],
+:root[data-platform="win32"][data-window-focused="true"]
+	[data-slot="sidebar-footer"],
+:root[data-platform="win32"][data-window-focused="false"]
+	[data-slot="sidebar-wrapper"],
 :root[data-platform="win32"][data-window-focused="false"] [data-slot="sidebar"],
-:root[data-platform="win32"][data-window-focused="false"] [data-slot="sidebar-container"],
-:root[data-platform="win32"][data-window-focused="false"] [data-slot="sidebar-inner"],
-:root[data-platform="win32"][data-window-focused="false"] [data-slot="sidebar-header"],
-:root[data-platform="win32"][data-window-focused="false"] [data-slot="sidebar-content"],
-:root[data-platform="win32"][data-window-focused="false"] [data-slot="sidebar-footer"] {
+:root[data-platform="win32"][data-window-focused="false"]
+	[data-slot="sidebar-container"],
+:root[data-platform="win32"][data-window-focused="false"]
+	[data-slot="sidebar-inner"],
+:root[data-platform="win32"][data-window-focused="false"]
+	[data-slot="sidebar-header"],
+:root[data-platform="win32"][data-window-focused="false"]
+	[data-slot="sidebar-content"],
+:root[data-platform="win32"][data-window-focused="false"]
+	[data-slot="sidebar-footer"] {
 	background: var(--devo-windows-chrome-bg) !important;
 	background-color: var(--devo-windows-chrome-bg) !important;
 }
@@ -77,6 +94,42 @@
 	border-top-right-radius: 0;
 	border-bottom-right-radius: 0;
 	border-bottom-left-radius: var(--devo-content-radius);
+}
+
+:root[data-platform="darwin"].electron-transparent [data-slot="sidebar-inset"],
+:root[data-platform="darwin"].electron-vibrancy [data-slot="sidebar-inset"] {
+	margin-right: 0;
+	margin-bottom: 0;
+	border-top-right-radius: 0;
+	border-bottom-right-radius: 0;
+}
+
+:root[data-platform="darwin"].electron-transparent [data-slot="content-area"],
+:root[data-platform="darwin"].electron-vibrancy [data-slot="content-area"] {
+	border-top-right-radius: 0;
+	border-bottom-right-radius: 0;
+}
+
+:root[data-platform="darwin"]
+	[data-slot="content-area"][data-transcript-titlebar-fill="true"] {
+	border-top-right-radius: 0;
+}
+
+:root[data-platform="darwin"]
+	[data-slot="content-area"][data-transcript-titlebar-fill="true"]
+	[data-slot="session-panel-header"] {
+	-webkit-app-region: drag;
+}
+
+:root[data-platform="darwin"]
+	[data-slot="content-area"][data-transcript-titlebar-fill="true"]
+	[data-slot="session-panel-header"]
+	button,
+:root[data-platform="darwin"]
+	[data-slot="content-area"][data-transcript-titlebar-fill="true"]
+	[data-slot="session-panel-header"]
+	input {
+	-webkit-app-region: no-drag;
 }
 
 .devo-composer,

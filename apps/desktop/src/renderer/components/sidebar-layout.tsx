@@ -11,7 +11,7 @@ import {
 	useSidebar,
 } from "@devo/ui/components/sidebar"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@devo/ui/components/tooltip"
-import { Outlet, useNavigate, useParams } from "@tanstack/react-router"
+import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { PanelLeftIcon } from "lucide-react"
 import { type MouseEvent, useCallback, useEffect, useRef } from "react"
@@ -173,6 +173,7 @@ function WindowControls() {
 export function SidebarLayout() {
 	const navigate = useNavigate()
 	const { sessionId } = useParams({ strict: false }) as { sessionId?: string }
+	const pathname = useRouterState({ select: (state) => state.location.pathname })
 	const { content: slotContent, footer: slotFooter } = useSidebarSlot()
 	const [terminalPanelOpen, setTerminalPanelOpen] = useAtom(terminalPanelOpenAtom)
 
@@ -188,6 +189,10 @@ export function SidebarLayout() {
 	const visibleAgents = agents
 	const activeAgent = sessionId ? visibleAgents.find((agent) => agent.id === sessionId) : null
 	const terminalDirectory = activeAgent?.worktreePath ?? activeAgent?.directory ?? null
+	const isTranscriptRoute =
+		pathname.includes("/session/") || /^\/automations\/[^/]+\/runs\/[^/]+$/.test(pathname)
+	const transcriptFillsTitlebar = isMac && isTranscriptRoute
+	const transcriptTitlebarFillAttr = transcriptFillsTitlebar ? "true" : undefined
 
 	const handleRenameSession = useCallback(
 		async (agent: Agent, title: string) => {
@@ -271,14 +276,18 @@ export function SidebarLayout() {
 					 * When default sidebar is active, AppSidebarContent renders its own footer. */}
 					{slotFooter !== false && slotFooter}
 				</Sidebar>
-				<SidebarInset>
+				<SidebarInset data-transcript-titlebar-fill={transcriptTitlebarFillAttr}>
 					<UpdateBanner />
-					<AppBar />
+					{!transcriptFillsTitlebar && <AppBar />}
 					{/* Flex-1 + min-h-0 wrapper: pages use h-full which would
-					    resolve to 100% of SidebarInset, ignoring AppBar height.
-					    This container takes remaining space after AppBar and
-					    constrains page content correctly. */}
-					<div data-slot="content-area" className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+					    resolve to 100% of SidebarInset. This container takes
+					    remaining space after the optional AppBar and constrains
+					    page content correctly. */}
+					<div
+						data-slot="content-area"
+						data-transcript-titlebar-fill={transcriptTitlebarFillAttr}
+						className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+					>
 						<Outlet />
 					</div>
 					<DesktopTerminalPanel

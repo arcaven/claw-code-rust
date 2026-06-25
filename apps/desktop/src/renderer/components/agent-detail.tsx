@@ -202,6 +202,7 @@ export function AgentDetail({
 		<>
 			<SessionPanelHeader
 				agent={agent}
+				turns={chatTurns}
 				isEditingTitle={isEditingTitle}
 				titleValue={titleValue}
 				titleInputRef={titleInputRef}
@@ -298,6 +299,7 @@ export function AgentDetail({
 
 function SessionPanelHeader({
 	agent,
+	turns,
 	isEditingTitle,
 	titleValue,
 	titleInputRef,
@@ -311,6 +313,7 @@ function SessionPanelHeader({
 	onToggleReviewPanel,
 }: {
 	agent: Agent
+	turns: ChatTurn[]
 	isEditingTitle: boolean
 	titleValue: string
 	titleInputRef: React.RefObject<HTMLInputElement | null>
@@ -328,7 +331,10 @@ function SessionPanelHeader({
 	const toggleReviewPanelShortcut = formatShortcut(["shift", "mod", "D"])
 
 	return (
-		<div className="flex h-[46px] w-full min-w-0 shrink-0 items-center gap-2.5 border-b border-border/50 px-4">
+		<div
+			data-slot="session-panel-header"
+			className="flex h-[46px] w-full min-w-0 shrink-0 items-center gap-2.5 border-b border-border/50 px-4"
+		>
 			{/* Breadcrumb: project / [branch badge] / session name */}
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
 				{/* Project name */}
@@ -417,7 +423,11 @@ function SessionPanelHeader({
 
 				{/* Session metrics bar */}
 				<div className="hidden min-w-0 shrink lg:block">
-					<SessionMetricsBar sessionId={agent.sessionId} />
+					<SessionMetricsBar
+						sessionId={agent.sessionId}
+						turns={turns}
+						isWorking={agent.status === "running"}
+					/>
 				</div>
 
 				{/* Open in external editor */}
