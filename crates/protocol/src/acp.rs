@@ -31,6 +31,7 @@ pub const DEVO_SESSION_META: &str = "devo/session";
 pub const DEVO_SESSION_RESUME_META: &str = "devo/sessionResume";
 pub const DEVO_TURN_ID_META: &str = "devo/turnId";
 pub const DEVO_ITEM_ID_META: &str = "devo/itemId";
+pub const DEVO_ACTIVITY_AT_META: &str = "devo/activityAt";
 pub const DEVO_HISTORY_INDEX_META: &str = "devo/historyIndex";
 pub const DEVO_PARENT_MESSAGE_ID_META: &str = "devo/parentMessageId";
 
