@@ -331,7 +331,10 @@ function SessionPanelHeader({
 	const toggleReviewPanelShortcut = formatShortcut(["shift", "mod", "D"])
 
 	return (
-		<div className="flex h-[46px] w-full min-w-0 shrink-0 items-center gap-2.5 border-b border-border/50 px-4">
+		<div
+			data-slot="session-panel-header"
+			className="flex h-[46px] w-full min-w-0 shrink-0 items-center gap-2.5 border-b border-border/50 px-4"
+		>
 			{/* Breadcrumb: project / [branch badge] / session name */}
 			<div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
 				{/* Project name */}

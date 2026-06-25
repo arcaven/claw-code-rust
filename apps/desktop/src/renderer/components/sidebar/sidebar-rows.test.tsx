@@ -51,8 +51,8 @@ describe("SessionRow", () => {
 			hasSelectedBackground: true,
 			hasLightHoverBackground: false,
 			hasDarkHoverBackground: false,
-			hidesStatusOnHover: false,
-			showsActionsOnHover: false,
+			hidesStatusOnHover: true,
+			showsActionsOnHover: true,
 		})
 	})
 

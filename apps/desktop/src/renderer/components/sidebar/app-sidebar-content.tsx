@@ -3,7 +3,6 @@ import { cn } from "@devo/ui/lib/utils"
 import { useNavigate, useParams } from "@tanstack/react-router"
 import { useAtom, useAtomValue } from "jotai"
 import {
-	ChevronDownIcon,
 	Clock3Icon,
 	Loader2Icon,
 	PenLineIcon,
@@ -392,7 +391,6 @@ export function AppSidebarContent({
 				<div className="group/projects-header flex h-9 shrink-0 items-center gap-1 px-4">
 					<div className="flex min-w-0 flex-1 items-center gap-1 text-sm font-normal text-muted-foreground/60 transition-colors group-hover/projects-header:text-muted-foreground/75 group-focus-within/projects-header:text-muted-foreground/75">
 						<span className="truncate">Projects</span>
-						<ChevronDownIcon className="size-3.5 shrink-0 opacity-0 transition-opacity duration-150 group-hover/projects-header:opacity-100 group-focus-within/projects-header:opacity-100" />
 					</div>
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/projects-header:opacity-100 group-focus-within/projects-header:opacity-100">
 						<SidebarMainMenu
