@@ -1172,6 +1172,80 @@ describe("ACP desktop SDK session mapping", () => {
 		})
 	})
 
+	test("does not treat session info updatedAt as last activity without Devo metadata", async () => {
+		const transport = new FakeTransport((method) => {
+			if (method === "initialize") return initializeResult
+			if (method === "session/list") return { sessions: [sessionInfo] }
+			throw new Error(`unexpected request ${method}`)
+		})
+		const client = createDevoClient({ directory: "/repo", transport })
+		const stream = (await client.global.event()).stream[Symbol.asyncIterator]()
+
+		await client.session.list()
+		transport.emitSessionUpdate({
+			sessionId: "s1",
+			update: {
+				sessionUpdate: "session_info_update",
+				title: "Metadata-only rename",
+				updatedAt: "2026-06-24T01:00:00.000Z",
+			},
+		} satisfies AcpSessionNotification)
+
+		const payload = await nextPayload(stream, "metadata-only")
+
+		expect(payload.properties.info.time).toEqual({
+			created: Date.parse("2026-06-24T00:00:00.000Z"),
+			updated: Date.parse("2026-06-24T01:00:00.000Z"),
+			lastActivity: Date.parse("2026-06-24T00:00:00.000Z"),
+		})
+	})
+
+	test("updates session last activity from ACP activity metadata", async () => {
+		const transport = new FakeTransport((method) => {
+			if (method === "initialize") return initializeResult
+			if (method === "session/list") return { sessions: [sessionInfo] }
+			throw new Error(`unexpected request ${method}`)
+		})
+		const client = createDevoClient({ directory: "/repo", transport })
+		const stream = (await client.global.event()).stream[Symbol.asyncIterator]()
+
+		await client.session.list()
+		transport.emitSessionUpdate({
+			sessionId: "s1",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				messageId: "a-activity",
+				content: { type: "text", text: "live" },
+				_meta: { "devo/activityAt": "2026-06-24T00:05:00.000Z" },
+			},
+		} satisfies AcpSessionNotification)
+
+		expect((await nextPayload(stream, "assistant-activity")).properties.info.time).toEqual({
+			created: Date.parse("2026-06-24T00:00:00.000Z"),
+			updated: Date.parse("2026-06-24T00:00:00.000Z"),
+			lastActivity: Date.parse("2026-06-24T00:05:00.000Z"),
+		})
+
+		await nextPayload(stream, "assistant-message")
+		await nextPayload(stream, "assistant-part")
+		transport.emitSessionUpdate({
+			sessionId: "s1",
+			update: {
+				sessionUpdate: "tool_call_update",
+				toolCallId: "tool-activity",
+				status: "completed",
+				rawOutput: "done",
+				_meta: { "devo/activityAt": "2026-06-24T00:06:00.000Z" },
+			},
+		} satisfies AcpSessionNotification)
+
+		expect((await nextPayload(stream, "tool-activity")).properties.info.time).toEqual({
+			created: Date.parse("2026-06-24T00:00:00.000Z"),
+			updated: Date.parse("2026-06-24T00:00:00.000Z"),
+			lastActivity: Date.parse("2026-06-24T00:06:00.000Z"),
+		})
+	})
+
 	test("keeps session update time stable when replaying loaded history", async () => {
 		Date.now = () => Date.parse("2026-06-24T02:00:00.000Z")
 		const transport = new FakeTransport((method) => {

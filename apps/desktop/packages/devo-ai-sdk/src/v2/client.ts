@@ -225,7 +225,11 @@ function sortedMessages(messages: Message[]): Message[] {
 function recentMessages(messages: Message[], limit: number | undefined): Message[] {
 	const sorted = sortedMessages(messages)
 	if (limit === undefined || sorted.length <= limit) return sorted
-	return sorted.slice(-limit)
+	let start = sorted.length - limit
+	while (start > 0 && sorted[start].role !== "user") {
+		start -= 1
+	}
+	return sorted.slice(start)
 }
 
 class AcpClient {
@@ -589,6 +593,9 @@ class AcpClient {
 			mcpServers: [],
 			...(limit === undefined ? {} : { _meta: { "devo/historyLimit": limit } }),
 		})) as AcpLoadSessionResult
+		// Electron forwards replay notifications over a separate IPC event channel.
+		// Let that channel drain before callers snapshot this client's message store.
+		await new Promise((resolve) => setTimeout(resolve, 0))
 		this.rememberConfigOptions(sessionId, cwd, result.configOptions)
 		this.loadedSessionLimits.set(sessionId, limit ?? null)
 	}
@@ -1137,13 +1144,14 @@ class AcpClient {
 			messageId.startsWith("history-") || typeof existingPart?.[field] !== "string"
 				? ""
 				: existingPart[field]
+		const partEventTime = updateHistoryCreatedAt(update) ?? now
 		const part = {
 			id: partId,
 			sessionID: sessionId,
 			messageID: messageId,
 			type: partType,
 			[field]: `${existingText}${text}`,
-			time: partTime(existingPart, now),
+			time: partTime(existingPart, partEventTime),
 		} as TextPart | ReasoningPart
 		this.appendPart(sessionId, messageId, part)
 		this.emit(directory, { type: "message.part.updated", properties: { part } })
@@ -1189,7 +1197,8 @@ class AcpClient {
 			...(parentID ? { parentID } : {}),
 			time: { ...(existingMessage?.time ?? {}), created },
 		} as Message
-		const part = toolPartFromUpdate(sessionId, update, existingPart, now) as ToolPart
+		const partEventTime = updateHistoryCreatedAt(update) ?? now
+		const part = toolPartFromUpdate(sessionId, update, existingPart, partEventTime) as ToolPart
 		this.appendMessage(sessionId, message)
 		this.rememberMessageTurn(sessionId, directory, messageId, "assistant", update)
 		this.appendPart(sessionId, message.id, part)

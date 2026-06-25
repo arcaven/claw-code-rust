@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { createDevoClient, type DevoAcpTransport, type DevoAcpTransportEvent } from "./client"
 import type { AcpSessionInfo, AcpSessionNotification } from "./generated"
 
@@ -45,6 +45,12 @@ const initializeResult = {
 	agentCapabilities: {},
 	authMethods: [],
 }
+
+const originalNow = Date.now
+
+afterEach(() => {
+	Date.now = originalNow
+})
 
 const storedSession = {
 	sessionId: "stored-session",
@@ -203,6 +209,207 @@ describe("ACP desktop SDK session cwd discovery", () => {
 		const result = await client.session.messages({ sessionID: "stored-session", limit: 1 })
 
 		expect(result.data.map((message) => message.parts[0]?.text)).toEqual(["user", "assistant"])
+	})
+
+	test("keeps locally limited cached history windows on turn boundaries", async () => {
+		const transport = new FakeTransport((method, _params, _directory, tx) => {
+			if (method === "initialize") return initializeResult
+			if (method === "session/list") return { sessions: [storedSession] }
+			if (method === "session/load") {
+				tx?.emitSessionUpdate({
+					sessionId: "stored-session",
+					update: {
+						sessionUpdate: "user_message_chunk",
+						messageId: "history-0",
+						content: { type: "text", text: "first user" },
+						_meta: { "devo/historyIndex": 0 },
+					},
+				} satisfies AcpSessionNotification)
+				tx?.emitSessionUpdate({
+					sessionId: "stored-session",
+					update: {
+						sessionUpdate: "agent_message_chunk",
+						messageId: "history-1",
+						content: { type: "text", text: "first answer" },
+						_meta: { "devo/historyIndex": 1, "devo/parentMessageId": "history-0" },
+					},
+				} satisfies AcpSessionNotification)
+				tx?.emitSessionUpdate({
+					sessionId: "stored-session",
+					update: {
+						sessionUpdate: "user_message_chunk",
+						messageId: "history-2",
+						content: { type: "text", text: "second user" },
+						_meta: { "devo/historyIndex": 2 },
+					},
+				} satisfies AcpSessionNotification)
+				tx?.emitSessionUpdate({
+					sessionId: "stored-session",
+					update: {
+						sessionUpdate: "tool_call_update",
+						toolCallId: "read-second",
+						title: "Read second",
+						status: "completed",
+						rawOutput: "second tool output",
+						_meta: { "devo/historyIndex": 3, "devo/parentMessageId": "history-2" },
+					},
+				} satisfies AcpSessionNotification)
+				tx?.emitSessionUpdate({
+					sessionId: "stored-session",
+					update: {
+						sessionUpdate: "agent_message_chunk",
+						messageId: "history-4",
+						content: { type: "text", text: "second answer" },
+						_meta: { "devo/historyIndex": 4, "devo/parentMessageId": "history-2" },
+					},
+				} satisfies AcpSessionNotification)
+				return {}
+			}
+			throw new Error(`unexpected request ${method}`)
+		})
+		const client = createDevoClient({ transport })
+
+		await client.session.messages({ sessionID: "stored-session" })
+		const result = await client.session.messages({ sessionID: "stored-session", limit: 2 })
+
+		expect(
+			result.data.map((entry) => ({
+				id: entry.info.id,
+				role: entry.info.role,
+				parentID: entry.info.parentID,
+				parts: entry.parts.map((part) => ({
+					type: part.type,
+					text: part.text,
+					callID: part.callID,
+				})),
+			})),
+		).toEqual([
+			{
+				id: "history-2",
+				role: "user",
+				parentID: undefined,
+				parts: [{ type: "text", text: "second user", callID: undefined }],
+			},
+			{
+				id: "tool-read-second",
+				role: "assistant",
+				parentID: "history-2",
+				parts: [{ type: "tool", text: undefined, callID: "read-second" }],
+			},
+			{
+				id: "history-4",
+				role: "assistant",
+				parentID: "history-2",
+				parts: [{ type: "text", text: "second answer", callID: undefined }],
+			},
+		])
+		expect(transport.requests.filter((request) => request.method === "session/load")).toHaveLength(1)
+	})
+
+	test("waits for async session load replay notifications before returning messages", async () => {
+		const transport = new FakeTransport((method, _params, _directory, tx) => {
+			if (method === "initialize") return initializeResult
+			if (method === "session/list") return { sessions: [storedSession] }
+			if (method === "session/load") {
+				setTimeout(() => {
+					tx?.emitSessionUpdate({
+						sessionId: "stored-session",
+						update: {
+							sessionUpdate: "user_message_chunk",
+							messageId: "history-0",
+							content: { type: "text", text: "user" },
+							_meta: { "devo/historyIndex": 0 },
+						},
+					} satisfies AcpSessionNotification)
+					tx?.emitSessionUpdate({
+						sessionId: "stored-session",
+						update: {
+							sessionUpdate: "tool_call",
+							toolCallId: "read-a",
+							title: "Read A",
+							status: "pending",
+							_meta: {
+								"devo/historyIndex": 1,
+								"devo/parentMessageId": "history-0",
+							},
+						},
+					} satisfies AcpSessionNotification)
+					tx?.emitSessionUpdate({
+						sessionId: "stored-session",
+						update: {
+							sessionUpdate: "tool_call_update",
+							toolCallId: "read-a",
+							title: "Read A",
+							status: "completed",
+							rawOutput: "done",
+							_meta: {
+								"devo/historyIndex": 2,
+								"devo/parentMessageId": "history-0",
+							},
+						},
+					} satisfies AcpSessionNotification)
+				}, 0)
+				return {}
+			}
+			throw new Error(`unexpected request ${method}`)
+		})
+		const client = createDevoClient({ transport })
+
+		const result = await client.session.messages({ sessionID: "stored-session", limit: 2 })
+
+		expect(
+			result.data.map((entry) => ({
+				id: entry.info.id,
+				parentID: entry.info.parentID,
+				parts: entry.parts.map((part) => ({
+					type: part.type,
+					time: part.time,
+					stateTime: part.state?.time,
+				})),
+			})),
+		).toEqual([
+			{
+				id: "history-0",
+				parentID: undefined,
+				parts: [{ type: "text", time: { start: 1 }, stateTime: undefined }],
+			},
+			{
+				id: "tool-read-a",
+				parentID: "history-0",
+				parts: [{ type: "tool", time: undefined, stateTime: { start: 3, end: 3 } }],
+			},
+		])
+	})
+
+	test("does not update session last activity from session/load history replay", async () => {
+		Date.now = () => Date.parse("2026-06-24T02:00:00.000Z")
+		const transport = new FakeTransport((method, _params, _directory, tx) => {
+			if (method === "initialize") return initializeResult
+			if (method === "session/list") return { sessions: [storedSession] }
+			if (method === "session/load") {
+				tx?.emitSessionUpdate({
+					sessionId: "stored-session",
+					update: {
+						sessionUpdate: "user_message_chunk",
+						messageId: "history-0",
+						content: { type: "text", text: "historical user" },
+						_meta: { "devo/historyIndex": 0 },
+					},
+				} satisfies AcpSessionNotification)
+				return {}
+			}
+			throw new Error(`unexpected request ${method}`)
+		})
+		const client = createDevoClient({ transport })
+		const stream = (await client.global.event()).stream[Symbol.asyncIterator]()
+
+		await client.session.messages({ sessionID: "stored-session", limit: 1 })
+
+		expect((await nextPayload(stream, "history-session")).properties.info.time).toEqual({
+			created: Date.parse("2026-06-24T00:00:00.000Z"),
+			updated: Date.parse("2026-06-24T00:00:00.000Z"),
+			lastActivity: Date.parse("2026-06-24T00:00:00.000Z"),
+		})
 	})
 
 	test("does not synthesize a default cwd for unknown session updates", async () => {
