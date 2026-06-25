@@ -21,6 +21,8 @@ use devo_core::McpTrustPolicy;
 use devo_core::tools::ToolPlanConfig;
 use devo_mcp::manager::RmcpMcpManager;
 use devo_protocol::AcpMeta;
+use devo_protocol::DEVO_HISTORY_INDEX_META;
+use devo_protocol::DEVO_PARENT_MESSAGE_ID_META;
 
 use crate::ACP_SESSION_UPDATE_METHOD;
 use crate::AcpAgentCapabilities;
@@ -68,8 +70,6 @@ use crate::AcpToolCallContent;
 use crate::AcpToolCallStatus;
 use crate::AcpToolKind;
 use crate::CollaborationMode;
-use crate::DEVO_HISTORY_INDEX_META;
-use crate::DEVO_PARENT_MESSAGE_ID_META;
 use crate::DEVO_SESSION_META;
 use crate::DEVO_SESSION_RESUME_META;
 use crate::SessionHistoryItem;
