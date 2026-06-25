@@ -44,6 +44,7 @@
 		"clean": "rm -rf out release dist node_modules .turbo packages/devo-ai-sdk/src/v2/generated"
 	},
 	"dependencies": {
+		"@devo-ai/plugin": "file:./packages/devo-ai-plugin",
 		"@devo-ai/sdk": "file:./packages/devo-ai-sdk",
 		"@devo/configconv": "file:./packages/configconv",
 		"@devo/ui": "file:./packages/ui",
