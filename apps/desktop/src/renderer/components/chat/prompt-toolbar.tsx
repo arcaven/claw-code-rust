@@ -3,7 +3,6 @@ import {
 	SearchableListPopoverContent,
 	SearchableListPopoverEmpty,
 	SearchableListPopoverGroup,
-	SearchableListPopoverItem,
 	SearchableListPopoverList,
 	SearchableListPopoverSearch,
 	SearchableListPopoverTrigger,
@@ -18,21 +17,17 @@ import {
 } from "@devo/ui/components/select"
 import { Separator } from "@devo/ui/components/separator"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@devo/ui/components/tooltip"
+import { useIsMobile } from "@devo/ui/hooks/use-mobile"
 import { cn } from "@devo/ui/lib/utils"
 import { useAtomValue } from "jotai"
 import {
-	CheckIcon,
 	ChevronDownIcon,
 	GitBranchIcon,
-	ListIcon,
-	MaximizeIcon,
 	MonitorIcon,
 	SparklesIcon,
 } from "lucide-react"
 import { useCallback, useMemo, useState } from "react"
 import { messagesFamily } from "../../atoms/messages"
-import type { DisplayMode } from "../../atoms/preferences"
-import { useDisplayMode, useSetDisplayMode } from "../../hooks/use-agents"
 import type {
 	CompactionConfig,
 	ModelRef,
@@ -54,6 +49,13 @@ import {
 	shortModelName,
 } from "../../lib/session-metrics"
 import { ProviderIcon } from "../settings/provider-icon"
+import { ModelSelectorOptionRow } from "./model-selector-option-row"
+import {
+	ModelSelectorReasoningStrength,
+	ModelSelectorReasoningStrengthMobileView,
+} from "./model-selector-reasoning-strength"
+import { ModelSelectorTriggerLabel } from "./model-selector-trigger-label"
+import { getVariantTriggerLabel, resolveSelectedVariant } from "./model-selector-variant-label"
 
 // ============================================================
 // Shared toolbar trigger styles
@@ -193,6 +195,11 @@ interface ModelSelectorProps {
 	onSelectModel: (model: ModelRef | null) => void
 	/** Recent models from model.json (most recently used first) */
 	recentModels?: ModelRef[]
+	variants?: string[]
+	selectedVariant?: string | undefined
+	currentVariant?: string | undefined
+	allowDefaultVariant?: boolean
+	onSelectVariant?: (variant: string | undefined) => void
 	disabled?: boolean
 }
 
@@ -201,6 +208,11 @@ export function ModelSelector({
 	effectiveModel,
 	onSelectModel,
 	recentModels,
+	variants = [],
+	selectedVariant,
+	currentVariant,
+	allowDefaultVariant = true,
+	onSelectVariant = () => undefined,
 	disabled,
 }: ModelSelectorProps) {
 	const models = useMemo(() => (providers ? flattenModels(providers.providers) : []), [providers])
@@ -224,8 +236,21 @@ export function ModelSelector({
 		() => models.find((m) => m.value === activeValue) ?? null,
 		[models, activeValue],
 	)
+	const hasVariants = variants.length > 0
+	const resolvedVariant = useMemo(
+		() => resolveSelectedVariant(variants, selectedVariant, currentVariant, allowDefaultVariant),
+		[allowDefaultVariant, currentVariant, selectedVariant, variants],
+	)
+	const variantTriggerLabel = hasVariants ? getVariantTriggerLabel(resolvedVariant) : null
+	const isMobile = useIsMobile()
 
 	const [open, setOpen] = useState(false)
+	const [mobileVariantView, setMobileVariantView] = useState(false)
+
+	const handleOpenChange = useCallback((nextOpen: boolean) => {
+		setOpen(nextOpen)
+		if (!nextOpen) setMobileVariantView(false)
+	}, [])
 
 	const handleSelect = useCallback(
 		(value: string) => {
@@ -233,6 +258,7 @@ export function ModelSelector({
 			if (ref) {
 				onSelectModel(ref)
 			}
+			setMobileVariantView(false)
 			setOpen(false)
 		},
 		[onSelectModel],
@@ -248,7 +274,7 @@ export function ModelSelector({
 	}
 
 	return (
-		<SearchableListPopover open={open} onOpenChange={setOpen}>
+		<SearchableListPopover open={open} onOpenChange={handleOpenChange}>
 			<SearchableListPopoverTrigger
 				className={cn(
 					TOOLBAR_TRIGGER_BASE_CN,
@@ -259,21 +285,48 @@ export function ModelSelector({
 				{activeModel ? (
 					<>
 						<ProviderIcon id={activeModel.providerID} name={activeModel.providerName} size="xs" />
-						<span>{activeModel.displayName}</span>
+						<ModelSelectorTriggerLabel
+							displayName={activeModel.displayName}
+							variantLabel={variantTriggerLabel}
+						/>
 					</>
 				) : (
 					<span className="text-muted-foreground">Select model...</span>
 				)}
 				<ChevronDownIcon className="size-4 shrink-0 text-muted-foreground pointer-events-none" />
 			</SearchableListPopoverTrigger>
-			<SearchableListPopoverContent side="top" align="start">
-				<SearchableListPopoverSearch placeholder="Search models..." />
-				<ModelSelectorList
-					models={models}
-					lastUsedModels={lastUsedModels}
-					activeValue={activeValue}
-					onSelect={handleSelect}
-				/>
+			<SearchableListPopoverContent side="top" align="start" width="w-56">
+				{mobileVariantView && hasVariants ? (
+					<ModelSelectorReasoningStrengthMobileView
+						variants={variants}
+						selectedVariant={resolvedVariant}
+						allowDefaultVariant={allowDefaultVariant}
+						onBack={() => setMobileVariantView(false)}
+						onSelectVariant={onSelectVariant}
+						onClose={() => setOpen(false)}
+					/>
+				) : (
+					<>
+						<SearchableListPopoverSearch placeholder="Search models..." />
+						<ModelSelectorList
+							models={models}
+							lastUsedModels={lastUsedModels}
+							activeValue={activeValue}
+							onSelect={handleSelect}
+						/>
+						{hasVariants && (
+							<ModelSelectorReasoningStrength
+								variants={variants}
+								selectedVariant={resolvedVariant}
+								allowDefaultVariant={allowDefaultVariant}
+								isMobile={isMobile}
+								onOpenMobileView={() => setMobileVariantView(true)}
+								onSelectVariant={onSelectVariant}
+								onClose={() => setOpen(false)}
+							/>
+						)}
+					</>
+				)}
 			</SearchableListPopoverContent>
 		</SearchableListPopover>
 	)
@@ -316,25 +369,14 @@ function ModelSelectorList({
 					{!search && lastUsedModels.length > 0 && (
 						<SearchableListPopoverGroup label="Last used">
 							{lastUsedModels.map((model) => (
-								<SearchableListPopoverItem
+								<ModelSelectorOptionRow
 									key={`recent-${model.value}`}
+									displayName={model.displayName}
+									providerName={model.providerName}
+									reasoning={model.reasoning}
+									selected={model.value === activeValue}
 									onSelect={() => onSelect(model.value)}
-								>
-									<div className="min-w-0 flex-1">
-										<div className="truncate">{model.displayName}</div>
-										<div className="truncate text-[10px] text-muted-foreground/40">
-											{model.providerName}
-										</div>
-									</div>
-									{model.reasoning && (
-										<span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground/60">
-											reasoning
-										</span>
-									)}
-									{model.value === activeValue && (
-										<CheckIcon className="size-3.5 shrink-0 text-primary" />
-									)}
-								</SearchableListPopoverItem>
+								/>
 							))}
 						</SearchableListPopoverGroup>
 					)}
@@ -343,6 +385,18 @@ function ModelSelectorList({
 					{Array.from(grouped.entries()).map(([providerName, providerModels]) => {
 						// Get the provider ID from the first model in the group to look up the icon
 						const providerId = providerModels[0]?.providerID
+						const items = providerModels.map((model) => (
+							<ModelSelectorOptionRow
+								key={model.value}
+								displayName={model.displayName}
+								reasoning={model.reasoning}
+								selected={model.value === activeValue}
+								onSelect={() => onSelect(model.value)}
+							/>
+						))
+						if (providerId === "session") {
+							return <div key={providerName}>{items}</div>
+						}
 						return (
 							<SearchableListPopoverGroup
 								key={providerName}
@@ -353,22 +407,7 @@ function ModelSelectorList({
 									</>
 								}
 							>
-								{providerModels.map((model) => (
-									<SearchableListPopoverItem
-										key={model.value}
-										onSelect={() => onSelect(model.value)}
-									>
-										<span className="min-w-0 flex-1 truncate">{model.displayName}</span>
-										{model.reasoning && (
-											<span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground/60">
-												reasoning
-											</span>
-										)}
-										{model.value === activeValue && (
-											<CheckIcon className="size-3.5 shrink-0 text-primary" />
-										)}
-									</SearchableListPopoverItem>
-								))}
+								{items}
 							</SearchableListPopoverGroup>
 						)
 					})}
@@ -529,7 +568,6 @@ export function PromptToolbar({
 	}, [effectiveModel, providers])
 
 	const hasAgents = agents.length > 0
-	const hasVariants = variants.length > 0
 
 	return (
 		<div className="flex min-w-0 flex-wrap items-center gap-0.5">
@@ -551,20 +589,13 @@ export function PromptToolbar({
 				hasOverride={hasModelOverride}
 				onSelectModel={onSelectModel}
 				recentModels={recentModels}
+				variants={variants}
+				selectedVariant={selectedVariant}
+				currentVariant={currentVariant}
+				allowDefaultVariant={allowDefaultVariant}
+				onSelectVariant={onSelectVariant}
 				disabled={disabled}
 			/>
-
-			{hasVariants && <Separator orientation="vertical" className="mx-0.5 my-2 self-stretch" />}
-
-			{hasVariants && (
-				<VariantSelector
-					variants={variants}
-					selectedVariant={selectedVariant ?? currentVariant}
-					onSelectVariant={onSelectVariant}
-					allowDefaultVariant={allowDefaultVariant}
-					disabled={disabled}
-				/>
-			)}
 		</div>
 	)
 }
@@ -592,16 +623,6 @@ interface StatusBarProps {
 	compaction?: CompactionConfig
 }
 
-const DISPLAY_MODE_CYCLE: DisplayMode[] = ["default", "verbose"]
-const DISPLAY_MODE_LABELS: Record<DisplayMode, string> = {
-	default: "Default",
-	verbose: "Verbose",
-}
-const DISPLAY_MODE_ICONS: Record<DisplayMode, typeof ListIcon> = {
-	default: ListIcon,
-	verbose: MaximizeIcon,
-}
-
 export function StatusBar({
 	vcs,
 	isConnected,
@@ -613,17 +634,6 @@ export function StatusBar({
 	providers,
 	compaction,
 }: StatusBarProps) {
-	const displayMode = useDisplayMode()
-	const setDisplayMode = useSetDisplayMode()
-
-	const cycleDisplayMode = useCallback(() => {
-		const currentIndex = DISPLAY_MODE_CYCLE.indexOf(displayMode)
-		const nextIndex = (currentIndex + 1) % DISPLAY_MODE_CYCLE.length
-		setDisplayMode(DISPLAY_MODE_CYCLE[nextIndex])
-	}, [displayMode, setDisplayMode])
-
-	const DisplayModeIcon = DISPLAY_MODE_ICONS[displayMode]
-
 	return (
 		<div className="flex min-w-0 items-center gap-3 overflow-hidden px-2 pt-2 text-[11px] text-muted-foreground/60">
 			{/* Left side — environment + connection + interrupt hint */}
@@ -657,19 +667,8 @@ export function StatusBar({
 				)}
 			</div>
 
-			{/* Right side — display mode toggle + context usage + git branch */}
+			{/* Right side — context usage + git branch */}
 			<div className="ml-auto flex min-w-0 items-center gap-3 overflow-hidden">
-				{/* Display mode toggle */}
-				<button
-					type="button"
-					onClick={cycleDisplayMode}
-					className="flex items-center gap-1 transition-colors hover:text-foreground"
-					title={`Display: ${DISPLAY_MODE_LABELS[displayMode]} (click to cycle)`}
-				>
-					<DisplayModeIcon className="size-3" />
-					<span>{DISPLAY_MODE_LABELS[displayMode]}</span>
-				</button>
-
 				{/* Context window usage */}
 				{sessionId && (
 					<ContextUsageIndicator
