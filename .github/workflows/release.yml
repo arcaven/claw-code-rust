@@ -175,6 +175,22 @@ jobs:
           merge-multiple: true
           path: artifacts
 
+      - name: Collect individual release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -maxdepth 1 -type f \
+            \( -name '*.AppImage' \
+            -o -name '*.blockmap' \
+            -o -name '*.deb' \
+            -o -name '*.dmg' \
+            -o -name '*.exe' \
+            -o -name '*.rpm' \
+            -o -name '*.tar.gz' \
+            -o -name '*.yml' \
+            -o -name '*.zip' \) \
+            -exec cp {} release-assets/ \;
+          find release-assets -maxdepth 1 -type f -print | sort
+
       - name: Generate release notes
         run: |
           cat > release-notes.md <<'NOTES'
@@ -199,5 +215,5 @@ jobs:
         with:
           body_path: release-notes.md
           draft: true
-          files: artifacts/*
+          files: release-assets/*
           generate_release_notes: true
