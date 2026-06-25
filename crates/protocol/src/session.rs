@@ -35,6 +35,7 @@ pub struct SessionMetadata {
     pub additional_directories: Vec<PathBuf>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub last_activity_at: DateTime<Utc>,
     pub title: Option<String>,
     pub title_state: SessionTitleState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -363,6 +364,7 @@ mod tests {
             additional_directories: Vec::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            last_activity_at: Utc::now(),
             title: Some("Test".to_string()),
             title_state: SessionTitleState::Unset,
             parent_session_id: None,

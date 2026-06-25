@@ -151,7 +151,7 @@ pub fn acp_session_info_from_metadata(session: &SessionMetadata) -> AcpSessionIn
         session_id: session.session_id,
         cwd: session.cwd.clone(),
         title: session.title.clone(),
-        updated_at: Some(session.updated_at.to_rfc3339()),
+        updated_at: Some(session.last_activity_at.to_rfc3339()),
         additional_directories: session.additional_directories.clone(),
         meta: Some(meta),
     }
@@ -168,12 +168,16 @@ mod tests {
 
     #[test]
     fn session_info_uses_acp_field_names_and_preserves_devo_metadata() {
+        let created_at = Utc::now();
+        let updated_at = created_at + chrono::TimeDelta::minutes(2);
+        let last_activity_at = created_at + chrono::TimeDelta::minutes(1);
         let session = SessionMetadata {
             session_id: SessionId::new(),
             cwd: ".".into(),
             additional_directories: vec!["/workspace/shared".into()],
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at,
+            updated_at,
+            last_activity_at,
             title: Some("Work".to_string()),
             title_state: SessionTitleState::Unset,
             parent_session_id: None,
@@ -200,6 +204,10 @@ mod tests {
 
         assert_eq!(json["sessionId"], serde_json::json!(session.session_id));
         assert_eq!(json["title"], serde_json::json!("Work"));
+        assert_eq!(
+            json["updatedAt"],
+            serde_json::json!(last_activity_at.to_rfc3339())
+        );
         assert_eq!(
             json["additionalDirectories"],
             serde_json::json!(["/workspace/shared"])

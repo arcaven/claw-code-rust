@@ -64,6 +64,7 @@ impl ServerRuntime {
             additional_directories: params.additional_directories.clone(),
             created_at: now,
             updated_at: now,
+            last_activity_at: now,
             title: params.title.clone(),
             title_state: params
                 .title
@@ -801,6 +802,7 @@ impl ServerRuntime {
             additional_directories,
             created_at,
             updated_at,
+            last_activity_at: updated_at,
             title: title_override.or_else(|| source.summary.title.clone()),
             title_state: source.summary.title_state.clone(),
             parent_session_id: None,

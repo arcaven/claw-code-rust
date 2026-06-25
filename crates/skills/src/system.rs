@@ -10,6 +10,10 @@ use std::path::PathBuf;
 use include_dir::Dir;
 use thiserror::Error;
 
+#[cfg(windows)]
+const SYSTEM_SKILLS_DIR: Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR\\src\\assets\\samples");
+#[cfg(not(windows))]
 const SYSTEM_SKILLS_DIR: Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/samples");
 const SYSTEM_SKILLS_DIR_NAME: &str = ".system";
