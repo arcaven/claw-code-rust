@@ -79,6 +79,7 @@ export function DesktopTerminalPanel({
 	const terminalRef = useRef<Terminal | null>(null);
 	const fitAddonRef = useRef<FitAddon | null>(null);
 	const sessionIdRef = useRef<string | null>(null);
+	const terminalCleanupRef = useRef<(() => void) | null>(null);
 	const [sessionShell, setSessionShell] = useState<string | null>(null);
 	const [height, setHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
 	const [status, setStatus] = useState<
@@ -110,6 +111,26 @@ export function DesktopTerminalPanel({
 		setSessionShell(null);
 		setStatus("idle");
 	}, []);
+
+	const disposeTerminalResources = useCallback(() => {
+		const terminalBridge = getTerminalBridge();
+		const sessionId = sessionIdRef.current;
+		if (sessionId && terminalBridge) {
+			terminalBridge.close(sessionId);
+		}
+		sessionIdRef.current = null;
+		terminalCleanupRef.current?.();
+		terminalCleanupRef.current = null;
+		terminalRef.current?.dispose();
+		terminalRef.current = null;
+		fitAddonRef.current = null;
+	}, []);
+
+	const closeTerminal = useCallback(() => {
+		disposeTerminalResources();
+		setSessionShell(null);
+		setStatus("idle");
+	}, [disposeTerminalResources]);
 
 	const startSession = useCallback(async () => {
 		const terminalBridge = getTerminalBridge();
@@ -178,6 +199,12 @@ export function DesktopTerminalPanel({
 			setStatus("exited");
 			terminal.write(`\r\n[process exited with code ${exitCode}]\r\n`);
 		});
+		terminalCleanupRef.current = () => {
+			dataDisposable.dispose();
+			unsubscribeData();
+			unsubscribeExit();
+			themeObserver.disconnect();
+		};
 
 		requestAnimationFrame(() => {
 			terminal.options.theme = getTerminalTheme();
@@ -185,19 +212,6 @@ export function DesktopTerminalPanel({
 			void startSession();
 			terminal.focus();
 		});
-
-		return () => {
-			dataDisposable.dispose();
-			unsubscribeData();
-			unsubscribeExit();
-			themeObserver.disconnect();
-			const sessionId = sessionIdRef.current;
-			if (sessionId) terminalBridge.close(sessionId);
-			sessionIdRef.current = null;
-			terminal.dispose();
-			terminalRef.current = null;
-			fitAddonRef.current = null;
-		};
 	}, [open, resizeTerminal, startSession]);
 
 	useEffect(() => {
@@ -213,6 +227,10 @@ export function DesktopTerminalPanel({
 		window.addEventListener("resize", resizeTerminal);
 		return () => window.removeEventListener("resize", resizeTerminal);
 	}, [open, resizeTerminal]);
+
+	useEffect(() => {
+		return () => disposeTerminalResources();
+	}, [disposeTerminalResources]);
 
 	const handleResizePointerDown = useCallback(
 		(event: React.PointerEvent<HTMLDivElement>) => {
@@ -325,7 +343,7 @@ export function DesktopTerminalPanel({
 									size="icon"
 									className="size-7"
 									onClick={() => {
-										closeSession();
+										closeTerminal();
 										onOpenChange(false);
 									}}
 								/>

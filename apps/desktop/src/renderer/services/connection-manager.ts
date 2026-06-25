@@ -63,6 +63,9 @@ let connection: {
 /** Per-project SDK clients, keyed by directory path */
 const projectClients = new Map<string, DevoClient>()
 
+/** Project clients whose local session.status stream is bridged into the UI store. */
+const projectStatusBridgeDirs = new Set<string>()
+
 /**
  * Monotonically increasing ID for event loop instances.
  */
@@ -87,6 +90,11 @@ function setGlobalAbort(controller: AbortController | null) {
 	;(window as any)[ACP_ABORT_KEY] = controller
 }
 
+function clearProjectClients(): void {
+	projectClients.clear()
+	projectStatusBridgeDirs.clear()
+}
+
 // ============================================================
 // Public API
 // ============================================================
@@ -103,7 +111,7 @@ export async function connectToDevo(url: string, authHeader?: string | null): Pr
 	if (connection) {
 		log.info("Disconnecting previous connection", { url: connection.url })
 		connection.abortController.abort()
-		projectClients.clear()
+		clearProjectClients()
 	}
 
 	// Also abort any stale ACP event loop from a previous HMR module that we can't
@@ -310,6 +318,7 @@ export function getProjectClient(directory: string): DevoClient | null {
 			authHeader: connection.authHeader ?? undefined,
 		})
 		projectClients.set(directory, client)
+		startProjectStatusBridge(client, directory, connection.abortController.signal)
 	}
 	return client
 }
@@ -391,7 +400,7 @@ export function disconnect(): void {
 	if (connection) {
 		connection.abortController.abort()
 		connection = null
-		projectClients.clear()
+		clearProjectClients()
 	}
 	setGlobalAbort(null)
 	eventLoopGeneration++
@@ -623,4 +632,30 @@ async function startEventLoop(
 	}
 
 	log.info("ACP event loop exited", { generation, stale: generation !== eventLoopGeneration })
+}
+
+function startProjectStatusBridge(client: DevoClient, directory: string, signal: AbortSignal): void {
+	if (projectStatusBridgeDirs.has(directory)) return
+	projectStatusBridgeDirs.add(directory)
+
+	void (async () => {
+		const batcher = createEventBatcher()
+		try {
+			const stream = await subscribeToGlobalEvents(client)
+			for await (const globalEvent of stream) {
+				if (signal.aborted) break
+				const event = globalEvent.payload
+				if (event?.type === "session.status") {
+					batcher.enqueue(event)
+				}
+			}
+		} catch (err) {
+			if (!signal.aborted) {
+				log.warn("Project status bridge stopped", { directory }, err)
+			}
+		} finally {
+			batcher.dispose(signal.aborted)
+			projectStatusBridgeDirs.delete(directory)
+		}
+	})()
 }

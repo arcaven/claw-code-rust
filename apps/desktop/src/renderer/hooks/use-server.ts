@@ -146,7 +146,7 @@ export function useAgentActions() {
 				})
 				log.debug("sendPrompt: promptAsync returned", {
 					sessionId,
-					result: JSON.stringify(result).slice(0, 200),
+					result: JSON.stringify(result ?? null).slice(0, 200),
 				})
 			} catch (err) {
 				log.error("sendPrompt: promptAsync failed", { sessionId, agent: options?.agent }, err)
