@@ -11,7 +11,7 @@ import type {
 } from "./claude-code"
 
 export interface ScanOptions {
-	/** Scan global Claude Code config (~/.Claude/, ~/.claude.json) */
+	/** Scan global Claude Code config (~/.claude/, legacy ~/.Claude/, ~/.claude.json) */
 	global?: boolean
 	/** Scan specific project path (defaults to cwd) */
 	project?: string
@@ -28,7 +28,7 @@ export interface ScanResult {
 }
 
 export interface GlobalScanResult {
-	/** ~/.Claude/settings.json parsed content */
+	/** ~/.claude/settings.json parsed content, or legacy ~/.Claude/settings.json fallback */
 	settings?: ClaudeSettings
 	/** Path to settings.json if found */
 	settingsPath?: string

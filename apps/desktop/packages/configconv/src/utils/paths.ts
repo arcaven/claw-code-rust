@@ -9,9 +9,19 @@ const home = homedir()
 
 // ─── Claude Code Paths ───────────────────────────────────────────────
 
-/** ~/.Claude/settings.json */
+/** ~/.claude/settings.json */
 export function ccSettingsPath(): string {
+	return ccSettingsPaths()[0]
+}
+
+/** Legacy ~/.Claude/settings.json */
+export function ccLegacySettingsPath(): string {
 	return join(home, ".Claude", "settings.json")
+}
+
+/** Claude Code settings paths, in preference order. */
+export function ccSettingsPaths(): string[] {
+	return [join(home, ".claude", "settings.json"), ccLegacySettingsPath()]
 }
 
 /** ~/.claude.json */
@@ -191,6 +201,30 @@ export function ocProjectPluginsDir(projectPath: string): string {
 /** Project-level AGENTS.md */
 export function ocProjectAgentsMdPath(projectPath: string): string {
 	return join(projectPath, "AGENTS.md")
+}
+
+// ─── OpenCode Paths ─────────────────────────────────────────────────
+
+/** ~/.config/opencode/ */
+export function opencodeConfigDir(): string {
+	const xdgConfig = process.env.XDG_CONFIG_HOME || join(home, ".config")
+	return join(xdgConfig, "opencode")
+}
+
+/** ~/.config/opencode/opencode.json */
+export function opencodeConfigPath(): string {
+	return join(opencodeConfigDir(), "opencode.json")
+}
+
+/** ~/.config/opencode/opencode.jsonc */
+export function opencodeJsoncConfigPath(): string {
+	return join(opencodeConfigDir(), "opencode.jsonc")
+}
+
+/** ~/.local/share/opencode/auth.json */
+export function opencodeAuthPath(): string {
+	const xdgData = process.env.XDG_DATA_HOME || join(home, ".local", "share")
+	return join(xdgData, "opencode", "auth.json")
 }
 
 // ─── Cursor Paths ────────────────────────────────────────────────────

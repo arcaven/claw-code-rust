@@ -1,19 +1,70 @@
-:root[data-platform="win32"] {
-	--devo-titlebar-height: 40px;
-	--devo-windows-focus-chrome-bg: #ecf5f9;
-	--devo-windows-unfocused-chrome-bg: #f2f4f5;
+:root {
+	--devo-chrome-background: #f5f5f5;
+	--devo-transcript-background: var(--background);
 }
 
-:root[data-platform="win32"].dark {
-	--devo-windows-focus-chrome-bg: color-mix(
+:root:not(.dark) {
+	--sidebar: var(--devo-chrome-background);
+}
+
+:root.dark {
+	--devo-chrome-background: color-mix(
 		in srgb,
 		var(--background) 92%,
 		var(--foreground) 8%
 	);
-	--devo-windows-unfocused-chrome-bg: color-mix(
+	--devo-transcript-background: var(--background);
+	--sidebar: var(--devo-chrome-background);
+}
+
+:root[data-platform="win32"] {
+	--devo-titlebar-height: 40px;
+	--devo-windows-focus-chrome-bg: var(--devo-chrome-background);
+	--devo-windows-unfocused-chrome-bg: var(--devo-chrome-background);
+}
+
+:root.electron-transparent,
+:root.electron-vibrancy {
+	background: transparent !important;
+}
+
+:root.electron-transparent body,
+:root.electron-vibrancy body {
+	background: color-mix(
 		in srgb,
-		var(--background) 96%,
-		var(--foreground) 4%
+		var(--background) var(--glass-body),
+		transparent
+	) !important;
+}
+
+[data-slot="sidebar"][data-collapsible="offcanvas"][data-state="collapsed"] {
+	flex-basis: 0;
+	width: 0;
+}
+
+[data-slot="content-area"] {
+	background: var(--devo-transcript-background);
+}
+
+:root:not(.electron-transparent):not(.electron-vibrancy)
+	[data-slot="sidebar-wrapper"][data-state="collapsed"]
+	[data-slot="sidebar-inset"],
+:root.electron-transparent
+	[data-slot="sidebar-wrapper"][data-state="collapsed"]
+	[data-slot="sidebar-inset"],
+:root.electron-vibrancy
+	[data-slot="sidebar-wrapper"][data-state="collapsed"]
+	[data-slot="sidebar-inset"],
+[data-slot="sidebar-wrapper"][data-state="collapsed"] [data-slot="sidebar-inset"] {
+	margin-left: 0;
+}
+
+:root.electron-transparent [data-slot="content-area"],
+:root.electron-vibrancy [data-slot="content-area"] {
+	background: color-mix(
+		in srgb,
+		var(--devo-transcript-background) var(--glass-content),
+		transparent
 	);
 }
 
@@ -132,6 +183,13 @@
 	[data-slot="content-area"][data-transcript-titlebar-fill="true"]
 	[data-slot="session-panel-header"] {
 	-webkit-app-region: drag;
+}
+
+:root[data-platform="darwin"]
+	[data-slot="sidebar-wrapper"][data-state="collapsed"]
+	[data-slot="content-area"][data-transcript-titlebar-fill="true"]
+	[data-slot="session-panel-header"] {
+	padding-inline-start: var(--window-controls-inset) !important;
 }
 
 :root[data-platform="darwin"]

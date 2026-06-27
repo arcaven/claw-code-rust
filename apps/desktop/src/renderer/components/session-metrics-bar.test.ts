@@ -11,15 +11,59 @@ describe("SessionMetricsBar top timer wiring", () => {
 			acceptsIsWorkingProp: source.includes("isWorking: boolean"),
 			usesLatestTurnTimer: source.includes("computeLatestTurnTimerSplit(turns"),
 			omitsCompletedSessionWorkTime: !source.includes("completedMs={metrics.completedWorkTimeMs}"),
-			headerPassesTurns: agentDetailSource.includes("turns={chatTurns}"),
-			headerPassesWorkingState: agentDetailSource.includes('isWorking={agent.status === "running"}'),
+			exportsOverviewButton: source.includes("export function SessionMetricsOverviewButton"),
+			headerUsesOverviewButton: agentDetailSource.includes("<SessionMetricsOverviewButton"),
 		}).toEqual({
 			acceptsTurnsProp: true,
 			acceptsIsWorkingProp: true,
 			usesLatestTurnTimer: true,
 			omitsCompletedSessionWorkTime: true,
-			headerPassesTurns: true,
-			headerPassesWorkingState: true,
+			exportsOverviewButton: true,
+			headerUsesOverviewButton: true,
+		})
+	})
+
+	test("session header keeps Open in and ends with the three transcript controls", () => {
+		const openInIndex = agentDetailSource.indexOf("<OpenInButton")
+		const overviewIndex = agentDetailSource.indexOf("<SessionMetricsOverviewButton")
+		const terminalIndex = agentDetailSource.indexOf("<TerminalToggleButton")
+		const changesIndex = agentDetailSource.indexOf("<ChangesPanelToggleButton")
+
+		expect({
+			keepsOpenInButton: openInIndex !== -1,
+			removesCloseSessionIcon: !agentDetailSource.includes("XIcon"),
+			exposesChangesPanelButton:
+				agentDetailSource.includes("function ChangesPanelToggleButton") &&
+				agentDetailSource.includes("onToggleReviewPanel"),
+			exposesTerminalButton: agentDetailSource.includes("function TerminalToggleButton"),
+			rightControlOrder:
+				openInIndex !== -1 &&
+				overviewIndex !== -1 &&
+				terminalIndex !== -1 &&
+				changesIndex !== -1 &&
+				openInIndex < overviewIndex &&
+				overviewIndex < terminalIndex &&
+				terminalIndex < changesIndex,
+		}).toEqual({
+			keepsOpenInButton: true,
+			removesCloseSessionIcon: true,
+			exposesChangesPanelButton: true,
+			exposesTerminalButton: true,
+			rightControlOrder: true,
+		})
+	})
+
+	test("session header panel toggles use panel icons", () => {
+		expect({
+			usesBottomPanelIcon: agentDetailSource.includes("BottomPanelIcon"),
+			usesRightPanelIcon: agentDetailSource.includes("RightPanelIcon"),
+			replacesLucideTerminalIcon: !agentDetailSource.includes("TerminalIcon"),
+			replacesLucidePanelRightIcon: !agentDetailSource.includes("PanelRightIcon"),
+		}).toEqual({
+			usesBottomPanelIcon: true,
+			usesRightPanelIcon: true,
+			replacesLucideTerminalIcon: true,
+			replacesLucidePanelRightIcon: true,
 		})
 	})
 })

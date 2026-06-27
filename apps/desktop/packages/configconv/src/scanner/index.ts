@@ -2,19 +2,24 @@
  * Main scanner entry point.
  *
  * Discovers configuration files for all supported agent formats:
- * - Claude Code: ~/.Claude/, ~/.claude.json, .claude/, .mcp.json, CLAUDE.md
+ * - Claude Code: ~/.claude/, legacy ~/.Claude/, ~/.claude.json, .claude/, .mcp.json, CLAUDE.md
  * - Devo: ~/.config/devo/, .devo/, devo.json, AGENTS.md
  * - Cursor: ~/.cursor/, .cursor/, .cursorrules
+ * - OpenCode: ~/.config/opencode/opencode.json, opencode.jsonc, auth.json
  */
 
 import type { DevoScanResult } from "../converter/to-canonical/devo"
 import type { AgentFormat } from "../types/canonical"
 import type { CursorScanResult } from "../types/cursor"
+import type { OpenCodeScanResult } from "../types/opencode"
 import type { ScanOptions, ScanResult } from "../types/scan-result"
 import { scanGlobal, scanHistory, scanProject } from "./claude-config"
 import { scanCursorGlobal, scanCursorProject } from "./cursor-config"
 import { scanCursorHistory } from "./cursor-history"
 import { scanDevoGlobal, scanDevoProject } from "./devo-config"
+import { scanOpenCode } from "./opencode-config"
+
+export { scanOpenCode } from "./opencode-config"
 
 // ============================================================
 // Claude Code scanner (preserved for backwards compatibility)
@@ -142,7 +147,7 @@ export async function scanDevo(options: DevoScanOptions = {}): Promise<DevoScanR
 
 export interface UniversalScanOptions {
 	/** Which format to scan */
-	format: AgentFormat
+	format: AgentFormat | "opencode"
 	/** Scan global config */
 	global?: boolean
 	/** Scan specific project path */
@@ -162,6 +167,7 @@ export async function scanFormat(
 	| { format: "claude-code"; data: ScanResult }
 	| { format: "devo"; data: DevoScanResult }
 	| { format: "cursor"; data: CursorScanResult }
+	| { format: "opencode"; data: OpenCodeScanResult }
 > {
 	switch (options.format) {
 		case "claude-code": {
@@ -188,6 +194,10 @@ export async function scanFormat(
 				since: options.since,
 			})
 			return { format: "cursor", data }
+		}
+		case "opencode": {
+			const data = options.global === false ? { global: { parseErrors: [] } } : await scanOpenCode()
+			return { format: "opencode", data }
 		}
 	}
 }

@@ -42,6 +42,10 @@ interface SessionMetricsBarProps {
 	isWorking: boolean
 }
 
+interface SessionMetricsOverviewButtonProps {
+	sessionId: string
+}
+
 /**
  * Compact metrics bar that reads from `sessionMetricsFamily` directly.
  * Only re-renders when the session's metrics change (structural equality).
@@ -135,11 +139,34 @@ export const SessionMetricsBar = memo(function SessionMetricsBar({
 	)
 })
 
+export function SessionMetricsOverviewButton({ sessionId }: SessionMetricsOverviewButtonProps) {
+	const metrics = useAtomValue(sessionMetricsFamily(sessionId))
+
+	return (
+		<MetricsPopover
+			metrics={metrics}
+			ariaLabel="Show session overview"
+			triggerClassName="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+			triggerIconClassName="size-4"
+		/>
+	)
+}
+
 // ============================================================
 // Metrics detail popover
 // ============================================================
 
-function MetricsPopover({ metrics }: { metrics: SessionMetricsValue }) {
+function MetricsPopover({
+	metrics,
+	ariaLabel = "Show session metrics",
+	triggerClassName = "inline-flex items-center gap-1 text-xs text-muted-foreground/60 transition-colors hover:text-muted-foreground",
+	triggerIconClassName = "size-3",
+}: {
+	metrics: SessionMetricsValue
+	ariaLabel?: string
+	triggerClassName?: string
+	triggerIconClassName?: string
+}) {
 	const { raw } = metrics
 
 	return (
@@ -148,11 +175,12 @@ function MetricsPopover({ metrics }: { metrics: SessionMetricsValue }) {
 				render={
 					<button
 						type="button"
-						className="inline-flex items-center gap-1 text-xs text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+						aria-label={ariaLabel}
+						className={triggerClassName}
 					/>
 				}
 			>
-				<BarChart3Icon className="size-3" aria-hidden="true" />
+				<BarChart3Icon className={triggerIconClassName} aria-hidden="true" />
 			</PopoverTrigger>
 			<PopoverContent side="bottom" align="end" sideOffset={8} className="w-64 gap-0 p-0">
 				<div className="space-y-3 p-3 text-xs">
