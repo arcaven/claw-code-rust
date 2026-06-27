@@ -39,25 +39,44 @@ function declarationsForSelector(
 }
 
 describe("desktop chrome CSS", () => {
-	test("content area owns a transcript background surface", async () => {
+	test("light mode keeps transcript white and moves the soft surface to chrome", async () => {
 		const css = await readFile(cssPath, "utf8");
 		const lightDeclarations = declarationsForSelector(css, ":root");
-		const darkDeclarations = declarationsForSelector(css, ":root.dark");
 		const contentAreaDeclarations = declarationsForSelector(
 			css,
 			'[data-slot="content-area"]',
 		);
-
-		expect(lightDeclarations["--devo-transcript-background"]).toBe(
-			"color-mix( in srgb, var(--background) 96%, var(--foreground) 4% )",
+		const lightModeDeclarations = declarationsForSelector(
+			css,
+			":root:not(.dark)",
 		);
-		expect(darkDeclarations["--devo-transcript-background"]).toBe(
-			"color-mix( in srgb, var(--background) 92%, var(--foreground) 8% )",
+
+		expect(lightDeclarations["--devo-chrome-background"]).toBe("#f5f5f5");
+		expect(lightDeclarations["--devo-transcript-background"]).toBe(
+			"var(--background)",
 		);
 		expect(contentAreaDeclarations).toEqual({
 			background: "var(--devo-transcript-background)",
 		});
+		expect(lightModeDeclarations).toEqual({
+			"--sidebar": "var(--devo-chrome-background)",
+		});
 		expect(contentAreaDeclarations.border).toBeUndefined();
+	});
+
+	test("dark mode keeps transcript black and moves the raised surface to chrome", async () => {
+		const css = await readFile(cssPath, "utf8");
+		const darkDeclarations = declarationsForSelector(css, ":root.dark");
+
+		expect(darkDeclarations["--devo-chrome-background"]).toBe(
+			"color-mix( in srgb, var(--background) 92%, var(--foreground) 8% )",
+		);
+		expect(darkDeclarations["--devo-transcript-background"]).toBe(
+			"var(--background)",
+		);
+		expect(darkDeclarations["--sidebar"]).toBe(
+			"var(--devo-chrome-background)",
+		);
 	});
 
 	test("glass content area keeps the same transcript surface token", async () => {
@@ -81,7 +100,36 @@ describe("desktop chrome CSS", () => {
 		]);
 	});
 
-	test("Windows dark mode uses dark chrome background tokens", async () => {
+	test("glass tiers clear startup html and body backgrounds", async () => {
+		const css = await readFile(cssPath, "utf8");
+		const selectors = [
+			":root.electron-transparent",
+			":root.electron-vibrancy",
+			":root.electron-transparent body",
+			":root.electron-vibrancy body",
+		];
+
+		expect(
+			selectors.map((selector) => declarationsForSelector(css, selector)),
+		).toEqual([
+			{
+				background: "transparent !important",
+			},
+			{
+				background: "transparent !important",
+			},
+			{
+				background:
+					"color-mix( in srgb, var(--background) var(--glass-body), transparent ) !important",
+			},
+			{
+				background:
+					"color-mix( in srgb, var(--background) var(--glass-body), transparent ) !important",
+			},
+		]);
+	});
+
+	test("Windows chrome uses the shared chrome background token", async () => {
 		const css = await readFile(cssPath, "utf8");
 		const lightDeclarations = declarationsForSelector(
 			css,
@@ -94,15 +142,34 @@ describe("desktop chrome CSS", () => {
 
 		expect(lightDeclarations).toEqual({
 			"--devo-titlebar-height": "40px",
-			"--devo-windows-focus-chrome-bg": "#ecf5f9",
-			"--devo-windows-unfocused-chrome-bg": "#f2f4f5",
+			"--devo-windows-focus-chrome-bg": "var(--devo-chrome-background)",
+			"--devo-windows-unfocused-chrome-bg": "var(--devo-chrome-background)",
 		});
-		expect(darkDeclarations).toEqual({
-			"--devo-windows-focus-chrome-bg":
-				"color-mix( in srgb, var(--background) 92%, var(--foreground) 8% )",
-			"--devo-windows-unfocused-chrome-bg":
-				"color-mix( in srgb, var(--background) 96%, var(--foreground) 4% )",
+		expect(darkDeclarations).toEqual({});
+	});
+
+	test("Windows chrome does not replace the transcript content surface", async () => {
+		const css = await readFile(cssPath, "utf8");
+		const sidebarInsetDeclarations = declarationsForSelector(
+			css,
+			':root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-inset"]',
+		);
+		const contentAreaDeclarations = declarationsForSelector(
+			css,
+			'[data-slot="content-area"]',
+		);
+		const windowsContentAreaDeclarations = declarationsForSelector(
+			css,
+			':root[data-platform="win32"][data-window-focused="true"] [data-slot="content-area"]',
+		);
+
+		expect(sidebarInsetDeclarations.background).toBe(
+			"var(--devo-windows-chrome-bg) !important",
+		);
+		expect(contentAreaDeclarations).toEqual({
+			background: "var(--devo-transcript-background)",
 		});
+		expect(windowsContentAreaDeclarations).toEqual({});
 	});
 
 	test("macOS glass sidebar inset extends to the right and bottom window edges", async () => {
@@ -196,6 +263,18 @@ describe("desktop chrome CSS", () => {
 
 		expect(declarations).toEqual({
 			"padding-inline-start": "var(--window-controls-inset) !important",
+		});
+	});
+
+	test("collapsed sidebar inset does not keep a left gutter", async () => {
+		const css = await readFile(cssPath, "utf8");
+		const declarations = declarationsForSelector(
+			css,
+			'[data-slot="sidebar-wrapper"][data-state="collapsed"] [data-slot="sidebar-inset"]',
+		);
+
+		expect(declarations).toEqual({
+			"margin-left": "0",
 		});
 	});
 

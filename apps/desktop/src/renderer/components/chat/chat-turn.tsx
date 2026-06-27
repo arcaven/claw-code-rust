@@ -9,7 +9,6 @@ import {
 	Reasoning,
 	ReasoningContent,
 	ReasoningText,
-	ReasoningTrigger,
 	useReasoning,
 } from "@devo/ui/components/ai-elements/reasoning"
 import { Shimmer } from "@devo/ui/components/ai-elements/shimmer"
@@ -29,7 +28,7 @@ import {
 	Undo2Icon,
 	XIcon,
 } from "lucide-react"
-import { memo, type ReactNode, useCallback, useDeferredValue, useMemo, useRef, useState } from "react"
+import { memo, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { useDisplayMode } from "../../hooks/use-agents"
 import type { ChatMessageEntry, ChatTurn as ChatTurnType } from "../../hooks/use-session-chat"
 import {
@@ -265,6 +264,8 @@ type RenderablePart =
 	| { kind: "text"; id: string; text: string }
 	| { kind: "reasoning"; part: ReasoningPart }
 
+type TextRenderablePart = Extract<RenderablePart, { kind: "text" }>
+
 /**
  * Flattens all assistant parts into an ordered list of renderable items
  * AND extracts the tool-only subset in a single pass.
@@ -310,6 +311,27 @@ function getLastResponseText(orderedParts: RenderablePart[]): string | undefined
 	return undefined
 }
 
+function splitCompletedTurnParts(orderedParts: RenderablePart[]): {
+	completedProcessParts: RenderablePart[]
+	finalResponsePart: TextRenderablePart | undefined
+} {
+	let finalResponseIndex = -1
+	for (let i = orderedParts.length - 1; i >= 0; i--) {
+		if (orderedParts[i].kind === "text") {
+			finalResponseIndex = i
+			break
+		}
+	}
+
+	if (finalResponseIndex === -1) {
+		return { completedProcessParts: orderedParts, finalResponsePart: undefined }
+	}
+
+	const finalResponsePart = orderedParts[finalResponseIndex] as TextRenderablePart
+	const completedProcessParts = orderedParts.filter((_, index) => index !== finalResponseIndex)
+	return { completedProcessParts, finalResponsePart }
+}
+
 function getError(assistantMessages: ChatMessageEntry[]): string | undefined {
 	for (const msg of assistantMessages) {
 		if (msg.info.role === "assistant" && msg.info.error) {
@@ -339,6 +361,28 @@ function LazyReasoningContent({
 	const { isOpen, isStreaming } = useReasoning()
 	if (!isOpen && !isStreaming) return null
 	return <ReasoningContent animated={animated}>{children}</ReasoningContent>
+}
+
+function TranscriptReasoningLiveCue() {
+	return (
+		<div
+			aria-label="Reasoning details"
+			className="border-l border-border/70 pl-3 text-sm text-muted-foreground/70"
+		>
+			<Shimmer duration={1}>Thinking...</Shimmer>
+		</div>
+	)
+}
+
+function TranscriptReasoningBlock({ text, animated }: { text: string; animated?: boolean }) {
+	return (
+		<div
+			aria-label="Reasoning details"
+			className="border-l border-border/70 pl-3 text-sm text-muted-foreground/80"
+		>
+			<ReasoningText animated={animated}>{text}</ReasoningText>
+		</div>
+	)
 }
 
 // ============================================================
@@ -645,6 +689,79 @@ function pendingPermissionFingerprint(permission: PendingPermission | undefined)
 	return `${permission.sessionId}:${requestId}`
 }
 
+function WorkingTurnStatusStrip({ turn }: { turn: ChatTurnType }) {
+	const [display, setDisplay] = useState(() =>
+		formatWorkDuration(computeTurnWorkTime(turn, { active: true })),
+	)
+
+	useEffect(() => {
+		const updateDisplay = () => {
+			setDisplay(formatWorkDuration(computeTurnWorkTime(turn, { active: true })))
+		}
+		updateDisplay()
+		const id = setInterval(updateDisplay, 1_000)
+		return () => clearInterval(id)
+	}, [turn])
+
+	return (
+		<div className="space-y-2 pt-1">
+			<div className="text-sm tabular-nums text-muted-foreground/70">
+				{"Working for "}
+				{display}
+			</div>
+			<div className="h-px bg-border/70" />
+		</div>
+	)
+}
+
+function CompletedTurnProcessDisclosure({
+	duration,
+	expanded,
+	hasProcessDetails,
+	onToggle,
+}: {
+	duration: string
+	expanded: boolean
+	hasProcessDetails: boolean
+	onToggle: () => void
+}) {
+	if (!duration) return null
+
+	const content = (
+		<>
+			<span>
+				{"Worked for "}
+				{duration}
+			</span>
+			{hasProcessDetails && (
+				<ChevronDownIcon
+					className={expanded ? "size-4 rotate-180 transition-transform" : "size-4 transition-transform"}
+					aria-hidden="true"
+				/>
+			)}
+		</>
+	)
+
+	if (!hasProcessDetails) {
+		return (
+			<div className="flex w-full items-center gap-1.5 border-b border-border/70 pb-2 text-sm tabular-nums text-muted-foreground/70">
+				{content}
+			</div>
+		)
+	}
+
+	return (
+		<button
+			type="button"
+			onClick={onToggle}
+			aria-expanded={expanded}
+			className="flex w-full items-center gap-1.5 border-b border-border/70 pb-2 text-left text-sm tabular-nums text-muted-foreground/70 transition-colors hover:text-foreground"
+		>
+			{content}
+		</button>
+	)
+}
+
 /**
  * Renders a single turn: user message + assistant response.
  *
@@ -678,11 +795,16 @@ export const ChatTurnComponent = memo(
 		onStepsExpandedChange,
 	}: ChatTurnProps) {
 		const [uncontrolledStepsExpanded, setUncontrolledStepsExpanded] = useState(false)
+		const [completedProcessExpanded, setCompletedProcessExpanded] = useState(false)
 		const [copied, setCopied] = useState(false)
 		const displayMode = useDisplayMode()
 		const toolPathRoot = agent?.worktreePath ?? agent?.directory ?? agent?.projectDirectory
 		const turnRef = useRef<HTMLDivElement>(null)
 		const stepsExpanded = controlledStepsExpanded ?? uncontrolledStepsExpanded
+		useEffect(() => {
+			setCompletedProcessExpanded(false)
+		}, [turn.id])
+
 		const setStepsExpanded = useCallback(
 			(expanded: boolean) => {
 				if (onStepsExpandedChange) {
@@ -703,9 +825,14 @@ export const ChatTurnComponent = memo(
 		const userFiles = useMemo(() => getFileParts(turn.userMessage), [turn.userMessage])
 
 		// Ordered parts + tool-only subset in a single pass (avoids double iteration)
-		const { ordered: orderedParts, tools: toolParts } = useMemo(
+		const { ordered: orderedParts } = useMemo(
 			() => getPartsAndTools(turn.assistantMessages),
 			[turn.assistantMessages],
+		)
+
+		const { completedProcessParts, finalResponsePart } = useMemo(
+			() => splitCompletedTurnParts(orderedParts),
+			[orderedParts],
 		)
 
 		// The last text for streaming display and copy action
@@ -727,8 +854,14 @@ export const ChatTurnComponent = memo(
 		const working = isLast && isWorking
 		const isQueued = isWorking && turn.assistantMessages.length === 0 && !isLast
 		const isQueuedLast = isWorking && turn.assistantMessages.length === 0 && isLast
-		const hasSteps = toolParts.length > 0
-		const hasReasoning = orderedParts.some((p) => p.kind === "reasoning")
+		const processOrderedParts = working ? orderedParts : completedProcessParts
+		const processToolParts = useMemo(
+			() => processOrderedParts.flatMap((part) => (part.kind === "tool" ? [part.part] : [])),
+			[processOrderedParts],
+		)
+		const hasSteps = processToolParts.length > 0
+		const hasCompletedProcessDetails = !working && completedProcessParts.length > 0
+		const processSectionVisible = working || (hasCompletedProcessDetails && completedProcessExpanded)
 
 		const duration = useMemo(() => {
 			const workTimeMs = computeTurnWorkTime(turn, { active: working })
@@ -758,33 +891,24 @@ export const ChatTurnComponent = memo(
 		const showVerboseTools = isVerbose || stepsExpanded
 
 		const verboseOrderedParts = useMemo(() => {
-			if (!stepsExpanded || isVerbose || working) return orderedParts
-			const stepParts = orderedParts.filter((part) => part.kind !== "text")
-			const textParts = orderedParts.filter((part) => part.kind === "text")
+			if (!stepsExpanded || isVerbose || working) return processOrderedParts
+			const stepParts = processOrderedParts.filter((part) => part.kind !== "text")
+			const textParts = processOrderedParts.filter((part) => part.kind === "text")
 			return [...stepParts, ...textParts]
-		}, [isVerbose, orderedParts, stepsExpanded, working])
+		}, [isVerbose, processOrderedParts, stepsExpanded, working])
 
 		// Grouped stream items for the default (non-verbose) rendering path
-		const defaultOrderedParts = useMemo(
-			() =>
-				!working && !showVerboseTools
-					? orderedParts.filter((part) => part.kind !== "tool")
-					: orderedParts,
-			[working, showVerboseTools, orderedParts],
-		)
+		const defaultOrderedParts = processOrderedParts
 
 		const streamItems = useMemo(
 			() => (showVerboseTools ? [] : groupPartsForStream(defaultOrderedParts)),
 			[showVerboseTools, defaultOrderedParts],
 		)
 
-		// In default mode, the text is always rendered inline within the stream.
-		// In verbose mode, the text is inline within the expanded ordered parts.
-		// The standalone "final response" block only appears when no tools/reasoning
-		// section is visible (pure text-only turn).
-		const toolsSectionVisible = working || hasSteps || hasReasoning
+		// In default mode, process text is rendered inline within the stream.
+		// In verbose mode, process text is inline within the expanded ordered parts.
 		const textAlreadyInline =
-			toolsSectionVisible && orderedParts.some((p) => p.kind === "text")
+			processSectionVisible && processOrderedParts.some((p) => p.kind === "text")
 
 		const handleCopyResponse = useCallback(async () => {
 			if (!responseText) return
@@ -800,6 +924,10 @@ export const ChatTurnComponent = memo(
 
 		const handleScrollToTop = useCallback(() => {
 			turnRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+		}, [])
+
+		const handleToggleCompletedProcess = useCallback(() => {
+			setCompletedProcessExpanded((expanded) => !expanded)
 		}, [])
 
 		const [forking, setForking] = useState(false)
@@ -849,8 +977,8 @@ export const ChatTurnComponent = memo(
 				>
 					<ChevronDownIcon className={showVerboseTools ? "size-3" : "size-3 -rotate-90"} />
 					<span>
-						{showVerboseTools ? "Hide" : "Show"} {toolParts.length}{" "}
-						{toolParts.length === 1 ? "step" : "steps"}
+						{showVerboseTools ? "Hide" : "Show"} {processToolParts.length}{" "}
+						{processToolParts.length === 1 ? "step" : "steps"}
 					</span>
 					<span>
 						{turnModel && `· ${turnModel} `}
@@ -899,18 +1027,20 @@ export const ChatTurnComponent = memo(
 					</Message>
 				)}
 
-				{/* Tool calls + reasoning section */}
-				{(working || hasSteps || hasReasoning) && (
-					<div className="space-y-2">
-						{/* Working shimmer — shown before any tools/reasoning appear */}
-						{working && !hasSteps && !hasReasoning && (
-							<div className="flex items-center gap-2 text-xs text-muted-foreground">
-								<Loader2Icon className="size-3 animate-spin text-muted-foreground/40" />
-								<Shimmer className="text-xs">{statusText}</Shimmer>
-							</div>
-						)}
+				{working && <WorkingTurnStatusStrip turn={turn} />}
+				{!working && duration && (
+					<CompletedTurnProcessDisclosure
+						duration={duration}
+						expanded={completedProcessExpanded}
+						hasProcessDetails={hasCompletedProcessDetails}
+						onToggle={handleToggleCompletedProcess}
+					/>
+				)}
 
-						{stepsToggle}
+				{/* Tool calls + reasoning section */}
+				{processSectionVisible && (
+					<div className="space-y-2">
+						{!working && completedProcessExpanded && stepsToggle}
 
 						{/* ── Default mode: interleaved text + grouped tool summaries ── */}
 						{!showVerboseTools && (
@@ -941,9 +1071,9 @@ export const ChatTurnComponent = memo(
 												key={`process-${idx}`}
 												isStreaming={isStreaming}
 												duration={durationSec}
-												defaultOpen={isStreaming ? undefined : false}
+												defaultOpen={isStreaming ? undefined : completedProcessExpanded}
 											>
-												<ReasoningTrigger />
+												{isStreaming && <TranscriptReasoningLiveCue />}
 												<LazyReasoningContent animated={isStreaming}>
 													<div className="flex flex-col gap-4">
 														{item.items.map((processItem, i) => {
@@ -951,11 +1081,7 @@ export const ChatTurnComponent = memo(
 																const text = processItem.part.text.replace("[REDACTED]", "").trim()
 																if (!text) return null
 																return (
-																	<div key={processItem.part.id} className="whitespace-pre-wrap">
-																		<ReasoningText animated={isStreaming && i === item.items.length - 1}>
-																			{text}
-																		</ReasoningText>
-																	</div>
+																	<TranscriptReasoningBlock key={processItem.part.id} text={text} animated={isStreaming && i === item.items.length - 1} />
 																)
 															}
 															if (processItem.kind === "tool") {
@@ -1039,13 +1165,11 @@ export const ChatTurnComponent = memo(
 												key={item.part.id}
 												isStreaming={isReasoningStreaming}
 												duration={durationSec}
-												defaultOpen={isReasoningStreaming ? undefined : false}
+												defaultOpen={isReasoningStreaming ? undefined : completedProcessExpanded}
 											>
-												<ReasoningTrigger />
+												{isReasoningStreaming && <TranscriptReasoningLiveCue />}
 												<LazyReasoningContent animated={isReasoningStreaming}>
-													<ReasoningText animated={isReasoningStreaming}>
-														{reasoningText}
-													</ReasoningText>
+													<TranscriptReasoningBlock text={reasoningText} animated={isReasoningStreaming} />
 												</LazyReasoningContent>
 											</Reasoning>
 										)
@@ -1083,10 +1207,8 @@ export const ChatTurnComponent = memo(
 					</div>
 				)}
 
-				{/* Thinking shimmer — only for turns with no tools/reasoning section yet */}
-
-				{/* Assistant response — shown when not working AND not already rendered inline */}
-				{!working && responseText && !textAlreadyInline && (
+				{/* Completed final response */}
+				{!working && finalResponsePart && responseText && (
 					<Message from="assistant">
 						<MessageContent>
 							<MessageResponse>{responseText}</MessageResponse>

@@ -8,17 +8,14 @@ import { Input } from "@devo/ui/components/input"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@devo/ui/components/tooltip"
 import { cn } from "@devo/ui/lib/utils"
 import { useNavigate, useParams } from "@tanstack/react-router"
-import { useAtom, useAtomValue, useSetAtom } from "jotai"
+import { useAtom, useAtomValue } from "jotai"
 import {
 	ArrowLeftIcon,
 	CheckIcon,
 	ChevronDownIcon,
 	ExternalLinkIcon,
-	FileDiffIcon,
 	GitForkIcon,
 	PencilIcon,
-	TerminalIcon,
-	XIcon,
 } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { OpenInTarget } from "../../preload/api"
@@ -47,8 +44,9 @@ import {
 	setOpenInPreferred,
 } from "../services/backend"
 import { ChatView } from "./chat"
+import { BottomPanelIcon, RightPanelIcon } from "./panel-icons"
 import { ReviewPanel } from "./review/review-panel"
-import { SessionMetricsBar } from "./session-metrics-bar"
+import { SessionMetricsOverviewButton } from "./session-metrics-bar"
 import { WorktreeActions } from "./worktree-actions"
 
 function useTurnWorkspaceChangeStats(sessionId: string): {
@@ -230,7 +228,6 @@ export function AgentDetail({
 		<>
 			<SessionPanelHeader
 				agent={agent}
-				turns={chatTurns}
 				isEditingTitle={isEditingTitle}
 				titleValue={titleValue}
 				titleInputRef={titleInputRef}
@@ -239,7 +236,6 @@ export function AgentDetail({
 				onConfirmTitle={confirmTitle}
 				onCancelEditing={cancelEditingTitle}
 				onRename={onRename}
-				projectSlug={projectSlug}
 				reviewPanelOpen={reviewPanelOpen}
 				onToggleReviewPanel={() => setReviewPanelOpen((prev) => !prev)}
 			/>
@@ -327,7 +323,6 @@ export function AgentDetail({
 
 function SessionPanelHeader({
 	agent,
-	turns,
 	isEditingTitle,
 	titleValue,
 	titleInputRef,
@@ -336,12 +331,10 @@ function SessionPanelHeader({
 	onConfirmTitle,
 	onCancelEditing,
 	onRename,
-	projectSlug,
 	reviewPanelOpen,
 	onToggleReviewPanel,
 }: {
 	agent: Agent
-	turns: ChatTurn[]
 	isEditingTitle: boolean
 	titleValue: string
 	titleInputRef: React.RefObject<HTMLInputElement | null>
@@ -350,13 +343,10 @@ function SessionPanelHeader({
 	onConfirmTitle: () => void
 	onCancelEditing: () => void
 	onRename?: (agent: Agent, title: string) => Promise<void>
-	projectSlug?: string
 	reviewPanelOpen: boolean
 	onToggleReviewPanel: () => void
 }) {
-	const navigate = useNavigate()
 	const diffStats = useTurnWorkspaceChangeStats(agent.sessionId)
-	const toggleReviewPanelShortcut = formatShortcut(["shift", "mod", "D"])
 
 	return (
 		<div
@@ -413,76 +403,29 @@ function SessionPanelHeader({
 				)}
 			</div>
 
-			{/* Right-aligned items */}
-			<div className="flex min-w-0 shrink-0 items-center gap-2.5 overflow-hidden">
-				{/* Worktree actions (Apply to local, Commit & push) */}
-				{agent.worktreePath && <WorktreeActions agent={agent} />}
+				{/* Right-aligned items */}
+				<div className="flex min-w-0 shrink-0 items-center gap-2.5 overflow-hidden">
+					{/* Worktree actions (Apply to local, Commit & push) */}
+					{agent.worktreePath && <WorktreeActions agent={agent} />}
 
-				{agent.worktreePath && <div className="hidden h-3 w-px shrink-0 bg-border/60 md:block" />}
+					{agent.worktreePath && <div className="hidden h-3 w-px shrink-0 bg-border/60 md:block" />}
 
-				{/* Review panel toggle with change stats badge */}
-				<Tooltip>
-					<TooltipTrigger
-						render={
-							<button
-								type="button"
-								onClick={onToggleReviewPanel}
-								className={cn(
-									"flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
-									reviewPanelOpen
-										? "bg-muted text-foreground"
-										: "text-muted-foreground hover:bg-muted hover:text-foreground",
-								)}
-							/>
-						}
-					>
-						<FileDiffIcon className="size-3.5" />
-						{diffStats.fileCount > 0 && (
-							<span className="flex items-center gap-1 text-[11px]">
-								<span className="text-green-500">+{diffStats.additions}</span>
-								<span className="text-red-500">-{diffStats.deletions}</span>
-							</span>
-						)}
-					</TooltipTrigger>
-					<TooltipContent>
-						{`${reviewPanelOpen ? "Hide changes panel" : "Show changes panel"} (${toggleReviewPanelShortcut})`}
-					</TooltipContent>
-				</Tooltip>
+					{/* Open in external editor */}
+					<div className="hidden md:block">
+						<OpenInButton directory={agent.worktreePath ?? agent.directory} />
+					</div>
 
-				{/* Session metrics bar */}
-				<div className="hidden min-w-0 shrink lg:block">
-					<SessionMetricsBar
-						sessionId={agent.sessionId}
-						turns={turns}
-						isWorking={agent.status === "running"}
-					/>
+					<div className="flex shrink-0 items-center gap-1 rounded-lg border border-border/70 bg-background/70 p-0.5">
+						<SessionMetricsOverviewButton sessionId={agent.sessionId} />
+						<TerminalToggleButton />
+						<ChangesPanelToggleButton
+							reviewPanelOpen={reviewPanelOpen}
+							diffStats={diffStats}
+							onToggleReviewPanel={onToggleReviewPanel}
+						/>
+					</div>
 				</div>
-
-				{/* Open in external editor */}
-				<div className="hidden md:block">
-					<OpenInButton directory={agent.worktreePath ?? agent.directory} />
-				</div>
-
-				{/* Open in terminal */}
-				<div className="hidden md:block">
-					<TerminalToggleButton />
-				</div>
-
-					{/* Close button */}
-				<button
-					type="button"
-					onClick={() =>
-						navigate({
-							to: projectSlug ? "/project/$projectSlug" : "/",
-							params: projectSlug ? { projectSlug } : undefined,
-						})
-					}
-					className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-				>
-					<XIcon className="size-3.5" />
-				</button>
 			</div>
-		</div>
 	)
 }
 
@@ -677,7 +620,7 @@ function WorktreeBranchBadge({ branch }: { branch: string }) {
 }
 
 function TerminalToggleButton() {
-	const setTerminalPanelOpen = useSetAtom(terminalPanelOpenAtom)
+	const [terminalPanelOpen, setTerminalPanelOpen] = useAtom(terminalPanelOpenAtom)
 	const toggleTerminalShortcut = formatShortcut(["mod", "J"])
 
 	return (
@@ -688,13 +631,63 @@ function TerminalToggleButton() {
 					<button
 						type="button"
 						onClick={() => setTerminalPanelOpen((open) => !open)}
-						className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						className={cn(
+							"inline-flex size-8 items-center justify-center rounded-md transition-colors",
+							terminalPanelOpen
+								? "bg-muted text-foreground"
+								: "text-muted-foreground hover:bg-muted hover:text-foreground",
+						)}
 					/>
 				}
 			>
-				<TerminalIcon className="size-3.5" aria-hidden="true" />
+				<BottomPanelIcon
+					open={terminalPanelOpen}
+					className="size-4"
+					aria-hidden="true"
+				/>
 			</TooltipTrigger>
 			<TooltipContent>Toggle terminal ({toggleTerminalShortcut})</TooltipContent>
+		</Tooltip>
+	)
+}
+
+function ChangesPanelToggleButton({
+	reviewPanelOpen,
+	diffStats,
+	onToggleReviewPanel,
+}: {
+	reviewPanelOpen: boolean
+	diffStats: { fileCount: number; additions: number; deletions: number }
+	onToggleReviewPanel: () => void
+}) {
+	const toggleReviewPanelShortcut = formatShortcut(["shift", "mod", "D"])
+	const statsLabel =
+		diffStats.fileCount > 0
+			? `, ${diffStats.fileCount} files, +${diffStats.additions} -${diffStats.deletions}`
+			: ""
+
+	return (
+		<Tooltip>
+			<TooltipTrigger
+				aria-label="Toggle changes panel"
+				render={
+					<button
+						type="button"
+						onClick={onToggleReviewPanel}
+						className={cn(
+							"inline-flex size-8 items-center justify-center rounded-md transition-colors",
+							reviewPanelOpen
+								? "bg-muted text-foreground"
+								: "text-muted-foreground hover:bg-muted hover:text-foreground",
+						)}
+					/>
+				}
+			>
+				<RightPanelIcon open={reviewPanelOpen} className="size-4" aria-hidden="true" />
+			</TooltipTrigger>
+			<TooltipContent>
+				{`${reviewPanelOpen ? "Hide changes panel" : "Show changes panel"}${statsLabel} (${toggleReviewPanelShortcut})`}
+			</TooltipContent>
 		</Tooltip>
 	)
 }

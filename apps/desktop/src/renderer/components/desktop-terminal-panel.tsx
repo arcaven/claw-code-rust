@@ -7,7 +7,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 } from "@devo/ui/components/tooltip";
-import { PlusIcon, TerminalIcon, XIcon } from "lucide-react";
+import { PanelBottomIcon, PlusIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isElectron } from "../services/backend";
 
@@ -37,6 +37,7 @@ const DEFAULT_TERMINAL_HEIGHT = 280;
 const MIN_TERMINAL_HEIGHT = 180;
 const MAX_TERMINAL_HEIGHT = 520;
 const MIN_STABLE_TERMINAL_ROWS = 4;
+const TERMINAL_FONT_SIZE = 13;
 
 let nextTerminalTabId = 0;
 
@@ -314,7 +315,7 @@ export function DesktopTerminalPanel({
 				convertEol: true,
 				fontFamily:
 					'"IBM Plex Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace',
-				fontSize: 13,
+				fontSize: TERMINAL_FONT_SIZE,
 				lineHeight: 1.35,
 				minimumContrastRatio: 4.5,
 				scrollback: 5000,
@@ -478,7 +479,7 @@ export function DesktopTerminalPanel({
 							return (
 								<div
 									key={tab.id}
-									className={`group flex h-7 min-w-0 max-w-[22rem] shrink-0 items-center gap-1 rounded-md px-2 text-sm transition-colors ${
+									className={`group flex h-7 min-w-0 max-w-[22rem] shrink-0 items-center gap-1 rounded-md px-2 transition-colors ${
 										isActive
 											? "bg-muted text-foreground"
 											: "text-muted-foreground hover:bg-muted/70 hover:text-foreground"
@@ -487,11 +488,16 @@ export function DesktopTerminalPanel({
 									<button
 										type="button"
 										className="flex min-w-0 items-center gap-2 focus-visible:outline-none"
+										style={{ fontSize: TERMINAL_FONT_SIZE }}
 										title={terminalTitle}
 										onClick={() => setActiveTabState(tab.id)}
 									>
-										<TerminalIcon
-											className="size-3.5 shrink-0 text-muted-foreground"
+										<PanelBottomIcon
+											className="shrink-0 text-muted-foreground"
+											style={{
+												height: TERMINAL_FONT_SIZE,
+												width: TERMINAL_FONT_SIZE,
+											}}
 											aria-hidden="true"
 										/>
 										<span className="truncate font-medium">
