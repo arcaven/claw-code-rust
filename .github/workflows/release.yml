@@ -6,6 +6,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RIPGREP_VERSION: 15.1.0
 
 jobs:
   # ── Matrix build ─────────────────────────────────────────────────────────
@@ -105,8 +106,6 @@ jobs:
   desktop:
     name: Build desktop ${{ matrix.platform }} ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
     strategy:
       matrix:
         include:
@@ -178,24 +177,11 @@ jobs:
       - name: Download ripgrep sidecar (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          rg_version="$(curl -fsSL \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/BurntSushi/ripgrep/releases/latest \
-            | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
-            | sed -n '1p')"
-          if [ -z "$rg_version" ]; then
-            echo "Failed to resolve latest ripgrep release version" >&2
-            exit 1
-          fi
-          archive="ripgrep-${rg_version}-${{ matrix.rg_target }}.tar.gz"
+          archive="ripgrep-${RIPGREP_VERSION}-${{ matrix.rg_target }}.tar.gz"
           tmp_dir="$(mktemp -d)"
-          curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/${rg_version}/${archive}" -o "${tmp_dir}/${archive}"
+          curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/${archive}" -o "${tmp_dir}/${archive}"
           tar -xzf "${tmp_dir}/${archive}" -C "$tmp_dir"
           rg_bin="$(find "$tmp_dir" -type f -name rg | sed -n '1p')"
           if [ -z "$rg_bin" ]; then
@@ -203,24 +189,16 @@ jobs:
             exit 1
           fi
           chmod +x "$rg_bin"
-          "$rg_bin" --version
+          file "$rg_bin" || true
           echo "DEVO_DESKTOP_RUNTIME_RG_BIN=$rg_bin" >> "$GITHUB_ENV"
 
       - name: Download ripgrep sidecar (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          $headers = @{
-              "Accept" = "application/vnd.github+json"
-              "Authorization" = "Bearer $env:GITHUB_TOKEN"
-              "X-GitHub-Api-Version" = "2022-11-28"
-          }
-          $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/BurntSushi/ripgrep/releases/latest"
-          $rgVersion = $release.tag_name
+          $rgVersion = $env:RIPGREP_VERSION
           if ([string]::IsNullOrWhiteSpace($rgVersion)) {
-              throw "Failed to resolve latest ripgrep release version"
+              throw "RIPGREP_VERSION must be set"
           }
           $archive = "ripgrep-$rgVersion-${{ matrix.rg_target }}.zip"
           $tmpDir = Join-Path $env:RUNNER_TEMP "ripgrep"
@@ -232,7 +210,7 @@ jobs:
           if (-not $rg) {
               throw "rg.exe not found in $archive"
           }
-          & $rg.FullName --version
+          Get-Item $rg.FullName | Select-Object FullName, Length
           "DEVO_DESKTOP_RUNTIME_RG_BIN=$($rg.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Install desktop dependencies
