@@ -6,7 +6,7 @@
 
 <div align="center">
 
-**Devo は、プライベート、エンタープライズ、OpenAI 互換モデル環境向けの、オープンソースでモデル中立な Agent Desktop / Runtime です。DeepSeek、Qwen、Kimi、Anthropic 互換 API、ローカルゲートウェイ、独自モデル endpoint に接続できます。**
+**Devo は、Desktop app、terminal TUI/CLI、model-neutral な Rust runtime を備えた open-source coding agent です。プライベート、エンタープライズ、OpenAI 互換モデル環境で、DeepSeek、Qwen、Kimi、Anthropic 互換 API、ローカルゲートウェイ、独自モデル endpoint に接続できます。**
 
 [![Stars](https://img.shields.io/github/stars/7df-lab/devo?style=flat-square)](https://github.com/7df-lab/devo/stargazers)
 [![Language](https://img.shields.io/badge/language-Rust-E57324?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
@@ -17,17 +17,27 @@
 
 [English](./README.md) | [简体中文](./README.zh-Hans.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | [Русский](./README.ru.md)
 
-[Devo を選ぶ理由](#devo-を選ぶ理由) · [機能](#機能) · [検証済みモデル](#検証済みモデル) · [検証済みプラットフォーム](#検証済みプラットフォーム) · [インストール](#インストール) · [クイックスタート](#クイックスタート) · [ドキュメント](#docs)
+[Devo を選ぶ理由](#devo-を選ぶ理由) · [スクリーンショット](#スクリーンショット) · [機能](#機能) · [検証済みモデル](#検証済みモデル) · [検証済みプラットフォーム](#検証済みプラットフォーム) · [インストール](#インストール) · [クイックスタート](#クイックスタート) · [ドキュメント](#docs)
 
 </div>
 
 ---
 
+## スクリーンショット
+
+<p align="center">
+  <img width="100%" alt="Devo desktop coding agent app がリポジトリの会話、プロジェクトサイドバー、モデル制御を表示している画面" src="./.github/assets/devo-desktop-coding-agent-screenshot.png" />
+</p>
+
+<p align="center">
+  <img width="100%" alt="Devo terminal TUI coding agent がローカルリポジトリでモデル、コンテキスト、token 状態を表示している画面" src="./.github/assets/devo-terminal-tui-coding-agent-screenshot.png" />
+</p>
+
 ## Devo を選ぶ理由
 
 Devo は、単一のホスト型モデルエコシステムに縛られず、モデル選択、
-ランタイムの動作、ワークスペースでの実行境界を自分たちで制御したい
-チームのための coding agent です。
+Desktop 体験、terminal workflow、ランタイムの動作、ワークスペースでの
+実行境界を自分たちで制御したいチームのための coding agent です。
 
 - **任意のモデルを接続** - provider/model binding により、OpenAI 互換 Chat
   Completions、OpenAI 互換 Responses、Anthropic Messages、DeepSeek、
@@ -35,8 +45,9 @@ Devo は、単一のホスト型モデルエコシステムに縛られず、モ
 - **プライベート環境やイントラネット環境に対応** - 単一のローカル Rust
   バイナリとして動作し、オフラインインストール経路をサポートし、
   ホスト型 agent service に依存せず内部 endpoint を指定できます。
-- **Desktop と CLI の両方に対応** - Desktop app でオンボーディングと日常の
-  coding を行い、端末ネイティブな自動化が必要なときは CLI/TUI を使えます。
+- **Desktop と terminal の両方に対応** - Desktop app で視覚的なオンボーディングと
+  日常の coding を行い、端末ネイティブな自動化、remote shell、scriptable workflow が
+  必要なときは CLI/TUI を使えます。
 - **Agent Runtime として拡張可能** - MCP server、再利用可能な skills、
   ローカルのセマンティックコード検索、監査可能なセッション、権限管理、
   マルチエージェント flow は、一回限りの prompt ではなくランタイム機能です。
@@ -46,7 +57,7 @@ Devo は、単一のホスト型モデルエコシステムに縛られず、モ
 - **組み込みのセマンティックコード検索** - ローカル CPU のコード埋め込みモデルを実行し、
   dense retrieval と BM25 キーワードマッチングを組み合わせることで、grep/find のみに頼るエージェントより
   コード検索のコンテキストを削減します。
-- **任意のモデルプロバイダーを利用可能** - provider/model binding により、OpenAI 互換、
+- **Model-neutral provider runtime** - provider/model binding により、OpenAI 互換、
   Anthropic 互換、DeepSeek、Qwen、Kimi、GLM、MiniMax、Xiaomi MiMo、
   OpenRouter、またはローカルエンドポイントを利用できます。
 - **MCP サポート** - [Model Context Protocol](https://modelcontextprotocol.io/)
@@ -98,16 +109,11 @@ Devo は macOS、Linux、Windows、Kylin OS で検証済みです。
 中国のエンタープライズ環境では国産 OS が実際のデプロイ要件になることが多いため、Kylin OS の対応状況を明記しています。
 HarmonyOS サポートはロードマップ上にあります。HarmonyOS デバイスを持つコントリビューターによる、そのプラットフォーム向けのビルド、テスト、リリースを歓迎します。
 
-## スクリーンショット
-
-<p align="center">
-  <img width="100%" alt="ターミナルで実行中の Devo" src="./.github/assets/devo-readme-screenshot.png" />
-</p>
-
 ## インストール
 
-Devo には 2 つのインストール形態があります。Desktop app、端末ネイティブな
-TUI/CLI、またはその両方を同じマシンにインストールできます。
+Devo には 2 つのインストール形態があります。グラフィカルな coding agent
+workspace が必要なら Desktop app、shell-first な開発には端末ネイティブな
+TUI/CLI を選んでください。両方を同じマシンにインストールすることもできます。
 
 ### オプション 1: Desktop App
 
@@ -219,6 +225,13 @@ Devo は pre-1.0 で、活発に開発されています。ローカル評価、
 組み込みモデルメタデータは現在、Qwen、Kimi、MiniMax、GLM、DeepSeek ファミリーをカバーしています。
 OpenAI 互換 Chat Completions、OpenAI 互換 Responses、または Anthropic Messages API をサポートするモデルエンドポイントであれば、
 provider/model binding を通じて接続できます。
+
+### Desktop app と TUI/CLI のどちらを使うべきですか?
+
+視覚的なオンボーディング、セッション閲覧、グラフィカルな coding workspace が
+必要な場合は Desktop app を使ってください。端末ネイティブな自動化、remote shell
+workflow、または既存の command-line setup 内で動く coding agent が必要な場合は
+TUI/CLI を使ってください。どちらの surface も同じローカル Devo runtime を対象にしています。
 
 ## コントリビュート
 

@@ -6,7 +6,7 @@
 
 <div align="center">
 
-**Открытый модельно-нейтральный Agent Desktop / Runtime для приватных, корпоративных и OpenAI-совместимых модельных сред. Подключайте DeepSeek, Qwen, Kimi, Anthropic-совместимые API, локальные шлюзы или собственные endpoint моделей.**
+**Devo - open-source coding agent с Desktop app, terminal TUI/CLI и модельно-нейтральным Rust runtime для приватных, корпоративных и OpenAI-совместимых модельных сред. Подключайте DeepSeek, Qwen, Kimi, Anthropic-совместимые API, локальные шлюзы или собственные endpoint моделей.**
 
 [![Stars](https://img.shields.io/github/stars/7df-lab/devo?style=flat-square)](https://github.com/7df-lab/devo/stargazers)
 [![Language](https://img.shields.io/badge/language-Rust-E57324?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
@@ -17,17 +17,27 @@
 
 [English](./README.md) | [简体中文](./README.zh-Hans.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | [Русский](./README.ru.md)
 
-[Почему Devo](#почему-devo) · [Возможности](#возможности) · [Проверенные модели](#проверенные-модели) · [Проверенные платформы](#проверенные-платформы) · [Установка](#установка) · [Быстрый старт](#быстрый-старт) · [Документация](#docs)
+[Почему Devo](#почему-devo) · [Скриншоты](#скриншоты) · [Возможности](#возможности) · [Проверенные модели](#проверенные-модели) · [Проверенные платформы](#проверенные-платформы) · [Установка](#установка) · [Быстрый старт](#быстрый-старт) · [Документация](#docs)
 
 </div>
 
 ---
 
+## Скриншоты
+
+<p align="center">
+  <img width="100%" alt="Devo desktop coding agent app показывает беседу по репозиторию, боковую панель проекта и управление моделью" src="./.github/assets/devo-desktop-coding-agent-screenshot.png" />
+</p>
+
+<p align="center">
+  <img width="100%" alt="Devo terminal TUI coding agent работает в локальном репозитории и показывает модель, контекст и token status" src="./.github/assets/devo-terminal-tui-coding-agent-screenshot.png" />
+</p>
+
 ## Почему Devo
 
 Devo предназначен для команд, которым нужен coding agent вне единой hosted
-экосистемы моделей. Он оставляет выбор модели, поведение runtime и выполнение
-в workspace под вашим контролем.
+экосистемы моделей. Он оставляет Desktop experience, terminal workflow, выбор
+модели, поведение runtime и выполнение в workspace под вашим контролем.
 
 - **Подключайте свою модель** - Через provider/model bindings можно подключать
   OpenAI-compatible Chat Completions, OpenAI-compatible Responses, Anthropic
@@ -35,8 +45,9 @@ Devo предназначен для команд, которым нужен cod
 - **Подходит для приватных и intranet-сред** - Devo запускается как единый
   локальный Rust binary, поддерживает offline installation paths и может
   указывать на внутренние endpoint без зависимости от hosted agent service.
-- **Desktop и CLI workflow** - Используйте Desktop app для onboarding и
-  повседневного coding, либо CLI/TUI, когда нужна terminal-native automation.
+- **Один agent для Desktop и terminal** - Используйте Desktop app для
+  визуального onboarding и повседневного coding, либо CLI/TUI для
+  terminal-native automation, remote shell и scriptable workflows.
 - **Расширяемый agent runtime** - MCP servers, reusable skills, локальный
   semantic code search, аудируемые сессии, permissions и multi-agent flows
   являются возможностями runtime, а не одноразовыми prompt.
@@ -47,7 +58,7 @@ Devo предназначен для команд, которым нужен cod
   эмбеддингов кода и сочетает плотный поиск с BM25-поиском по ключевым словам,
   сокращая объем контекста для поиска по коду по сравнению с агентами, которые
   используют только grep/find.
-- **Подключайте своего поставщика моделей** - Используйте provider/model bindings
+- **Модельно-нейтральный provider runtime** - Используйте provider/model bindings
   для OpenAI-совместимых, Anthropic-совместимых, DeepSeek, Qwen, Kimi, GLM,
   MiniMax, Xiaomi MiMo, OpenRouter или локальных endpoint.
 - **Поддержка MCP** - Подключайте внешние инструменты и контекст через серверы
@@ -109,16 +120,11 @@ Devo протестирован на macOS, Linux, Windows и Kylin OS.
 устройствами HarmonyOS, которые смогут собрать, протестировать и опубликовать
 релизы для этой платформы.
 
-## Скриншоты
-
-<p align="center">
-  <img width="100%" alt="Devo запущен в терминале" src="./.github/assets/devo-readme-screenshot.png" />
-</p>
-
 ## Установка
 
-Devo можно установить в двух формах. Вы можете установить Desktop app,
-terminal-native TUI/CLI или оба варианта на одной машине.
+Devo можно установить в двух формах. Выберите Desktop app для графического
+coding agent workspace, terminal-native TUI/CLI для shell-first разработки или
+установите оба варианта на одной машине.
 
 ### Вариант 1: Desktop App
 
@@ -234,6 +240,14 @@ Devo находится на стадии pre-1.0 и активно развив
 GLM и DeepSeek. Любой endpoint модели, который поддерживает OpenAI-compatible
 Chat Completions, OpenAI-compatible Responses или Anthropic Messages API, можно
 подключить через provider/model bindings.
+
+### Что выбрать: Desktop app или TUI/CLI?
+
+Используйте Desktop app, если вам нужны visual onboarding, просмотр сессий и
+графический coding workspace. Используйте TUI/CLI, если вам нужны
+terminal-native automation, remote shell workflows или coding agent внутри
+существующей command-line setup. Оба интерфейса работают с одним локальным
+Devo runtime.
 
 ## Участие в разработке
 

@@ -6,7 +6,7 @@
 
 <div align="center">
 
-**An open-source, model-neutral agent desktop/runtime for private, enterprise, and OpenAI-compatible model environments. Connect DeepSeek, Qwen, Kimi, Anthropic-compatible APIs, local gateways, or your own model endpoint.**
+**Devo is an open-source coding agent with a Desktop app, terminal TUI/CLI, and model-neutral Rust runtime for private, enterprise, and OpenAI-compatible model environments. Connect DeepSeek, Qwen, Kimi, Anthropic-compatible APIs, local gateways, or your own model endpoint.**
 
 [![Stars](https://img.shields.io/github/stars/7df-lab/devo?style=flat-square)](https://github.com/7df-lab/devo/stargazers)
 [![Language](https://img.shields.io/badge/language-Rust-E57324?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org/)
@@ -18,17 +18,27 @@
 
 [English](./README.md) | [简体中文](./README.zh-Hans.md) | [繁體中文](./README.zh-Hant.md) | [日本語](./README.ja.md) | [Русский](./README.ru.md)
 
-[Why Devo](#why-devo) · [Features](#features) · [Tested Models](#tested-models) · [Tested Platforms](#tested-platforms) · [Install](#installation) · [Quick Start](#quick-start) · [Docs](#docs)
+[Why Devo](#why-devo) · [Screenshots](#screenshots) · [Features](#features) · [Tested Models](#tested-models) · [Tested Platforms](#tested-platforms) · [Install](#installation) · [Quick Start](#quick-start) · [Docs](#docs)
 
 </div>
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img width="100%" alt="Devo desktop coding agent app showing a repository conversation, project sidebar, and model controls" src="./.github/assets/devo-desktop-coding-agent-screenshot.png" />
+</p>
+
+<p align="center">
+  <img width="100%" alt="Devo terminal TUI coding agent running in a local repository with model, context, and token status" src="./.github/assets/devo-terminal-tui-coding-agent-screenshot.png" />
+</p>
+
 ## Why Devo
 
 Devo is for teams that need a coding agent outside a single hosted model
-ecosystem. It keeps model choice, runtime behavior, and workspace execution
-under your control.
+ecosystem. It keeps the desktop experience, terminal workflow, model choice,
+runtime behavior, and workspace execution under your control.
 
 - **Bring your own model** - Connect OpenAI-compatible Chat Completions,
   OpenAI-compatible Responses, Anthropic Messages, DeepSeek, Qwen, Kimi, or
@@ -36,8 +46,9 @@ under your control.
 - **Works in private and intranet environments** - Run a single local Rust
   binary, support offline installation paths, and point Devo at internal
   endpoints without depending on a hosted agent service.
-- **Desktop and CLI workflows** - Use the Desktop app for onboarding and daily
-  coding, or the CLI/TUI when you need terminal-native automation.
+- **One agent across Desktop and terminal** - Use the Desktop app for visual
+  onboarding and daily coding, or the CLI/TUI for terminal-native automation,
+  remote shells, and scriptable workflows.
 - **Built for agent runtime extensibility** - MCP servers, reusable skills,
   local semantic code search, auditable sessions, permissions, and multi-agent
   flows are runtime features rather than one-off prompts.
@@ -47,7 +58,7 @@ under your control.
 - **Built-in semantic code search** - Runs a local CPU code-embedding model and
   combines dense retrieval with BM25 keyword matching, reducing code-search
   context compared with grep/find-only agent.
-- **Bring your own model provider** - Use provider/model bindings for
+- **Model-neutral provider runtime** - Use provider/model bindings for
   OpenAI-compatible, Anthropic-compatible, DeepSeek, Qwen, Kimi, GLM, MiniMax,
   Xiaomi MiMo, OpenRouter, or local endpoints.
 - **MCP support** - Connect external tools and context through
@@ -60,7 +71,7 @@ under your control.
   coordination visible in the session.
 - **Plan Mode** - Break larger tasks into clear multi-step plans before
   implementation starts.
-- **Parallel tool calls** - Run multiple independent tools at parallel so
+- **Parallel tool calls** - Run multiple independent tools in parallel so
   models spend less time waiting and more time making progress.
 - **Permissioned tool execution** - Review sensitive tool calls before they
   touch your workspace.
@@ -107,16 +118,11 @@ part of real deployment requirements in Chinese enterprise environments.
 HarmonyOS support is on the roadmap; contributors with HarmonyOS devices are
 welcome to build, test, and publish releases for that platform.
 
-## Screenshots
-
-<p align="center">
-  <img width="100%" alt="Devo running in a terminal" src="./.github/assets/devo-readme-screenshot.png" />
-</p>
-
 ## Installation
 
-Devo can be installed in two forms. You can install the Desktop app, the
-terminal-native TUI/CLI, or both on the same machine.
+Devo can be installed in two forms. Pick the Desktop app for a graphical coding
+agent workspace, the terminal-native TUI/CLI for shell-first development, or
+install both on the same machine.
 
 ### Option 1: Desktop App
 
@@ -230,6 +236,13 @@ Built-in model metadata currently covers Qwen, Kimi, MiniMax, GLM, and DeepSeek
 families. Any model endpoint that supports OpenAI-compatible Chat Completions,
 OpenAI-compatible Responses, or the Anthropic Messages API can be connected through
 provider/model bindings.
+
+### Should I use the Desktop app or the TUI/CLI?
+
+Use the Desktop app when you want visual onboarding, session browsing, and a
+graphical coding workspace. Use the TUI/CLI when you want terminal-native
+automation, remote shell workflows, or a coding agent that stays inside your
+existing command-line setup. Both surfaces target the same local Devo runtime.
 
 ## Contributing
 
