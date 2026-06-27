@@ -55,6 +55,7 @@ const PROVIDER_LABELS: Record<MigrationProvider, string> = {
 	"claude-code": "Claude Code",
 	cursor: "Cursor",
 	devo: "Devo",
+	opencode: "OpenCode",
 }
 
 // ============================================================
@@ -234,6 +235,8 @@ function getMigrationDescription(provider: MigrationProvider): string {
 			return "MCP servers, rules (.mdc), agents, and commands are converted to Devo format. Cursor-specific features like OAuth and rule modes are adapted where possible. A backup is created before any changes."
 		case "devo":
 			return "Configuration, agents, commands, and rules are imported. A backup is created before any changes, and you can undo at any time from Settings."
+		case "opencode":
+			return "OpenCode providers and model bindings are imported through Devo provider settings. API keys are stored through Devo's provider credential flow."
 	}
 }
 
@@ -248,6 +251,8 @@ function buildCategories(
 			return buildCursorCategories(detection)
 		case "devo":
 			return buildDevoCategories(detection)
+		case "opencode":
+			return buildOpenCodeCategories(detection)
 	}
 }
 
@@ -467,6 +472,19 @@ function buildDevoCategories(detection: ProviderDetection): MigrationCategory[] 
 			description: "Verified for compatibility",
 			icon: FileTextIcon,
 			count: detection.skillCount,
+			enabled: true,
+		},
+	]
+}
+
+function buildOpenCodeCategories(detection: ProviderDetection): MigrationCategory[] {
+	return [
+		{
+			id: "config",
+			label: "Providers & models",
+			description: "Provider base URLs, API keys, and model bindings",
+			icon: CogIcon,
+			count: detection.hasGlobalSettings ? 1 : 0,
 			enabled: true,
 		},
 	]

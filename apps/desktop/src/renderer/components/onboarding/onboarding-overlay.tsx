@@ -5,7 +5,7 @@
  * Uses Framer Motion for step transitions and a progress indicator at the top.
  *
  * Core flow: Welcome -> Environment Check -> Complete (3 steps).
- * Migration from any detected provider (Claude Code, Cursor, Devo) is an
+ * Migration from any detected provider (Claude Code, Cursor, Devo, OpenCode) is an
  * optional detour the user can trigger from the Complete screen.
  */
 
@@ -101,11 +101,6 @@ export function OnboardingOverlay({ onComplete }: OnboardingOverlayProps) {
 		},
 		[goToStep],
 	)
-
-	const handleEnvironmentSkip = useCallback(() => {
-		skipStep("environment")
-		goToStep("providers")
-	}, [goToStep, skipStep])
 
 	const handleProvidersComplete = useCallback(
 		(count: number) => {
@@ -225,10 +220,7 @@ export function OnboardingOverlay({ onComplete }: OnboardingOverlayProps) {
 							className="absolute inset-0 overflow-y-auto"
 							{...STEP_TRANSITION}
 						>
-							<EnvironmentCheckStep
-								onComplete={handleEnvironmentComplete}
-								onSkip={handleEnvironmentSkip}
-							/>
+							<EnvironmentCheckStep onComplete={handleEnvironmentComplete} />
 						</motion.div>
 					)}
 

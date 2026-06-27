@@ -2,7 +2,7 @@
  * Onboarding: Complete / Ready.
  *
  * Shows a success state, quick tips, and optional prompts to migrate
- * from detected providers (Claude Code, Cursor, Devo). Migration
+ * from detected providers (Claude Code, Cursor, Devo, OpenCode). Migration
  * cards only appear for providers that have config on disk and haven't
  * already been migrated.
  */

@@ -119,8 +119,7 @@ export function ProviderSetupStep({ onComplete, onSkip }: ProviderSetupStepProps
 				</motion.div>
 				<h2 className="text-2xl font-bold tracking-tight">AI Providers</h2>
 				<p className="text-muted-foreground">
-					Free models are included with Devo Zen. Connect additional providers for more model
-					choices.
+					Devo supports connecting your own model API keys for more model choices.
 				</p>
 			</div>
 

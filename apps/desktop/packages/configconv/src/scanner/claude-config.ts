@@ -36,15 +36,16 @@ import { parseFrontmatter } from "../utils/yaml"
 export async function scanGlobal(): Promise<GlobalScanResult> {
 	const result: GlobalScanResult = { skills: [] }
 
-	// ~/.Claude/settings.json
-	const settingsPath = paths.ccSettingsPath()
-	const settingsContent = await safeReadFile(settingsPath)
-	if (settingsContent) {
+	// ~/.claude/settings.json, then legacy ~/.Claude/settings.json
+	for (const settingsPath of paths.ccSettingsPaths()) {
+		const settingsContent = await safeReadFile(settingsPath)
+		if (!settingsContent) continue
 		try {
 			result.settings = parseJsonc<ClaudeSettings>(settingsContent)
 			result.settingsPath = settingsPath
+			break
 		} catch {
-			// Skip malformed settings
+			// Try the next candidate.
 		}
 	}
 

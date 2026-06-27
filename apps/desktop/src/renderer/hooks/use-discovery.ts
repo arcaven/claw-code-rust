@@ -1,6 +1,7 @@
 import { useAtomValue } from "jotai"
 import { useEffect } from "react"
 import { activeServerConfigAtom, serverConnectedAtom } from "../atoms/connection"
+import { desktopFolderStatusByDirectoryAtom, desktopFoldersAtom } from "../atoms/desktop-folders"
 import { discoveryAtom } from "../atoms/discovery"
 import { isMockModeAtom } from "../atoms/mock-mode"
 import { appStore } from "../atoms/store"
@@ -120,18 +121,14 @@ export function useDiscovery() {
 					projects,
 				})
 
-				// --- Step 5: Pre-fetch sessions for the most recent projects ---
-				// Load sessions from the top N most-recently-active projects so the
-				// "Recent" and "Active Now" sidebar sections are populated at boot.
-				// This replaces the previous approach of loading ALL projects (80+ calls)
-				// with just a few calls for the projects the user likely cares about.
-				const PREFETCH_COUNT = 3
-				const sortedByActivity = [...projects]
-					.filter((p) => p.worktree)
-					.sort((a, b) => (b.time.updated ?? 0) - (a.time.updated ?? 0))
-					.slice(0, PREFETCH_COUNT)
+				// --- Step 5: Pre-fetch sessions for user-managed Desktop projects ---
+				const desktopFolders = appStore.get(desktopFoldersAtom)
+				const folderStatuses = appStore.get(desktopFolderStatusByDirectoryAtom)
+				const storedAvailableFolders = desktopFolders.filter(
+					(folder) => (folderStatuses[folder.directory] ?? "available") === "available",
+				)
 
-				if (sortedByActivity.length > 0) {
+				if (storedAvailableFolders.length > 0) {
 					// Build sandbox lookup for worktree metadata restoration
 					const projectSandboxMap = new Map<string, Set<string>>()
 					for (const project of projects) {
@@ -142,10 +139,10 @@ export function useDiscovery() {
 					}
 
 					await Promise.allSettled(
-						sortedByActivity.map((project) => {
-							const sandboxDirs = projectSandboxMap.get(project.worktree!)
+						storedAvailableFolders.map((folder) => {
+							const sandboxDirs = projectSandboxMap.get(folder.directory)
 							return loadProjectSessions(
-								project.worktree!,
+								folder.directory,
 								sandboxDirs?.size ? sandboxDirs : undefined,
 								{ limit: 5, roots: true },
 							)
@@ -157,7 +154,7 @@ export function useDiscovery() {
 					server: activeServer.name,
 					url,
 					projects: projects.length,
-					prefetched: sortedByActivity.length,
+					prefetched: storedAvailableFolders.length,
 				})
 			} catch (err) {
 				log.error("Discovery failed", err)

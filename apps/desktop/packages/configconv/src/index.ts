@@ -56,6 +56,26 @@ export { universalWrite } from "./writer/universal"
 // History converter + writer
 // ============================================================
 
+export {
+	CLAUDE_CODE_PROVIDER_ID,
+	CLAUDE_CODE_WIRE_API,
+	extractClaudeCodeProviderSettings,
+	formatClaudeCodeProviderSettingsPreview,
+} from "./converter/claude-provider-settings"
+export type { ClaudeCodeProviderSettings } from "./converter/claude-provider-settings"
+export {
+	OPENCODE_OPENAI_COMPATIBLE_NPM,
+	OPENCODE_WIRE_API,
+	extractOpenCodeProviderSettings,
+	formatOpenCodeProviderSettingsPreview,
+} from "./converter/opencode-provider-settings"
+export type {
+	OpenCodeImportedModel,
+	OpenCodeImportedProvider,
+	OpenCodeModelRef,
+	OpenCodeProviderSettings,
+	OpenCodeUnsupportedProvider,
+} from "./converter/opencode-provider-settings"
 export { convertCursorHistory } from "./converter/cursor-history"
 export type { HistoryScanProgress } from "./scanner/cursor-history"
 export type {
@@ -74,7 +94,7 @@ export type {
 	DevoScanOptions,
 	UniversalScanOptions,
 } from "./scanner"
-export { scan, scanCursor, scanFormat, scanDevo } from "./scanner"
+export { scan, scanCursor, scanFormat, scanDevo, scanOpenCode } from "./scanner"
 
 // ============================================================
 // Canonical types (format-agnostic)
@@ -169,6 +189,18 @@ export type {
 	DevoPermission,
 	DevoPermissionAction,
 } from "./types/devo"
+
+// ─── OpenCode types ────────────────────────────────────────
+export type {
+	OpenCodeApiKeyConfig,
+	OpenCodeAuth,
+	OpenCodeConfig,
+	OpenCodeGlobalScanResult,
+	OpenCodeModelConfig,
+	OpenCodeProviderConfig,
+	OpenCodeProviderOptions,
+	OpenCodeScanResult,
+} from "./types/opencode"
 
 // ─── Scan result types (Claude Code specific) ────────────────
 export type {

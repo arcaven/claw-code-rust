@@ -3,7 +3,7 @@
  *
  * Shows a file tree of what will be created/modified, a diff preview of
  * selected files, and executes the migration with backup on confirmation.
- * Supports all migration providers (Claude Code, Cursor, Devo).
+ * Supports all migration providers (Claude Code, Cursor, Devo, OpenCode).
  */
 
 import { Button } from "@devo/ui/components/button"
@@ -46,6 +46,7 @@ const PROVIDER_LABELS: Record<MigrationProvider, string> = {
 	"claude-code": "Claude Code",
 	cursor: "Cursor",
 	devo: "Devo",
+	opencode: "OpenCode",
 }
 
 // ============================================================

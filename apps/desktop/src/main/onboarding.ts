@@ -5,7 +5,7 @@
  * - Devo CLI detection and version compatibility check
  * - Devo CLI installation (via curl/shell)
  * - Multi-provider config detection and migration via @devo/configconv
- *   Supported providers: Claude Code, Cursor, Devo
+ *   Supported providers: Claude Code, Cursor, Devo, OpenCode
  */
 
 import { type ChildProcess, spawn } from "node:child_process"
@@ -15,6 +15,15 @@ import path from "node:path"
 import { BrowserWindow } from "electron"
 import type { DevoCheckResult } from "./compatibility"
 import { checkDevo } from "./compatibility"
+import {
+	buildClaudeCodeProviderMigrationPreview,
+	executeClaudeCodeProviderMigration,
+} from "./claude-code-provider-migration"
+import {
+	buildOpenCodeProviderMigrationPreview,
+	executeOpenCodeProviderMigration,
+} from "./opencode-provider-migration"
+import { requestAcp } from "./devo-manager"
 import { createLogger } from "./logger"
 
 const log = createLogger("onboarding")
@@ -24,7 +33,7 @@ const log = createLogger("onboarding")
 // ============================================================
 
 /** Supported migration source providers. */
-export type MigrationProvider = "claude-code" | "cursor" | "devo"
+export type MigrationProvider = "claude-code" | "cursor" | "devo" | "opencode"
 
 /** Quick-detect result for a single provider (no heavy imports). */
 export interface ProviderDetection {
@@ -103,6 +112,7 @@ const PROVIDER_LABELS: Record<MigrationProvider, string> = {
 	"claude-code": "Claude Code",
 	cursor: "Cursor",
 	devo: "Devo",
+	opencode: "OpenCode",
 }
 
 // ============================================================
@@ -201,7 +211,12 @@ export async function installDevo(): Promise<{ success: boolean; error?: string 
  * Returns an array of detections (one per supported provider).
  */
 export async function detectProviders(): Promise<ProviderDetection[]> {
-	const results = await Promise.all([detectClaudeCode(), detectCursor(), detectDevoProvider()])
+	const results = await Promise.all([
+		detectClaudeCode(),
+		detectCursor(),
+		detectDevoProvider(),
+		detectOpenCode(),
+	])
 	return results
 }
 
@@ -210,20 +225,24 @@ export async function detectProviders(): Promise<ProviderDetection[]> {
  */
 async function detectClaudeCode(): Promise<ProviderDetection> {
 	const home = homedir()
-	const claudeSettingsDir = path.join(home, ".Claude")
+	const claudeSettingsDirs = [path.join(home, ".claude"), path.join(home, ".Claude")]
 
-	const hasGlobalSettings = existsSync(path.join(claudeSettingsDir, "settings.json"))
+	const hasGlobalSettings = claudeSettingsDirs.some((dir) =>
+		existsSync(path.join(dir, "settings.json")),
+	)
 	const hasUserState = existsSync(path.join(home, ".claude.json"))
 
-	// Check for projects directory to estimate project count
-	const projectsDir = path.join(claudeSettingsDir, "projects")
+	// Check for projects directory to estimate project count.
 	let projectCount = 0
-	try {
-		const { readdirSync } = await import("node:fs")
-		const entries = readdirSync(projectsDir, { withFileTypes: true })
-		projectCount = entries.filter((e) => e.isDirectory()).length
-	} catch {
-		// Directory doesn't exist
+	for (const settingsDir of claudeSettingsDirs) {
+		try {
+			const { readdirSync } = await import("node:fs")
+			const entries = readdirSync(path.join(settingsDir, "projects"), { withFileTypes: true })
+			projectCount = entries.filter((e) => e.isDirectory()).length
+			break
+		} catch {
+			// Try the next Claude Code directory.
+		}
 	}
 
 	let ruleCount = 0
@@ -349,6 +368,68 @@ async function detectCursor(): Promise<ProviderDetection> {
 		ruleCount,
 		hasHooks: false,
 		skillCount,
+		totalSessions: 0,
+		totalMessages: 0,
+	}
+}
+
+/**
+ * Quickly detects whether OpenCode provider configuration exists on this machine.
+ */
+async function detectOpenCode(): Promise<ProviderDetection> {
+	const { readFileSync } = await import("node:fs")
+	const home = homedir()
+	const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(home, ".config")
+	const opencodeDir = path.join(xdgConfig, "opencode")
+	const configPaths = [
+		path.join(opencodeDir, "opencode.json"),
+		path.join(opencodeDir, "opencode.jsonc"),
+	]
+	const configPath = configPaths.find(existsSync)
+	const found = !!configPath
+	let providerCount = 0
+	let modelCount = 0
+
+	if (configPath) {
+		try {
+			const parsed = JSON.parse(readFileSync(configPath, "utf-8"))
+			if (parsed?.provider && typeof parsed.provider === "object") {
+				const providers = Object.values(parsed.provider) as Array<Record<string, unknown>>
+				providerCount = providers.length
+				for (const provider of providers) {
+					if (provider.models && typeof provider.models === "object") {
+						modelCount += Object.keys(provider.models).length
+					}
+				}
+			}
+		} catch {
+			// JSONC or malformed config; full scan will parse JSONC and report details.
+		}
+	}
+
+	const summaryParts: string[] = []
+	if (providerCount > 0) {
+		summaryParts.push(`${providerCount} provider${providerCount === 1 ? "" : "s"}`)
+	}
+	if (modelCount > 0) {
+		summaryParts.push(`${modelCount} model${modelCount === 1 ? "" : "s"}`)
+	}
+	if (found && summaryParts.length === 0) summaryParts.push("global config")
+
+	return {
+		provider: "opencode",
+		found,
+		label: PROVIDER_LABELS.opencode,
+		summary: found ? `Found ${summaryParts.join(", ")}` : "No OpenCode configuration detected",
+		hasGlobalSettings: found,
+		hasPermissions: false,
+		projectCount: 0,
+		mcpServerCount: 0,
+		agentCount: 0,
+		commandCount: 0,
+		ruleCount: 0,
+		hasHooks: false,
+		skillCount: 0,
 		totalSessions: 0,
 		totalMessages: 0,
 	}
@@ -482,6 +563,23 @@ export async function previewMigration(
 	scanResult: unknown,
 	categories: string[],
 ): Promise<MigrationPreview> {
+	if (provider === "opencode") {
+		const providerPreview = categories.includes("config")
+			? buildOpenCodeProviderMigrationPreview(scanResult)
+			: { category: null, warnings: [], manualActions: [], errors: [] }
+		const categoryPreviews = providerPreview.category ? [providerPreview.category] : []
+		const totalFiles = categoryPreviews.reduce((sum, category) => sum + category.files.length, 0)
+		return {
+			categories: categoryPreviews,
+			warnings: providerPreview.warnings,
+			manualActions: providerPreview.manualActions,
+			errors: providerPreview.errors,
+			fileCount: totalFiles,
+			sessionCount: 0,
+			sessionProjectCount: 0,
+		}
+	}
+
 	const { universalConvert } = await import("@devo/configconv")
 
 	// Convert from source provider to Devo (the target for Devo)
@@ -489,6 +587,10 @@ export async function previewMigration(
 	const conversion = universalConvert(scanResult as any, { to: "devo" })
 
 	const categoryPreviews: MigrationCategoryPreview[] = []
+	const claudeCodeProviderPreview =
+		provider === "claude-code" && categories.includes("config")
+			? buildClaudeCodeProviderMigrationPreview(scanResult)
+			: null
 
 	// Global config
 	if (Object.keys(conversion.globalConfig).length > 0) {
@@ -582,6 +684,10 @@ export async function previewMigration(
 		categoryPreviews.push({ category: "extra", itemCount: files.length, files })
 	}
 
+	if (claudeCodeProviderPreview?.category) {
+		categoryPreviews.push(claudeCodeProviderPreview.category)
+	}
+
 	// History (Cursor or Claude Code)
 	let sessionCount = 0
 	let sessionProjectCount = 0
@@ -611,9 +717,12 @@ export async function previewMigration(
 
 	return {
 		categories: categoryPreviews,
-		warnings: [...conversion.report.warnings],
-		manualActions: [...conversion.report.manualActions],
-		errors: [...conversion.report.errors],
+		warnings: [...conversion.report.warnings, ...(claudeCodeProviderPreview?.warnings ?? [])],
+		manualActions: [
+			...conversion.report.manualActions,
+			...(claudeCodeProviderPreview?.manualActions ?? []),
+		],
+		errors: [...conversion.report.errors, ...(claudeCodeProviderPreview?.errors ?? [])],
 		fileCount: totalFiles,
 		sessionCount,
 		sessionProjectCount,
@@ -658,6 +767,22 @@ export async function executeMigration(
 	scanResult: unknown,
 	categories: string[],
 ): Promise<MigrationResult> {
+	if (provider === "opencode") {
+		const providerResult = categories.includes("config")
+			? await executeOpenCodeProviderMigration(scanResult, requestAcp)
+			: { filesWritten: [], warnings: [], manualActions: [], errors: [] }
+		return {
+			success: true,
+			filesWritten: providerResult.filesWritten,
+			filesSkipped: [],
+			backupDir: null,
+			warnings: providerResult.warnings,
+			manualActions: providerResult.manualActions,
+			errors: providerResult.errors,
+			historyDuplicatesSkipped: 0,
+		}
+	}
+
 	const { universalConvert, universalWrite } = await import("@devo/configconv")
 
 	// biome-ignore lint/suspicious/noExplicitAny: scanResult is dynamically typed from IPC
@@ -673,6 +798,14 @@ export async function executeMigration(
 	const allErrors = [...conversion.report.errors]
 	const allFilesWritten = [...writeResult.filesWritten]
 	let historyDuplicatesSkipped = 0
+
+	if (provider === "claude-code" && categories.includes("config")) {
+		const providerResult = await executeClaudeCodeProviderMigration(scanResult, requestAcp)
+		allFilesWritten.push(...providerResult.filesWritten)
+		allWarnings.push(...providerResult.warnings)
+		allManualActions.push(...providerResult.manualActions)
+		allErrors.push(...providerResult.errors)
+	}
 
 	// Write history sessions if selected
 	if (categories.includes("history")) {
@@ -819,6 +952,8 @@ function buildDetectionFromScan(
 			return buildCursorDetection(data)
 		case "devo":
 			return buildDevoDetection(data)
+		case "opencode":
+			return buildOpenCodeDetection(data)
 	}
 }
 
@@ -946,6 +1081,47 @@ function buildDevoDetection(data: any): ProviderDetection {
 		ruleCount,
 		hasHooks: false,
 		skillCount,
+		totalSessions: 0,
+		totalMessages: 0,
+	}
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: scan result is dynamically typed
+function buildOpenCodeDetection(data: any): ProviderDetection {
+	const providerEntries = Object.entries(data.global?.config?.provider ?? {}) as Array<[
+		string,
+		{ models?: Record<string, unknown> },
+	]>
+	const providerCount = providerEntries.length
+	const modelCount = providerEntries.reduce(
+		(sum, [, provider]) => sum + Object.keys(provider.models ?? {}).length,
+		0,
+	)
+	const hasConfig = !!data.global?.config || (data.global?.parseErrors?.length ?? 0) > 0
+	const summaryParts: string[] = []
+
+	if (providerCount > 0) {
+		summaryParts.push(`${providerCount} provider${providerCount === 1 ? "" : "s"}`)
+	}
+	if (modelCount > 0) {
+		summaryParts.push(`${modelCount} model${modelCount === 1 ? "" : "s"}`)
+	}
+	if (hasConfig && summaryParts.length === 0) summaryParts.push("configuration")
+
+	return {
+		provider: "opencode",
+		found: hasConfig,
+		label: PROVIDER_LABELS.opencode,
+		summary: hasConfig ? `Found ${summaryParts.join(", ")}` : "No OpenCode configuration detected",
+		hasGlobalSettings: hasConfig,
+		hasPermissions: false,
+		projectCount: 0,
+		mcpServerCount: 0,
+		agentCount: 0,
+		commandCount: 0,
+		ruleCount: 0,
+		hasHooks: false,
+		skillCount: 0,
 		totalSessions: 0,
 		totalMessages: 0,
 	}
