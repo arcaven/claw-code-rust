@@ -42,7 +42,12 @@ import type {
 	GoalSetResult,
 	GoalSetStatusResult,
 	GoalStatusResult,
+	InputItem,
 	ThreadGoalStatus,
+	TurnQueueRemoveResult,
+	TurnQueueSteerResult,
+	TurnStartResult,
+	TurnSteerResult,
 	RequestUserInputRespondParams,
 	WorkspaceChangeCoverage,
 	WorkspaceChangeScope,
@@ -405,6 +410,55 @@ const DEVO_ITEM_KIND_META = "devo/itemKind"
 const DEVO_RESEARCH_ARTIFACT_TYPE_META = "devo/researchArtifactType"
 const DEVO_RESEARCH_ARTIFACT_TITLE_META = "devo/researchArtifactTitle"
 
+type PromptPartInput = {
+	type: string
+	text?: string
+	url?: string
+	filename?: string
+	mime?: string
+	mediaType?: string
+}
+
+function pathFromFileUri(uri: string): string | null {
+	if (!uri.startsWith("file://")) return null
+	try {
+		const url = new URL(uri)
+		let path = decodeURIComponent(url.pathname)
+		if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1)
+		return path.replace(/\//g, "\\")
+	} catch {
+		return uri.slice("file://".length)
+	}
+}
+
+function inputItemsFromPromptParts(parts: PromptPartInput[]): InputItem[] {
+	const input: InputItem[] = []
+	const text = parts
+		.map((part) => (part.type === "text" ? (part.text ?? "") : ""))
+		.join("\n")
+		.trim()
+	if (text || parts.every((part) => part.type !== "file")) {
+		input.push({ type: "text", text })
+	}
+	for (const part of parts) {
+		if (part.type !== "file" || !part.url) continue
+		const path = pathFromFileUri(part.url)
+		if (path) {
+			input.push({
+				type: "mention",
+				path,
+				name: part.filename ?? path.split(/[\\/]/).pop() ?? path,
+			})
+			continue
+		}
+		input.push({
+			type: "text",
+			text: `Resource ${part.filename ?? part.url}: ${part.url}`,
+		})
+	}
+	return input
+}
+
 function normalizedHistoryLimit(limit: unknown): number | undefined {
 	if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) return undefined
 	return Math.floor(limit)
@@ -525,7 +579,7 @@ class AcpClient {
 		create: async (_params?: { title?: string }) => ({ data: await this.createSession() }),
 		promptAsync: async (params: {
 			sessionID: string
-			parts: Array<{ type: string; text?: string; url?: string; filename?: string; mime?: string; mediaType?: string }>
+			parts: PromptPartInput[]
 			model?: unknown
 			agent?: string
 			variant?: string
@@ -642,6 +696,63 @@ class AcpClient {
 		fork: async (params: { sessionID: string }) => ({
 			data: this.sessions.get(params.sessionID),
 		}),
+	}
+
+	turn = {
+		// User requirement: busy composer follow-ups can be queued first, then converted
+		// to steer from the composer status stack without creating transcript-only state.
+		start: async (params: {
+			sessionID: string
+			parts: PromptPartInput[]
+			model?: unknown
+			variant?: string
+			cwd?: string | null
+		}) => {
+			const model = params.model as { modelID?: string } | undefined
+			if (model?.modelID) await this.setSessionConfigOption(params.sessionID, "model", model.modelID)
+			if (params.variant) await this.setSessionConfigOption(params.sessionID, "thought_level", params.variant)
+			const result = (await this.request("turn/start", {
+				session_id: params.sessionID,
+				input: inputItemsFromPromptParts(params.parts),
+				model: model?.modelID ?? null,
+				sandbox: null,
+				approval_policy: null,
+				cwd: params.cwd ?? null,
+				collaboration_mode: "build",
+			})) as TurnStartResult
+			return { data: result }
+		},
+		steer: async (params: {
+			sessionID: string
+			expectedTurnID: string
+			parts: PromptPartInput[]
+		}) => {
+			const result = (await this.request("turn/steer", {
+				session_id: params.sessionID,
+				expected_turn_id: params.expectedTurnID,
+				input: inputItemsFromPromptParts(params.parts),
+			})) as TurnSteerResult
+			return { data: result }
+		},
+		removeQueued: async (params: { sessionID: string; queuedInputID: string }) => {
+			const result = (await this.request("turn/queue/remove", {
+				session_id: params.sessionID,
+				queued_input_id: params.queuedInputID,
+			})) as TurnQueueRemoveResult
+			return { data: result }
+		},
+		steerQueued: async (params: {
+			sessionID: string
+			expectedTurnID: string
+			queuedInputID: string
+		}) => {
+			const result = (await this.request("turn/queue/steer", {
+				session_id: params.sessionID,
+				expected_turn_id: params.expectedTurnID,
+				queued_input_id: params.queuedInputID,
+			})) as TurnQueueSteerResult
+			return { data: result }
+		},
 	}
 
 	permission = {
