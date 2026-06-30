@@ -686,7 +686,10 @@ export function NewChat() {
 					</h1>
 				</div>
 
-				<div className="devo-composer-shell bg-muted/30 shadow-[0_12px_48px_rgba(0,0,0,0.07)]">
+				<div
+					className="devo-composer-shell bg-muted/30 shadow-[0_12px_48px_rgba(0,0,0,0.07)]"
+					data-popover-open={slashOpen || mentionOpen ? "true" : undefined}
+				>
 					<PromptInputProvider key={draftKey} initialInput={draft}>
 						<DraftSync setDraft={setDraft} />
 						<MentionBridge controllerRef={controllerRef} />

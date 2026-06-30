@@ -4,6 +4,8 @@ import { describe, expect, test } from "bun:test"
 const popoverSource = readFileSync(new URL("./slash-command-popover.tsx", import.meta.url), "utf8")
 const chatViewSource = readFileSync(new URL("./chat-view.tsx", import.meta.url), "utf8")
 const newChatSource = readFileSync(new URL("../new-chat.tsx", import.meta.url), "utf8")
+const desktopChromeSource = readFileSync(new URL("../../desktop-chrome.css", import.meta.url), "utf8")
+const desktopAgentsSource = readFileSync(new URL("../../../../AGENTS.md", import.meta.url), "utf8")
 const clientCommandsBlock = popoverSource.match(/const CLIENT_COMMANDS[\s\S]*?\n\]/)?.[0] ?? ""
 
 describe("Desktop slash command composer", () => {
@@ -49,9 +51,16 @@ describe("Desktop slash command composer", () => {
 			closeOnlyOnHover:
 				chatViewSource.includes("opacity-0") &&
 				chatViewSource.includes("group-hover:opacity-100"),
+			closeReplacesIconInPlace:
+				chatViewSource.includes("hover replaces the trigger icon in-place") &&
+				chatViewSource.includes("group-hover:opacity-0"),
 			hoverBackground: chatViewSource.includes("hover:bg-muted"),
 			shiftTabToggle: chatViewSource.includes('e.key === "Tab" && e.shiftKey'),
 			triggeredPrompt: chatViewSource.includes("text: `/${trigger} ${text.trim()}`"),
+			iconStrokeMatchesSidebar:
+				popoverSource.includes('commandIconClass = "size-3.5') &&
+				popoverSource.includes("stroke-[1.5]") &&
+				chatViewSource.includes("size-3.5 stroke-[1.5]"),
 		}).toEqual({
 			requirementComment: true,
 			chipComponent: true,
@@ -64,9 +73,11 @@ describe("Desktop slash command composer", () => {
 			researchInsertText: true,
 			researchPromptPath: true,
 			closeOnlyOnHover: true,
+			closeReplacesIconInPlace: true,
 			hoverBackground: true,
 			shiftTabToggle: true,
 			triggeredPrompt: true,
+			iconStrokeMatchesSidebar: true,
 		})
 	})
 
@@ -76,11 +87,28 @@ describe("Desktop slash command composer", () => {
 			detectsSlashTrigger: newChatSource.includes("onSlashChange"),
 			delegatesSlashKeys: newChatSource.includes("slashPopoverRef.current?.handleKeyDown"),
 			rendersPopover: newChatSource.includes("<SlashCommandPopover"),
+			allowsPopoverOverflow:
+				newChatSource.includes("data-popover-open") &&
+				desktopChromeSource.includes('.devo-composer-shell[data-popover-open="true"]') &&
+				desktopChromeSource.includes("overflow: visible"),
 		}).toEqual({
 			importsPopover: true,
 			detectsSlashTrigger: true,
 			delegatesSlashKeys: true,
 			rendersPopover: true,
+			allowsPopoverOverflow: true,
+		})
+	})
+
+	test("documents desktop icon consistency for renderer work", () => {
+		expect({
+			documentsSidebarIconSizing: desktopAgentsSource.includes("size-3.5"),
+			documentsSidebarIconStroke: desktopAgentsSource.includes("stroke-[1.5]"),
+			documentsStableIconSlots: desktopAgentsSource.includes("swap the glyph in place"),
+		}).toEqual({
+			documentsSidebarIconSizing: true,
+			documentsSidebarIconStroke: true,
+			documentsStableIconSlots: true,
 		})
 	})
 })

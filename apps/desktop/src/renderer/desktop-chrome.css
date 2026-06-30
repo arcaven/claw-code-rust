@@ -219,6 +219,12 @@
 	overflow: hidden;
 }
 
+.devo-composer-shell[data-popover-open="true"] {
+	/* User requirement: new-session slash and mention popovers must remain visible
+	   above the rounded composer shell instead of being clipped by the shell. */
+	overflow: visible;
+}
+
 .devo-composer [data-slot="input-group"] {
 	background: var(--background) !important;
 	background-color: var(--background) !important;

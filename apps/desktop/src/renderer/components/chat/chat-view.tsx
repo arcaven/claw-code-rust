@@ -144,13 +144,19 @@ function ComposerTriggerChip({
 					type="button"
 					aria-label={`Remove ${label} trigger`}
 					onClick={onRemove}
-					// User requirement: reveal the close affordance only while hovering
-					// the trigger chip, with focus reveal preserved for keyboard users.
-					className="pointer-events-none inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-muted-foreground/45 text-background opacity-0 transition-[background-color,color,opacity] group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 hover:bg-foreground"
+					// User requirement: hover replaces the trigger icon in-place with
+					// the close affordance, so the chip text never shifts.
+					className="pointer-events-none relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground transition-colors group-focus-within:pointer-events-auto group-focus-within:text-foreground group-hover:pointer-events-auto group-hover:text-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
 				>
-					<XIcon className="size-2.5" />
+					<Icon
+						className="size-3.5 stroke-[1.5] opacity-100 transition-opacity group-focus-within:opacity-0 group-hover:opacity-0"
+						aria-hidden="true"
+					/>
+					<XIcon
+						className="absolute size-3.5 stroke-[1.5] opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+						aria-hidden="true"
+					/>
 				</button>
-				<Icon className="size-3.5 shrink-0" />
 				<span>{label}</span>
 			</TooltipTrigger>
 			<TooltipContent side="top" align="start">

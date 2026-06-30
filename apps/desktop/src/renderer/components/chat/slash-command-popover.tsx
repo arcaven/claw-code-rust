@@ -88,6 +88,8 @@ const CLIENT_COMMANDS: SlashCommand[] = [
 	},
 ]
 
+const commandIconClass = "size-3.5 shrink-0 stroke-[1.5] text-muted-foreground"
+
 // ============================================================
 // SlashCommandPopover
 // ============================================================
@@ -234,7 +236,7 @@ const CommandItem = memo(function CommandItem({
 			onMouseEnter={onHover}
 		>
 			<div className="flex min-w-0 items-center gap-2">
-				<Icon className="size-4 shrink-0 text-muted-foreground" />
+				<Icon className={commandIconClass} aria-hidden="true" />
 				<span className="font-medium">/{command.name}</span>
 				{command.description && (
 					<span className="truncate text-muted-foreground">{command.description}</span>
