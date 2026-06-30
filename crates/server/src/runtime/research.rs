@@ -9,80 +9,15 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::research_stages::RESEARCH_FILE_TOOL_NAMES;
+use super::research_stages::RESEARCH_PIPELINE_STAGES;
+pub(crate) use super::research_stages::RESEARCH_WORKER_TOOL_NAMES;
+use super::research_stages::ResearchStageKind;
+use super::research_stages::StreamedResearchArtifact;
 use super::*;
 use crate::session_context::SessionRuntimeContext;
 
-pub(crate) const RESEARCH_FILE_TOOL_NAMES: &[&str] = &["read", "write", "apply_patch"];
-const RESEARCH_NO_TOOL_NAMES: &[&str] = &[];
 const RESEARCH_QUERY_EVENT_CHANNEL_CAPACITY: usize = 1024;
-const RESEARCH_CLARIFICATION_TOOL_NAMES: &[&str] = &["request_user_input"];
-const RESEARCH_SUPERVISOR_TOOL_NAMES: &[&str] = &[
-    "spawn_agent",
-    "send_message",
-    "wait_agent",
-    "list_agents",
-    "close_agent",
-];
-pub(crate) const RESEARCH_WORKER_TOOL_NAMES: &[&str] =
-    &["read", "write", "apply_patch", "web_search", "webfetch"];
-
-#[derive(Debug, Clone, Copy)]
-enum ResearchStageKind {
-    Clarify,
-    Brief,
-    Supervisor,
-    Compress,
-    FinalReport,
-}
-
-impl ResearchStageKind {
-    fn prompt(self) -> String {
-        match self {
-            ResearchStageKind::Clarify => devo_core::research::prompts::clarify(),
-            ResearchStageKind::Brief => devo_core::research::prompts::research_brief(),
-            ResearchStageKind::Supervisor => devo_core::research::prompts::supervisor(),
-            ResearchStageKind::Compress => devo_core::research::prompts::compress(),
-            ResearchStageKind::FinalReport => devo_core::research::prompts::final_report(),
-        }
-    }
-
-    fn tool_names(self) -> &'static [&'static str] {
-        match self {
-            ResearchStageKind::Clarify => RESEARCH_CLARIFICATION_TOOL_NAMES,
-            ResearchStageKind::Brief | ResearchStageKind::Compress => RESEARCH_NO_TOOL_NAMES,
-            ResearchStageKind::Supervisor => RESEARCH_SUPERVISOR_TOOL_NAMES,
-            ResearchStageKind::FinalReport => RESEARCH_FILE_TOOL_NAMES,
-        }
-    }
-
-    fn usage_prefix(self) -> &'static str {
-        match self {
-            ResearchStageKind::Clarify => "clarify_call",
-            ResearchStageKind::Brief => "brief_call",
-            ResearchStageKind::Supervisor => "supervisor_call",
-            ResearchStageKind::Compress => "supervisor_compress_call",
-            ResearchStageKind::FinalReport => "final_report_call",
-        }
-    }
-
-    fn artifact(self) -> Option<StreamedResearchArtifact> {
-        match self {
-            ResearchStageKind::Brief => Some(StreamedResearchArtifact {
-                artifact_type: ResearchArtifactType::Brief,
-                title: "Research Brief".to_string(),
-            }),
-            ResearchStageKind::Supervisor => Some(StreamedResearchArtifact {
-                artifact_type: ResearchArtifactType::Plan,
-                title: "Research Plan".to_string(),
-            }),
-            ResearchStageKind::Compress => Some(StreamedResearchArtifact {
-                artifact_type: ResearchArtifactType::CompressedFinding,
-                title: "Compressed Finding: Research Evidence".to_string(),
-            }),
-            ResearchStageKind::Clarify | ResearchStageKind::FinalReport => None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 struct ClarifyDecision {
@@ -237,12 +172,6 @@ struct StreamedTextItem {
     item_id: Option<ItemId>,
     item_seq: Option<u64>,
     text: String,
-}
-
-#[derive(Debug, Clone)]
-struct StreamedResearchArtifact {
-    artifact_type: ResearchArtifactType,
-    title: String,
 }
 
 struct ResearchPipelineInput<'a> {
@@ -703,6 +632,17 @@ impl ServerRuntime {
             cwd,
             usage_ledger,
         } = input;
+        debug_assert_eq!(
+            RESEARCH_PIPELINE_STAGES,
+            &[
+                ResearchStageKind::Clarify,
+                ResearchStageKind::Brief,
+                ResearchStageKind::Supervisor,
+                ResearchStageKind::Compress,
+                ResearchStageKind::FinalReport,
+            ],
+            "research pipeline stage order should stay aligned with the explicit workflow below",
+        );
         let model_runtime = ResearchModelRuntime {
             runtime_context: Arc::clone(&runtime_context),
             turn_config: &turn_config,
