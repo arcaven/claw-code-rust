@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::sync::mpsc as std_mpsc;
-use std::time::Duration;
 use std::time::Instant;
 
 use super::proposed_plan::{ProposedPlanParser, ProposedPlanSegment};
@@ -15,8 +11,6 @@ use devo_util_git::extract_paths_from_patch;
 use tokio::sync::mpsc;
 
 const QUERY_EVENT_CHANNEL_CAPACITY: usize = 1024;
-const QUERY_EVENT_FORWARD_CHANNEL_CAPACITY: usize = 1;
-const QUERY_EVENT_BACKPRESSURE_LOG_THRESHOLD: Duration = Duration::from_millis(50);
 
 struct PendingToolCall {
     item_id: Option<ItemId>,
@@ -69,120 +63,30 @@ fn turn_failure_reason_from_error(
     }
 }
 
+/// Inputs captured at turn-start time and handed to the background turn executor.
 pub(super) struct ExecuteTurnRequest {
+    /// Runtime session that owns the turn and receives emitted items, usage, and status updates.
     pub(super) session_id: SessionId,
+    /// Pre-created turn metadata persisted at turn start; execution mutates a local copy to its
+    /// terminal status before appending the final turn record.
     pub(super) turn: TurnMetadata,
+    /// Resolved model, provider, reasoning, tool, web, and token-budget settings for this turn.
     pub(super) turn_config: TurnConfig,
+    /// User-facing rendering of the submitted input. Visible turns persist this as the displayed
+    /// user message; hidden continuation turns keep it out of the transcript.
     pub(super) display_input: String,
+    /// Canonical resolved prompt text. Visible turns push this as the user-role message when the
+    /// input resolver did not return structured `input_messages`.
     pub(super) input: String,
+    /// Structured user-role messages produced by input resolution, such as expanded skill content.
+    /// When non-empty, these are pushed instead of the single `input` string.
     pub(super) input_messages: Vec<String>,
+    /// Collaboration mode to install on the core session for this query; it also drives
+    /// mode-specific stream handling such as proposed-plan parsing.
     pub(super) collaboration_mode: devo_protocol::CollaborationMode,
+    /// Controls whether this executor emits/pushes a visible user message or runs hidden work such
+    /// as goal continuation, and carries the hidden goal context when needed.
     pub(super) input_mode: TurnInputMode,
-}
-
-#[derive(Clone)]
-struct BoundedQueryEventSender {
-    tx: std_mpsc::SyncSender<QueryEvent>,
-    queue_depth: Arc<AtomicUsize>,
-    queue_max_depth: Arc<AtomicUsize>,
-}
-
-impl BoundedQueryEventSender {
-    fn send(&self, event: QueryEvent) {
-        let event_kind = query_event_trace_kind(&event);
-        let delta_len = query_event_trace_delta_len(&event);
-        let assistant_token_text = query_event_trace_token_preview(&event);
-        let depth = self.queue_depth.fetch_add(1, Ordering::AcqRel) + 1;
-        self.queue_max_depth.fetch_max(depth, Ordering::AcqRel);
-        if let Some(assistant_token_text) = assistant_token_text.as_deref() {
-            tracing::debug!(
-                stream_elapsed_ms = stream_trace_elapsed_ms(),
-                event_kind,
-                delta_len,
-                queue_depth = depth,
-                assistant_token_text,
-                "query event bridge enqueue requested"
-            );
-        } else {
-            tracing::debug!(
-                stream_elapsed_ms = stream_trace_elapsed_ms(),
-                event_kind,
-                delta_len,
-                queue_depth = depth,
-                "query event bridge enqueue requested"
-            );
-        }
-        match self.tx.try_send(event) {
-            Ok(()) => {
-                tracing::trace!(
-                    stream_elapsed_ms = stream_trace_elapsed_ms(),
-                    event_kind,
-                    queue_depth = depth,
-                    "query event bridge enqueue accepted"
-                );
-            }
-            Err(std_mpsc::TrySendError::Full(event)) => {
-                let send_started_at = Instant::now();
-                if self.tx.send(event).is_err() {
-                    decrement_query_event_queue_depth(&self.queue_depth);
-                    return;
-                }
-                let waited = send_started_at.elapsed();
-                if waited >= QUERY_EVENT_BACKPRESSURE_LOG_THRESHOLD {
-                    tracing::warn!(
-                        stream_elapsed_ms = stream_trace_elapsed_ms(),
-                        event_kind,
-                        waited_ms = waited.as_millis(),
-                        threshold_ms = QUERY_EVENT_BACKPRESSURE_LOG_THRESHOLD.as_millis(),
-                        "query event bridge applied backpressure"
-                    );
-                }
-            }
-            Err(std_mpsc::TrySendError::Disconnected(_)) => {
-                decrement_query_event_queue_depth(&self.queue_depth);
-            }
-        }
-    }
-}
-
-fn bounded_query_event_channel(
-    capacity: usize,
-    queue_depth: Arc<AtomicUsize>,
-    queue_max_depth: Arc<AtomicUsize>,
-) -> (
-    BoundedQueryEventSender,
-    mpsc::Receiver<QueryEvent>,
-    tokio::task::JoinHandle<()>,
-) {
-    let (ingress_tx, ingress_rx) = std_mpsc::sync_channel::<QueryEvent>(capacity);
-    let (event_tx, event_rx) = mpsc::channel::<QueryEvent>(QUERY_EVENT_FORWARD_CHANNEL_CAPACITY);
-    let queue_depth_for_forwarder = Arc::clone(&queue_depth);
-    let forwarder = tokio::task::spawn_blocking(move || {
-        while let Ok(event) = ingress_rx.recv() {
-            if event_tx.blocking_send(event).is_err() {
-                decrement_query_event_queue_depth(&queue_depth_for_forwarder);
-                while ingress_rx.try_recv().is_ok() {
-                    decrement_query_event_queue_depth(&queue_depth_for_forwarder);
-                }
-                break;
-            }
-        }
-    });
-    (
-        BoundedQueryEventSender {
-            tx: ingress_tx,
-            queue_depth,
-            queue_max_depth,
-        },
-        event_rx,
-        forwarder,
-    )
-}
-
-fn decrement_query_event_queue_depth(queue_depth: &AtomicUsize) {
-    let _ = queue_depth.fetch_update(Ordering::AcqRel, Ordering::Acquire, |depth| {
-        Some(depth.saturating_sub(1))
-    });
 }
 
 fn stream_trace_elapsed_ms() -> u128 {
@@ -907,6 +811,31 @@ fn user_shell_command_payload(
     }
 }
 
+const AGENT_COORDINATION_TOOL_NAMES: &[&str] = &[
+    "spawn_agent",
+    "send_message",
+    "wait_agent",
+    "list_agents",
+    "close_agent",
+];
+
+fn without_agent_coordination_tools(
+    registry: &devo_core::tools::ToolRegistry,
+) -> devo_core::tools::ToolRegistry {
+    let names = registry
+        .tool_definitions()
+        .into_iter()
+        .map(|tool| tool.name)
+        .filter(|name| {
+            !AGENT_COORDINATION_TOOL_NAMES
+                .iter()
+                .any(|hidden_name| *hidden_name == name)
+        })
+        .collect::<Vec<_>>();
+    let names = names.iter().map(String::as_str).collect::<Vec<_>>();
+    registry.restricted_to_specs(&names)
+}
+
 impl ServerRuntime {
     fn tool_registry_for_session(
         &self,
@@ -1011,10 +940,13 @@ impl ServerRuntime {
             },
             ToolExecutionOptions {
                 cancel_token: turn_cancel_token,
-                on_tool_execution_start: Some(Arc::new(move |call: &ToolCall| {
+                on_tool_execution_start: Some(Arc::new(move |call: ToolCall| {
                     let runtime = Arc::clone(&tool_execution_start_runtime);
-                    let tool_call_id = call.id.clone();
-                    tokio::spawn(async move {
+                    let tool_call_id = call.id;
+                    // `on_tool_execution_start` is stored as a trait-object callback that returns
+                    // `BoxFuture<'static, ()>`. `Box::pin` gives this async block the erased future
+                    // shape while still letting the body await `broadcast_event`.
+                    Box::pin(async move {
                         runtime
                             .broadcast_event(ServerEvent::ToolCallStatusUpdated(
                                 devo_protocol::ToolCallStatusUpdatedPayload {
@@ -1026,7 +958,7 @@ impl ServerRuntime {
                                 },
                             ))
                             .await;
-                    });
+                    })
                 })),
                 ..ToolExecutionOptions::default()
             },
@@ -1168,8 +1100,12 @@ impl ServerRuntime {
                 turn.turn_id,
                 ItemKind::UserMessage,
                 TurnItem::UserMessage(TextItem {
+                    // TODO: Note that future additions of multimodal support
+                    //  will require modifications here.
                     text: display_input.clone(),
                 }),
+                // Keep the legacy text payload shape for live item/completed clients; durable
+                // user-message semantics come from the TurnItem above.
                 serde_json::json!({ "title": "You", "text": display_input.clone() }),
             )
             .await;
@@ -1178,24 +1114,21 @@ impl ServerRuntime {
         let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() else {
             return;
         };
-        let event_queue_depth = Arc::new(AtomicUsize::new(0));
-        let event_queue_max_depth = Arc::new(AtomicUsize::new(0));
-        let (event_tx, mut event_rx, event_forwarder_task) = bounded_query_event_channel(
-            QUERY_EVENT_CHANNEL_CAPACITY,
-            Arc::clone(&event_queue_depth),
-            Arc::clone(&event_queue_max_depth),
-        );
+        let (event_tx, mut event_rx) = mpsc::channel::<QueryEvent>(QUERY_EVENT_CHANNEL_CAPACITY);
         let runtime = Arc::clone(&self);
         let turn_for_events = turn.clone();
         let turn_for_plan_updates = turn.clone();
         let event_session_arc = Arc::clone(&session_arc);
-        let event_tool_registry = {
+        let (event_tool_registry, usage_parent_session_id) = {
             let session = session_arc.lock().await;
-            self.tool_registry_for_session(&session)
+            (
+                self.tool_registry_for_session(&session),
+                session.summary.parent_session_id,
+            )
         };
         let usage_context_window = Some(turn_config.model.context_window as u64);
-        let event_queue_depth_for_task = Arc::clone(&event_queue_depth);
-        let event_queue_max_depth_for_task = Arc::clone(&event_queue_max_depth);
+        self.begin_parent_usage_turn(session_id, turn.turn_id, usage_context_window)
+            .await;
         let event_task = tokio::spawn(async move {
             // This task owns the streamed model output. It turns raw query
             // callbacks into persisted turn items and keeps enough state to
@@ -1218,14 +1151,12 @@ impl ServerRuntime {
             let mut stop_reason: Option<devo_core::StopReason> = None;
             let mut usage_base: Option<(usize, usize, usize, usize)> = None;
             while let Some(event) = event_rx.recv().await {
-                decrement_query_event_queue_depth(&event_queue_depth_for_task);
                 let assistant_token_text = query_event_trace_token_preview(&event);
                 if let Some(assistant_token_text) = assistant_token_text.as_deref() {
                     tracing::debug!(
                         stream_elapsed_ms = stream_trace_elapsed_ms(),
                         event_kind = query_event_trace_kind(&event),
                         delta_len = query_event_trace_delta_len(&event),
-                        queue_depth = event_queue_depth_for_task.load(Ordering::Acquire),
                         assistant_token_text,
                         "query event bridge dequeued by turn event task"
                     );
@@ -1234,7 +1165,6 @@ impl ServerRuntime {
                         stream_elapsed_ms = stream_trace_elapsed_ms(),
                         event_kind = query_event_trace_kind(&event),
                         delta_len = query_event_trace_delta_len(&event),
-                        queue_depth = event_queue_depth_for_task.load(Ordering::Acquire),
                         "query event bridge dequeued by turn event task"
                     );
                 }
@@ -1870,29 +1800,48 @@ impl ServerRuntime {
                         let total_output_tokens = base.1 + usage.output_tokens;
                         let total_tokens = base.2 + display_total_tokens;
                         let total_cache_read_tokens = base.3 + cache_read_input_tokens;
-                        {
-                            let mut session = event_session_arc.lock().await;
-                            session.summary.total_input_tokens = total_input_tokens;
-                            session.summary.total_output_tokens = total_output_tokens;
-                            session.summary.total_tokens = total_tokens;
-                            session.summary.total_cache_read_tokens = total_cache_read_tokens;
-                            session.summary.last_query_total_tokens = display_total_tokens;
-                        }
-                        let _ = runtime
-                            .broadcast_event(ServerEvent::TurnUsageUpdated(
-                                TurnUsageUpdatedPayload {
+                        if usage_parent_session_id.is_some() {
+                            {
+                                let mut session = event_session_arc.lock().await;
+                                session.summary.total_input_tokens = total_input_tokens;
+                                session.summary.total_output_tokens = total_output_tokens;
+                                session.summary.total_tokens = total_tokens;
+                                session.summary.total_cache_read_tokens = total_cache_read_tokens;
+                                session.summary.last_query_total_tokens = display_total_tokens;
+                            }
+                            let _ = runtime
+                                .broadcast_event(ServerEvent::TurnUsageUpdated(
+                                    TurnUsageUpdatedPayload {
+                                        session_id,
+                                        turn_id: turn_for_events.turn_id,
+                                        usage: turn_usage.clone(),
+                                        total_input_tokens,
+                                        total_output_tokens,
+                                        total_tokens,
+                                        total_cache_read_tokens,
+                                        last_query_input_tokens: usage.input_tokens,
+                                        context_window: usage_context_window,
+                                    },
+                                ))
+                                .await;
+                            let _ = runtime
+                                .publish_subagent_turn_usage(
                                     session_id,
-                                    turn_id: turn_for_events.turn_id,
-                                    usage: turn_usage,
-                                    total_input_tokens,
-                                    total_output_tokens,
-                                    total_tokens,
-                                    total_cache_read_tokens,
-                                    last_query_input_tokens: usage.input_tokens,
-                                    context_window: usage_context_window,
-                                },
-                            ))
-                            .await;
+                                    turn_for_events.turn_id,
+                                    turn_usage,
+                                )
+                                .await;
+                        } else if let Some(snapshot) = runtime
+                            .publish_parent_turn_usage(
+                                session_id,
+                                turn_for_events.turn_id,
+                                turn_usage,
+                                usage_context_window,
+                            )
+                            .await
+                        {
+                            latest_usage = Some(snapshot.turn_usage.to_turn_usage());
+                        }
                     }
                     QueryEvent::TurnComplete {
                         stop_reason: terminal_stop_reason,
@@ -1955,10 +1904,6 @@ impl ServerRuntime {
             tracing::debug!(
                 session_id = %session_id,
                 turn_id = %turn_for_events.turn_id,
-                query_event_queue_max_depth =
-                    event_queue_max_depth_for_task.load(Ordering::Acquire),
-                query_event_queue_remaining =
-                    event_queue_depth_for_task.load(Ordering::Acquire),
                 "query event stream drained"
             );
             TurnEventStreamSummary {
@@ -1969,11 +1914,11 @@ impl ServerRuntime {
 
         let (
             result,
-            session_total_input_tokens,
-            session_total_output_tokens,
-            session_total_tokens,
-            session_total_cache_creation_tokens,
-            session_total_cache_read_tokens,
+            mut session_total_input_tokens,
+            mut session_total_output_tokens,
+            mut session_total_tokens,
+            mut session_total_cache_creation_tokens,
+            mut session_total_cache_read_tokens,
             session_last_input_tokens,
             session_prompt_token_estimate,
         ) = {
@@ -2027,9 +1972,16 @@ impl ServerRuntime {
                 }
             }
             let event_callback_tx = event_tx.clone();
-            let callback = std::sync::Arc::new(move |event: QueryEvent| {
-                event_callback_tx.send(event);
-            });
+            let callback: devo_core::EventCallback =
+                std::sync::Arc::new(move |event: QueryEvent| {
+                    let event_callback_tx = event_callback_tx.clone();
+                    // `EventCallback` returns `BoxFuture` so the core query loop can await an
+                    // async event sink without knowing this closure's concrete future type. Boxing
+                    // also lets the bounded channel send apply backpressure at the callback boundary.
+                    Box::pin(async move {
+                        let _ = event_callback_tx.send(event).await;
+                    })
+                });
             let tool_execution_start_tx = event_tx.clone();
             let agent_context_mode = core_session
                 .session_context
@@ -2044,6 +1996,9 @@ impl ServerRuntime {
                 })
                 .unwrap_or_default();
             let registry = match agent_tool_policy {
+                devo_protocol::AgentToolPolicy::Inherit if usage_parent_session_id.is_some() => {
+                    Arc::new(without_agent_coordination_tools(&session_tool_registry))
+                }
                 devo_protocol::AgentToolPolicy::Inherit => session_tool_registry,
                 devo_protocol::AgentToolPolicy::DenyAll => {
                     Arc::new(devo_core::tools::ToolRegistry::new())
@@ -2100,10 +2055,15 @@ impl ServerRuntime {
                 },
                 ToolExecutionOptions {
                     cancel_token: turn_cancel_token,
-                    on_tool_execution_start: Some(Arc::new(move |call: &ToolCall| {
-                        tool_execution_start_tx.send(QueryEvent::ToolExecutionStart {
-                            id: call.id.clone(),
-                        });
+                    on_tool_execution_start: Some(Arc::new(move |call: ToolCall| {
+                        let tool_execution_start_tx = tool_execution_start_tx.clone();
+                        // Match the router callback's `BoxFuture` return type and keep the tool-start
+                        // notification on the same bounded async event path as other query events.
+                        Box::pin(async move {
+                            let _ = tool_execution_start_tx
+                                .send(QueryEvent::ToolExecutionStart { id: call.id })
+                                .await;
+                        })
                     })),
                     ..ToolExecutionOptions::default()
                 },
@@ -2129,21 +2089,24 @@ impl ServerRuntime {
             )
         };
         drop(event_tx);
-        if let Err(error) = event_forwarder_task.await {
-            tracing::warn!(
-                session_id = %session_id,
-                turn_id = %turn.turn_id,
-                error = %error,
-                "query event forwarder failed"
-            );
-        }
         // Wait for the event task to finish draining buffered stream events
         // before we persist the terminal turn state.
         let event_summary = event_task.await.ok();
-        let latest_usage = event_summary
+        let mut latest_usage = event_summary
             .as_ref()
             .and_then(|summary| summary.latest_usage.clone());
         let terminal_stop_reason = event_summary.and_then(|summary| summary.stop_reason);
+        if usage_parent_session_id.is_none()
+            && let Some(snapshot) = self.parent_usage_snapshot(session_id, turn.turn_id).await
+        {
+            latest_usage = Some(snapshot.turn_usage.to_turn_usage());
+            session_total_input_tokens = snapshot.session_totals.input_tokens;
+            session_total_output_tokens = snapshot.session_totals.output_tokens;
+            session_total_tokens = snapshot.session_totals.total_tokens;
+            session_total_cache_creation_tokens =
+                snapshot.session_totals.cache_creation_input_tokens;
+            session_total_cache_read_tokens = snapshot.session_totals.cache_read_input_tokens;
+        }
         self.active_tasks.lock().await.remove(&session_id);
         self.active_turn_cancellations
             .lock()
@@ -2212,6 +2175,13 @@ impl ServerRuntime {
             session.summary.prompt_token_estimate = session_prompt_token_estimate;
             if let Some(usage) = &final_turn.usage {
                 session.summary.last_query_total_tokens = usage.display_total_tokens();
+            }
+            if let Ok(mut core_session) = session.core_session.try_lock() {
+                core_session.total_input_tokens = session_total_input_tokens;
+                core_session.total_output_tokens = session_total_output_tokens;
+                core_session.total_tokens = session_total_tokens;
+                core_session.total_cache_creation_tokens = session_total_cache_creation_tokens;
+                core_session.total_cache_read_tokens = session_total_cache_read_tokens;
             }
 
             // Persist token stats to SQLite (skip for ephemeral sessions)
@@ -2367,6 +2337,7 @@ impl ServerRuntime {
                     Vec::new(),
                     collaboration_mode_from_pending_metadata(metadata.as_ref()),
                     model_selection_from_pending_metadata(metadata.as_ref()),
+                    subagent_usage_owner_from_pending_metadata(metadata.as_ref()),
                 )),
                 Some(devo_core::PendingInputItem {
                     kind:
@@ -2384,6 +2355,7 @@ impl ServerRuntime {
                     prompt_messages,
                     collaboration_mode_from_pending_metadata(metadata.as_ref()),
                     model_selection_from_pending_metadata(metadata.as_ref()),
+                    subagent_usage_owner_from_pending_metadata(metadata.as_ref()),
                 )),
                 _ => None,
             }
@@ -2394,6 +2366,7 @@ impl ServerRuntime {
             input_messages,
             queued_collaboration_mode,
             queued_model_selection,
+            queued_subagent_usage_owner,
         )) = queued_input
         else {
             self.maybe_start_goal_continuation_turn(session_id).await;
@@ -2452,6 +2425,10 @@ impl ServerRuntime {
             stop_reason: None,
             failure_reason: None,
         };
+        if let Some((parent_session_id, parent_turn_id)) = queued_subagent_usage_owner {
+            self.register_subagent_usage_owner(parent_session_id, session_id, parent_turn_id)
+                .await;
+        }
         {
             let session_arc = match self.sessions.lock().await.get(&session_id).cloned() {
                 Some(s) => s,
@@ -2471,6 +2448,8 @@ impl ServerRuntime {
         .await;
         // Chain directly instead of spawning so this drain loop can keep
         // consuming queued input until the queue is empty.
+        // This is an async self-call into `execute_turn`; boxing adds the heap indirection Rust
+        // needs so the future does not recursively contain another copy of its own type.
         Box::pin(Arc::clone(&self).execute_turn(ExecuteTurnRequest {
             session_id,
             turn,
@@ -2495,6 +2474,7 @@ impl ServerRuntime {
             input_messages,
             queued_collaboration_mode,
             queued_model_selection,
+            queued_subagent_usage_owner,
         ) = {
             let session_arc = match self.sessions.lock().await.get(&session_id).cloned() {
                 Some(s) => s,
@@ -2518,6 +2498,7 @@ impl ServerRuntime {
                     Vec::new(),
                     collaboration_mode_from_pending_metadata(metadata.as_ref()),
                     model_selection_from_pending_metadata(metadata.as_ref()),
+                    subagent_usage_owner_from_pending_metadata(metadata.as_ref()),
                 ),
                 Some(devo_core::PendingInputItem {
                     kind:
@@ -2535,6 +2516,7 @@ impl ServerRuntime {
                     prompt_messages,
                     collaboration_mode_from_pending_metadata(metadata.as_ref()),
                     model_selection_from_pending_metadata(metadata.as_ref()),
+                    subagent_usage_owner_from_pending_metadata(metadata.as_ref()),
                 ),
                 _ => return,
             }
@@ -2592,6 +2574,10 @@ impl ServerRuntime {
             stop_reason: None,
             failure_reason: None,
         };
+        if let Some((parent_session_id, parent_turn_id)) = queued_subagent_usage_owner {
+            self.register_subagent_usage_owner(parent_session_id, session_id, parent_turn_id)
+                .await;
+        }
         {
             let session_arc = match self.sessions.lock().await.get(&session_id).cloned() {
                 Some(s) => s,
@@ -2933,75 +2919,6 @@ mod tests {
                 command_actions: Vec::new(),
             }
         );
-    }
-
-    #[tokio::test]
-    async fn bounded_query_event_bridge_preserves_order_and_depth() {
-        let queue_depth = Arc::new(AtomicUsize::new(0));
-        let queue_max_depth = Arc::new(AtomicUsize::new(0));
-        let (sender, mut rx, forwarder) = bounded_query_event_channel(
-            /*capacity*/ 2,
-            Arc::clone(&queue_depth),
-            Arc::clone(&queue_max_depth),
-        );
-
-        sender.send(QueryEvent::TextDelta("one".to_string()));
-        sender.send(QueryEvent::ReasoningDelta("two".to_string()));
-        drop(sender);
-
-        let first = rx.recv().await.expect("first event");
-        decrement_query_event_queue_depth(&queue_depth);
-        let second = rx.recv().await.expect("second event");
-        decrement_query_event_queue_depth(&queue_depth);
-        forwarder.await.expect("forwarder");
-
-        assert!(matches!(first, QueryEvent::TextDelta(text) if text == "one"));
-        assert!(matches!(second, QueryEvent::ReasoningDelta(text) if text == "two"));
-        assert_eq!(queue_depth.load(Ordering::Acquire), 0);
-        assert!(queue_max_depth.load(Ordering::Acquire) >= 1);
-        assert!(rx.recv().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn bounded_query_event_bridge_keeps_terminal_event_after_backpressure() {
-        let queue_depth = Arc::new(AtomicUsize::new(0));
-        let queue_max_depth = Arc::new(AtomicUsize::new(0));
-        let (sender, mut rx, forwarder) = bounded_query_event_channel(
-            /*capacity*/ 1,
-            Arc::clone(&queue_depth),
-            Arc::clone(&queue_max_depth),
-        );
-        let sender_for_task = sender.clone();
-        let send_task = tokio::task::spawn_blocking(move || {
-            sender_for_task.send(QueryEvent::TextDelta("first".to_string()));
-            sender_for_task.send(QueryEvent::TextDelta("second".to_string()));
-            sender_for_task.send(QueryEvent::TurnComplete {
-                stop_reason: devo_core::StopReason::EndTurn,
-            });
-        });
-
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let first = rx.recv().await.expect("first event");
-        decrement_query_event_queue_depth(&queue_depth);
-        let second = rx.recv().await.expect("second event");
-        decrement_query_event_queue_depth(&queue_depth);
-        let terminal = rx.recv().await.expect("terminal event");
-        decrement_query_event_queue_depth(&queue_depth);
-
-        send_task.await.expect("send task");
-        drop(sender);
-        forwarder.await.expect("forwarder");
-
-        assert!(matches!(first, QueryEvent::TextDelta(text) if text == "first"));
-        assert!(matches!(second, QueryEvent::TextDelta(text) if text == "second"));
-        assert!(matches!(
-            terminal,
-            QueryEvent::TurnComplete {
-                stop_reason: devo_core::StopReason::EndTurn,
-            }
-        ));
-        assert_eq!(queue_depth.load(Ordering::Acquire), 0);
-        assert!(queue_max_depth.load(Ordering::Acquire) >= 2);
     }
 
     #[test]

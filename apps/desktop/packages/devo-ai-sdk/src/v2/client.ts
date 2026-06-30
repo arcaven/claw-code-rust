@@ -38,6 +38,16 @@ import type {
 	ProviderVendorListResult,
 	ProviderVendorUpsertParams,
 	ProviderVendorUpsertResult,
+	GoalClearResult,
+	GoalSetResult,
+	GoalSetStatusResult,
+	GoalStatusResult,
+	InputItem,
+	ThreadGoalStatus,
+	TurnQueueRemoveResult,
+	TurnQueueSteerResult,
+	TurnStartResult,
+	TurnSteerResult,
 	RequestUserInputRespondParams,
 	WorkspaceChangeCoverage,
 	WorkspaceChangeScope,
@@ -304,6 +314,65 @@ function sessionStatusChangedFromOriginalEvent(
 	return typeof sessionId === "string" && typeof status === "string" ? { sessionId, status } : null
 }
 
+function sessionCompactionFromOriginalEvent(
+	original: unknown,
+	originalMethod?: string,
+): { sessionId: string; status: "started" | "completed" | "failed"; message?: string } | null {
+	const event = objectRecord(original)
+	if (!event) return null
+
+	let status: "started" | "completed" | "failed" | null = null
+	let payload: Record<string, unknown> | undefined
+	if (originalMethod === "session/compaction/started") {
+		status = "started"
+		payload = objectRecord(event.SessionCompactionStarted) ?? event
+	} else if (originalMethod === "session/compaction/completed") {
+		status = "completed"
+		payload = objectRecord(event.SessionCompactionCompleted) ?? event
+	} else if (originalMethod === "session/compaction/failed") {
+		status = "failed"
+		payload = objectRecord(event.SessionCompactionFailed) ?? event
+	} else {
+		const candidates: Array<
+			["started" | "completed" | "failed", Record<string, unknown> | undefined]
+		> = [
+			["started", objectRecord(event.SessionCompactionStarted)],
+			["started", objectRecord(event.session_compaction_started)],
+			["started", objectRecord(event.sessionCompactionStarted)],
+			["completed", objectRecord(event.SessionCompactionCompleted)],
+			["completed", objectRecord(event.session_compaction_completed)],
+			["completed", objectRecord(event.sessionCompactionCompleted)],
+			["failed", objectRecord(event.SessionCompactionFailed)],
+			["failed", objectRecord(event.session_compaction_failed)],
+			["failed", objectRecord(event.sessionCompactionFailed)],
+		]
+		const found = candidates.find(([, value]) => value)
+		if (found) {
+			status = found[0]
+			payload = found[1]
+		} else if (event.kind === "session_compaction_started") {
+			status = "started"
+			payload = event
+		} else if (event.kind === "session_compaction_completed") {
+			status = "completed"
+			payload = event
+		} else if (event.kind === "session_compaction_failed") {
+			status = "failed"
+			payload = event
+		}
+	}
+
+	if (!status || !payload) return null
+	const sessionId = payload.session_id ?? payload.sessionId
+	if (typeof sessionId !== "string" || !sessionId) return null
+	const message = payload.message
+	return {
+		sessionId,
+		status,
+		...(typeof message === "string" && message ? { message } : {}),
+	}
+}
+
 function workspaceChangesUpdatedEventProperties(
 	payload: WorkspaceChangesUpdatedPayload,
 ): WorkspaceChangesUpdatedEventProperties {
@@ -337,6 +406,58 @@ const DEVO_ACTIVITY_AT_META = "devo/activityAt"
 const DEVO_HISTORY_INDEX_META = "devo/historyIndex"
 const DEVO_PARENT_MESSAGE_ID_META = "devo/parentMessageId"
 const DEVO_TURN_DURATION_MS_META = "devo/turnDurationMs"
+const DEVO_ITEM_KIND_META = "devo/itemKind"
+const DEVO_RESEARCH_ARTIFACT_TYPE_META = "devo/researchArtifactType"
+const DEVO_RESEARCH_ARTIFACT_TITLE_META = "devo/researchArtifactTitle"
+
+type PromptPartInput = {
+	type: string
+	text?: string
+	url?: string
+	filename?: string
+	mime?: string
+	mediaType?: string
+}
+
+function pathFromFileUri(uri: string): string | null {
+	if (!uri.startsWith("file://")) return null
+	try {
+		const url = new URL(uri)
+		let path = decodeURIComponent(url.pathname)
+		if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1)
+		return path.replace(/\//g, "\\")
+	} catch {
+		return uri.slice("file://".length)
+	}
+}
+
+function inputItemsFromPromptParts(parts: PromptPartInput[]): InputItem[] {
+	const input: InputItem[] = []
+	const text = parts
+		.map((part) => (part.type === "text" ? (part.text ?? "") : ""))
+		.join("\n")
+		.trim()
+	if (text || parts.every((part) => part.type !== "file")) {
+		input.push({ type: "text", text })
+	}
+	for (const part of parts) {
+		if (part.type !== "file" || !part.url) continue
+		const path = pathFromFileUri(part.url)
+		if (path) {
+			input.push({
+				type: "mention",
+				path,
+				name: part.filename ?? path.split(/[\\/]/).pop() ?? path,
+			})
+			continue
+		}
+		input.push({
+			type: "text",
+			text: `Resource ${part.filename ?? part.url}: ${part.url}`,
+		})
+	}
+	return input
+}
 
 function normalizedHistoryLimit(limit: unknown): number | undefined {
 	if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) return undefined
@@ -363,6 +484,27 @@ function updateMeta(update: Record<string, unknown>): Record<string, unknown> | 
 function updateMetaString(update: Record<string, unknown>, key: string): string | undefined {
 	const value = updateMeta(update)?.[key]
 	return typeof value === "string" && value ? value : undefined
+}
+
+function textPartMetadataFromUpdate(
+	update: Record<string, unknown>,
+	existingPart?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+	const existing = objectRecord(existingPart?.metadata)
+	const metadata = existing ? { ...existing } : {}
+	const meta = updateMeta(update)
+	if (meta?.[DEVO_ITEM_KIND_META] === "research_artifact") {
+		metadata[DEVO_ITEM_KIND_META] = "research_artifact"
+		const artifactType = meta[DEVO_RESEARCH_ARTIFACT_TYPE_META]
+		if (typeof artifactType === "string" && artifactType) {
+			metadata[DEVO_RESEARCH_ARTIFACT_TYPE_META] = artifactType
+		}
+		const title = meta[DEVO_RESEARCH_ARTIFACT_TITLE_META]
+		if (typeof title === "string" && title) {
+			metadata[DEVO_RESEARCH_ARTIFACT_TITLE_META] = title
+		}
+	}
+	return Object.keys(metadata).length > 0 ? metadata : undefined
 }
 
 function updateHistoryCreatedAt(update: Record<string, unknown>): number | undefined {
@@ -437,7 +579,7 @@ class AcpClient {
 		create: async (_params?: { title?: string }) => ({ data: await this.createSession() }),
 		promptAsync: async (params: {
 			sessionID: string
-			parts: Array<{ type: string; text?: string; url?: string; filename?: string; mime?: string; mediaType?: string }>
+			parts: PromptPartInput[]
 			model?: unknown
 			agent?: string
 			variant?: string
@@ -556,6 +698,63 @@ class AcpClient {
 		}),
 	}
 
+	turn = {
+		// User requirement: busy composer follow-ups can be queued first, then converted
+		// to steer from the composer status stack without creating transcript-only state.
+		start: async (params: {
+			sessionID: string
+			parts: PromptPartInput[]
+			model?: unknown
+			variant?: string
+			cwd?: string | null
+		}) => {
+			const model = params.model as { modelID?: string } | undefined
+			if (model?.modelID) await this.setSessionConfigOption(params.sessionID, "model", model.modelID)
+			if (params.variant) await this.setSessionConfigOption(params.sessionID, "thought_level", params.variant)
+			const result = (await this.request("turn/start", {
+				session_id: params.sessionID,
+				input: inputItemsFromPromptParts(params.parts),
+				model: model?.modelID ?? null,
+				sandbox: null,
+				approval_policy: null,
+				cwd: params.cwd ?? null,
+				collaboration_mode: "build",
+			})) as TurnStartResult
+			return { data: result }
+		},
+		steer: async (params: {
+			sessionID: string
+			expectedTurnID: string
+			parts: PromptPartInput[]
+		}) => {
+			const result = (await this.request("turn/steer", {
+				session_id: params.sessionID,
+				expected_turn_id: params.expectedTurnID,
+				input: inputItemsFromPromptParts(params.parts),
+			})) as TurnSteerResult
+			return { data: result }
+		},
+		removeQueued: async (params: { sessionID: string; queuedInputID: string }) => {
+			const result = (await this.request("turn/queue/remove", {
+				session_id: params.sessionID,
+				queued_input_id: params.queuedInputID,
+			})) as TurnQueueRemoveResult
+			return { data: result }
+		},
+		steerQueued: async (params: {
+			sessionID: string
+			expectedTurnID: string
+			queuedInputID: string
+		}) => {
+			const result = (await this.request("turn/queue/steer", {
+				session_id: params.sessionID,
+				expected_turn_id: params.expectedTurnID,
+				queued_input_id: params.queuedInputID,
+			})) as TurnQueueSteerResult
+			return { data: result }
+		},
+	}
+
 	permission = {
 		respond: async (params: {
 			sessionID: string
@@ -625,6 +824,51 @@ class AcpClient {
 
 	command = {
 		list: async () => ({ data: [{ name: "compact", description: "Compact the session" }] }),
+	}
+
+	// User requirement: Desktop's composer status area needs direct goal state
+	// controls, while the existing /goal trigger remains available for entry.
+	goal = {
+		status: async (params: { sessionID: string }) => {
+			const result = (await this.request("goal/status", {
+				sessionId: params.sessionID,
+			})) as GoalStatusResult
+			return { data: result.goal }
+		},
+		set: async (params: {
+			sessionID: string
+			objective?: string
+			status?: ThreadGoalStatus
+			tokenBudget?: number | null
+		}) => {
+			const result = (await this.request("goal/set", {
+				sessionId: params.sessionID,
+				...(params.objective !== undefined ? { objective: params.objective } : {}),
+				...(params.status !== undefined ? { status: params.status } : {}),
+				...(params.tokenBudget !== undefined ? { tokenBudget: params.tokenBudget } : {}),
+			})) as GoalSetResult
+			return { data: result.goal }
+		},
+		pause: async (params: { sessionID: string }) => {
+			const result = (await this.request("goal/pause", {
+				sessionId: params.sessionID,
+				status: "paused",
+			})) as GoalSetStatusResult
+			return { data: result.goal }
+		},
+		resume: async (params: { sessionID: string }) => {
+			const result = (await this.request("goal/resume", {
+				sessionId: params.sessionID,
+				status: "active",
+			})) as GoalSetStatusResult
+			return { data: result.goal }
+		},
+		clear: async (params: { sessionID: string }) => {
+			const result = (await this.request("goal/clear", {
+				sessionId: params.sessionID,
+			})) as GoalClearResult
+			return { data: result }
+		},
 	}
 
 	find = {
@@ -1218,6 +1462,17 @@ class AcpClient {
 			this.rememberSessionStatus(changedStatus.sessionId, directory, changedStatus.status)
 			return
 		}
+		const compaction = sessionCompactionFromOriginalEvent(original, originalMethod)
+		if (compaction) {
+			this.emit(directory, {
+				type: `session.compaction.${compaction.status}`,
+				properties: {
+					sessionID: compaction.sessionId,
+					...(compaction.message ? { message: compaction.message } : {}),
+				},
+			})
+			return
+		}
 		if ("RequestUserInput" in original) {
 			const payload = (original as { RequestUserInput: Record<string, unknown> }).RequestUserInput
 			this.handleRequestUserInput(sessionId, directory, payload)
@@ -1496,12 +1751,14 @@ class AcpClient {
 				? ""
 				: existingPart[field]
 		const partEventTime = updateHistoryCreatedAt(update) ?? now
+		const metadata = textPartMetadataFromUpdate(update, existingPart)
 		const part = {
 			id: partId,
 			sessionID: sessionId,
 			messageID: messageId,
 			type: partType,
 			[field]: `${existingText}${text}`,
+			...(metadata ? { metadata } : {}),
 			time: partTime(existingPart, partEventTime),
 		} as TextPart | ReasoningPart
 		this.appendPart(sessionId, messageId, part)

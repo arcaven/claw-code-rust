@@ -15,6 +15,7 @@ import {
 	usePromptInputAttachments,
 	usePromptInputController,
 } from "@devo/ui/components/ai-elements/prompt-input"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@devo/ui/components/tooltip"
 import { cn } from "@devo/ui/lib/utils"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useAtomValue, useSetAtom } from "jotai"
@@ -22,6 +23,8 @@ import {
 	ArrowUpToLineIcon,
 	ChevronUpIcon,
 	GitForkIcon,
+	GoalIcon,
+	ListTodoIcon,
 	Loader2Icon,
 	PlusIcon,
 	Redo2Icon,
@@ -40,7 +43,8 @@ import {
 	useRef,
 	useState,
 } from "react"
-import { messagesFamily, removeMessageAtom } from "../../atoms/messages"
+import { compactionStatusFamily } from "../../atoms/compaction"
+import { messagesFamily } from "../../atoms/messages"
 import { projectModelsAtom, setProjectModelAtom } from "../../atoms/preferences"
 import type { SessionSetupPhase } from "../../atoms/sessions"
 import { removePermissionAtom, sessionFamily } from "../../atoms/sessions"
@@ -66,7 +70,7 @@ import {
 import type { ChatTurn } from "../../hooks/use-session-chat"
 import { createLogger } from "../../lib/logger"
 import { computeTurnWorkTimeSplit, formatWorkDuration } from "../../lib/session-metrics"
-import type { Agent, FileAttachment, FilePart, QuestionAnswer, TextPart } from "../../lib/types"
+import type { Agent, FileAttachment, QuestionAnswer } from "../../lib/types"
 import { persistRuntimeModelConfigOption, persistRuntimeModelSelection } from "../../lib/model-config-options"
 import { getProjectClient } from "../../services/connection-manager"
 
@@ -83,6 +87,12 @@ import {
 import { PermissionItem } from "./chat-permission"
 import { ChatQuestionFlow } from "./chat-question"
 import { ChatTurnComponent } from "./chat-turn"
+import {
+	ComposerStatusStack,
+	type ComposerGoal,
+	type ComposerGoalStatus,
+	type ComposerQueueItem,
+} from "./composer-status-stack"
 import { ContextItems } from "./context-items"
 import type { MentionOption } from "./mention-popover"
 import { MentionPopover, type MentionPopoverHandle } from "./mention-popover"
@@ -97,8 +107,63 @@ import {
 } from "./prompt-mentions"
 import { PromptToolbar } from "./prompt-toolbar"
 import { SessionTaskList } from "./session-task-list"
-import { SkillPickerDialog } from "./skill-picker-dialog"
 import { SlashCommandPopover, type SlashCommandPopoverHandle } from "./slash-command-popover"
+
+type ComposerTrigger = "goal" | "plan"
+type ComposerGoalAction = "edit" | "pause" | "resume" | "clear"
+type ComposerPromptPart =
+	| { type: "text"; text: string }
+	| { type: "file"; mime: string; filename?: string; url: string }
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" ? (value as Record<string, unknown>) : null
+}
+
+function normalizeGoalStatus(value: unknown): ComposerGoalStatus | null {
+	if (value === "active" || value === "paused" || value === "complete") return value
+	if (value === "budgetLimited" || value === "budget_limited") return "budgetLimited"
+	return null
+}
+
+function normalizeComposerGoal(value: unknown): ComposerGoal | null {
+	const record = objectRecord(value)
+	if (!record) return null
+	const objective = typeof record.objective === "string" ? record.objective.trim() : ""
+	const status = normalizeGoalStatus(record.status)
+	if (!objective || !status || status === "complete") return null
+	return {
+		objective,
+		status,
+		timeUsedSeconds: (record.timeUsedSeconds ?? record.time_used_seconds) as ComposerGoal["timeUsedSeconds"],
+		observedAtMs: Date.now(),
+	}
+}
+
+function promptPartsFromTextAndFiles(text: string, files?: FileAttachment[]): ComposerPromptPart[] {
+	const parts: ComposerPromptPart[] = [{ type: "text", text }]
+	for (const file of files ?? []) {
+		parts.push({
+			type: "file",
+			mime: file.mediaType ?? "application/octet-stream",
+			filename: file.filename,
+			url: file.url,
+		})
+	}
+	return parts
+}
+
+function chatTurnUserText(turn: ChatTurn): string {
+	return turn.userMessage.parts
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("\n")
+		.trim()
+}
+
+function chatTurnUserCreatedAt(turn: ChatTurn): number {
+	const created = turn.userMessage.info.time?.created
+	return typeof created === "number" && Number.isFinite(created) ? created : 0
+}
 
 /**
  * Small "+" button that opens the file picker for attachments.
@@ -114,6 +179,52 @@ function AttachButton({ disabled }: { disabled?: boolean }) {
 		>
 			<PlusIcon className="size-4" />
 		</PromptInputButton>
+	)
+}
+
+function ComposerTriggerChip({
+	trigger,
+	onRemove,
+}: {
+	trigger: ComposerTrigger
+	onRemove: () => void
+}) {
+	const isPlan = trigger === "plan"
+	const Icon = isPlan ? ListTodoIcon : GoalIcon
+	const label = isPlan ? "Plan" : "Goal"
+	const description = isPlan ? "Create a plan" : "Set a goal"
+
+	return (
+		<Tooltip>
+			<TooltipTrigger
+				render={
+					<div className="group inline-flex h-7 items-center gap-1 rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" />
+				}
+			>
+				<button
+					type="button"
+					aria-label={`Remove ${label} trigger`}
+					onClick={onRemove}
+					// User requirement: hover replaces the trigger icon in-place with
+					// the close affordance, so the chip text never shifts.
+					className="pointer-events-none relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground transition-colors group-focus-within:pointer-events-auto group-focus-within:text-foreground group-hover:pointer-events-auto group-hover:text-foreground focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+				>
+					<Icon
+						className="size-3.5 stroke-[1.5] opacity-100 transition-opacity group-focus-within:opacity-0 group-hover:opacity-0"
+						aria-hidden="true"
+					/>
+					<XIcon
+						className="absolute size-3.5 stroke-[1.5] opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
+						aria-hidden="true"
+					/>
+				</button>
+				<span>{label}</span>
+			</TooltipTrigger>
+			<TooltipContent side="top" align="start">
+				<div>{description}</div>
+				{isPlan && <div className="text-[11px] opacity-70">Shift + Tab to toggle</div>}
+			</TooltipContent>
+		</Tooltip>
 	)
 }
 
@@ -549,6 +660,7 @@ export function ChatView({
 	const sessionEntry = useAtomValue(sessionFamily(agent.sessionId))
 	const sessionError = sessionEntry?.error
 	const setupPhase = sessionEntry?.setupPhase
+	const compactionStatus = useAtomValue(compactionStatusFamily(agent.sessionId))
 
 	useLayoutEffect(() => {
 		if (setupPhase) {
@@ -651,52 +763,6 @@ export function ChatView({
 		[onDeny, removePermission],
 	)
 
-	const handleSendNow = useCallback(
-		async (turn: ChatTurn) => {
-			if (!isWorking) return
-
-			// Extract text and files from the queued turn BEFORE aborting, because
-			// the abort may clean up state that we need.
-			const text = turn.userMessage.parts
-				.filter((p): p is TextPart => p.type === "text" && !p.synthetic)
-				.map((p) => p.text)
-				.join("\n")
-			const files: FileAttachment[] = turn.userMessage.parts
-				.filter((p): p is FilePart => p.type === "file")
-				.map((p) => ({
-					type: "file" as const,
-					url: p.url,
-					mediaType: p.mime,
-					filename: p.filename,
-				}))
-
-			if (!text.trim()) return
-
-			// 1. Abort the currently running turn
-			if (onStop) {
-				await onStop(agent)
-			}
-
-			// 2. Remove the orphaned message from the local store to prevent
-			// duplicates. After an abort the server discards queued prompt
-			// callbacks, so the user message is persisted on the server but no
-			// response will be generated. When we re-send below, a new user
-			// message + optimistic entry will be created. The server's loop
-			// reads full history and will respond to the newest user message,
-			// effectively ignoring the orphaned one in the context.
-			appStore.set(removeMessageAtom, {
-				sessionId: agent.sessionId,
-				messageId: turn.userMessage.info.id,
-			})
-
-			// 3. Re-send the queued message so the server actually processes it.
-			if (onSendMessage) {
-				await onSendMessage(agent, text, { files: files.length > 0 ? files : undefined })
-			}
-		},
-		[onStop, onSendMessage, isWorking, agent],
-	)
-
 	// Keyboard shortcuts for undo/redo
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -756,12 +822,12 @@ export function ChatView({
 				agent={agent}
 				pendingPermission={index === turns.length - 1 ? effectivePermission : undefined}
 				isConnected={isConnected}
+				compactionStatus={compactionStatus}
 				stepsExpanded={expandedStepTurnIds.has(turn.id)}
 				onStepsExpandedChange={handleStepsExpandedChange}
 				onApprovePermission={handleApprovePermission}
 				onDenyPermission={handleDenyPermission}
 				onRevertToMessage={onRevertToMessage}
-				onSendNow={isWorking ? handleSendNow : undefined}
 				onForkFromTurn={
 					onForkFromTurn
 						? () => {
@@ -776,10 +842,10 @@ export function ChatView({
 		[
 			agent,
 			effectivePermission,
+			compactionStatus,
 			expandedStepTurnIds,
 			handleApprovePermission,
 			handleDenyPermission,
-			handleSendNow,
 			handleStepsExpandedChange,
 			isConnected,
 			isWorking,
@@ -897,12 +963,10 @@ export function ChatView({
 						onReplyQuestion={onReplyQuestion}
 						onRejectQuestion={onRejectQuestion}
 						canRedo={canRedo}
-						onUndo={onUndo}
 						onRedo={onRedo}
 						isReverted={isReverted}
 						scrollRef={scrollRef}
 						reviewPanelOpen={reviewPanelOpen}
-						onForkFromTurn={onForkFromTurn}
 					/>
 				</div>
 			)}
@@ -934,13 +998,10 @@ interface ChatInputSectionProps {
 	onReplyQuestion?: ChatViewProps["onReplyQuestion"]
 	onRejectQuestion?: ChatViewProps["onRejectQuestion"]
 	canRedo?: boolean
-	onUndo?: () => Promise<string | undefined>
 	onRedo?: () => Promise<void>
 	isReverted?: boolean
 	scrollRef: React.RefObject<ScrollHandle | null>
 	reviewPanelOpen?: boolean
-	/** Fork the current session (full fork, no cutoff) */
-	onForkFromTurn?: (messageId?: string) => Promise<void>
 }
 
 function ChatInputSection({
@@ -958,14 +1019,79 @@ function ChatInputSection({
 	onReplyQuestion,
 	onRejectQuestion,
 	canRedo,
-	onUndo,
 	onRedo,
 	isReverted,
 	scrollRef,
 	reviewPanelOpen,
-	onForkFromTurn,
 }: ChatInputSectionProps) {
 	const [sending, setSending] = useState(false)
+	const [activeTrigger, setActiveTrigger] = useState<ComposerTrigger | null>(null)
+	const [activeGoal, setActiveGoal] = useState<ComposerGoal | null>(null)
+	const [goalAction, setGoalAction] = useState<ComposerGoalAction | null>(null)
+	const [queueItems, setQueueItems] = useState<ComposerQueueItem[]>([])
+
+	// User requirement: the /goal footer chip is only an input trigger;
+	// the composer-adjacent status row reflects the real session goal state.
+	useEffect(() => {
+		setActiveTrigger(null)
+		setActiveGoal(null)
+		setGoalAction(null)
+		setQueueItems([])
+	}, [agent.sessionId])
+
+	useEffect(() => {
+		setQueueItems((current) =>
+			current.filter((item) => {
+				if (item.status !== "queued") return true
+				const createdAt = item.createdAtMs ?? 0
+				return !turns.some(
+					(turn) =>
+						chatTurnUserText(turn) === item.text && chatTurnUserCreatedAt(turn) >= createdAt - 1_000,
+				)
+			}),
+		)
+	}, [turns])
+
+	const loadGoalStatus = useCallback(async (): Promise<ComposerGoal | null> => {
+		if (!agent.directory) return null
+		const client = getProjectClient(agent.directory)
+		if (!client?.goal?.status) return null
+		const result = await client.goal.status({ sessionID: agent.sessionId })
+		return normalizeComposerGoal(result.data)
+	}, [agent.directory, agent.sessionId])
+
+	const refreshGoalStatus = useCallback(async () => {
+		try {
+			setActiveGoal(await loadGoalStatus())
+		} catch (err) {
+			log.error("goal.status failed", { sessionId: agent.sessionId }, err)
+		}
+	}, [agent.sessionId, loadGoalStatus])
+
+	useEffect(() => {
+		let disposed = false
+		const load = async () => {
+			try {
+				const nextGoal = await loadGoalStatus()
+				if (!disposed) setActiveGoal(nextGoal)
+			} catch (err) {
+				if (!disposed) {
+					setActiveGoal(null)
+					log.error("goal.status failed", { sessionId: agent.sessionId }, err)
+				}
+			}
+		}
+		void load()
+		const interval = setInterval(load, 15_000)
+		return () => {
+			disposed = true
+			clearInterval(interval)
+		}
+	}, [agent.sessionId, loadGoalStatus])
+
+	useEffect(() => {
+		if (!isWorking) void refreshGoalStatus()
+	}, [isWorking, refreshGoalStatus])
 
 	// Tree-scoped interactive requests — bubbles up from sub-agent sessions.
 	// These replace the direct `agent.permissions` / `agent.questions` arrays
@@ -1181,6 +1307,167 @@ function ChatInputSection({
 		getText: () => string
 	} | null>(null)
 
+	const focusComposer = useCallback(() => {
+		requestAnimationFrame(() => {
+			const textarea = document.querySelector<HTMLTextAreaElement>("textarea[data-prompt-input]")
+			textarea?.focus()
+		})
+	}, [])
+
+	const handleEditGoal = useCallback(() => {
+		if (!activeGoal) return
+		setActiveTrigger("goal")
+		slashCommandRef.current?.setText(activeGoal.objective)
+		focusComposer()
+	}, [activeGoal, focusComposer])
+
+	const handlePauseGoal = useCallback(async () => {
+		if (!agent.directory || goalAction !== null) return
+		const client = getProjectClient(agent.directory)
+		if (!client?.goal?.pause) return
+		setGoalAction("pause")
+		try {
+			const result = await client.goal.pause({ sessionID: agent.sessionId })
+			setActiveGoal(normalizeComposerGoal(result.data))
+		} catch (err) {
+			log.error("goal.pause failed", { sessionId: agent.sessionId }, err)
+		} finally {
+			setGoalAction(null)
+		}
+	}, [agent.directory, agent.sessionId, goalAction])
+
+	const handleResumeGoal = useCallback(async () => {
+		if (!agent.directory || goalAction !== null) return
+		const client = getProjectClient(agent.directory)
+		if (!client?.goal?.resume) return
+		setGoalAction("resume")
+		try {
+			const result = await client.goal.resume({ sessionID: agent.sessionId })
+			setActiveGoal(normalizeComposerGoal(result.data))
+		} catch (err) {
+			log.error("goal.resume failed", { sessionId: agent.sessionId }, err)
+		} finally {
+			setGoalAction(null)
+		}
+	}, [agent.directory, agent.sessionId, goalAction])
+
+	const handleClearGoal = useCallback(async () => {
+		if (!agent.directory || goalAction !== null) return
+		const client = getProjectClient(agent.directory)
+		if (!client?.goal?.clear) return
+		setGoalAction("clear")
+		try {
+			await client.goal.clear({ sessionID: agent.sessionId })
+			setActiveGoal(null)
+		} catch (err) {
+			log.error("goal.clear failed", { sessionId: agent.sessionId }, err)
+		} finally {
+			setGoalAction(null)
+		}
+	}, [agent.directory, agent.sessionId, goalAction])
+
+	const handleSteerQueueItem = useCallback(
+		async (item: ComposerQueueItem) => {
+			if (!agent.directory || !item.queuedInputId || !item.activeTurnId) return
+			const client = getProjectClient(agent.directory)
+			if (!client?.turn?.steerQueued) return
+			setQueueItems((current) =>
+				current.map((entry) => (entry.id === item.id ? { ...entry, status: "steering" } : entry)),
+			)
+			try {
+				await client.turn.steerQueued({
+					sessionID: agent.sessionId,
+					expectedTurnID: item.activeTurnId,
+					queuedInputID: item.queuedInputId,
+				})
+				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
+			} catch (err) {
+				log.error("turn.queue.steer failed", { sessionId: agent.sessionId }, err)
+				setQueueItems((current) =>
+					current.map((entry) =>
+						entry.id === item.id
+							? { ...entry, status: "error", error: err instanceof Error ? err.message : "Steer failed" }
+							: entry,
+					),
+				)
+			}
+		},
+		[agent.directory, agent.sessionId],
+	)
+
+	const handleRemoveQueueItem = useCallback(
+		async (item: ComposerQueueItem) => {
+			if (!agent.directory || !item.queuedInputId) {
+				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
+				return
+			}
+			const client = getProjectClient(agent.directory)
+			if (!client?.turn?.removeQueued) return
+			setQueueItems((current) =>
+				current.map((entry) => (entry.id === item.id ? { ...entry, status: "removing" } : entry)),
+			)
+			try {
+				await client.turn.removeQueued({
+					sessionID: agent.sessionId,
+					queuedInputID: item.queuedInputId,
+				})
+				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
+			} catch (err) {
+				log.error("turn.queue.remove failed", { sessionId: agent.sessionId }, err)
+				setQueueItems((current) =>
+					current.map((entry) =>
+						entry.id === item.id
+							? { ...entry, status: "error", error: err instanceof Error ? err.message : "Remove failed" }
+							: entry,
+					),
+				)
+			}
+		},
+		[agent.directory, agent.sessionId],
+	)
+
+	const handleEditQueueItem = useCallback(
+		async (item: ComposerQueueItem) => {
+			if ((item.fileCount ?? 0) > 0) return
+			if (item.queuedInputId) {
+				if (!agent.directory) return
+				const client = getProjectClient(agent.directory)
+				if (!client?.turn?.removeQueued) return
+				setQueueItems((current) =>
+					current.map((entry) =>
+						entry.id === item.id ? { ...entry, status: "removing" } : entry,
+					),
+				)
+				try {
+					await client.turn.removeQueued({
+						sessionID: agent.sessionId,
+						queuedInputID: item.queuedInputId,
+					})
+				} catch (err) {
+					log.error("turn.queue.edit remove failed", { sessionId: agent.sessionId }, err)
+					setQueueItems((current) =>
+						current.map((entry) =>
+							entry.id === item.id
+								? {
+										...entry,
+										status: "error",
+										error: err instanceof Error ? err.message : "Edit failed",
+									}
+								: entry,
+						),
+					)
+					return
+				}
+				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
+			} else {
+				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
+			}
+			slashCommandRef.current?.setText(item.text)
+			focusComposer()
+		},
+		[agent.directory, agent.sessionId, focusComposer],
+	)
+
 	const handleSlashCommand = useCallback(
 		async (text: string): Promise<boolean> => {
 			const trimmed = text.trim()
@@ -1188,18 +1475,12 @@ function ChatInputSection({
 
 			const spaceIndex = trimmed.indexOf(" ")
 			const cmdName = spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex)
-			const cmdArgs = spaceIndex === -1 ? "" : trimmed.slice(spaceIndex + 1).trim()
 
-			// Client-only commands that don't go through the server
+			// Product requirement: Desktop slash commands are limited to first-party
+			// entries. Compact executes immediately; Goal/Plan become footer trigger
+			// chips; Research stays as slash text so ACP can run it after a question.
 			switch (cmdName.toLowerCase()) {
-				case "undo":
-					if (onUndo) await onUndo()
-					return true
-				case "redo":
-					if (onRedo) await onRedo()
-					return true
 				case "compact":
-				case "summarize":
 					if (agent.directory && effectiveModel) {
 						const client = getProjectClient(agent.directory)
 						if (client) {
@@ -1215,29 +1496,53 @@ function ChatInputSection({
 						}
 					}
 					return true
+				case "goal":
+					setActiveTrigger("goal")
+					return true
+				case "plan":
+					setActiveTrigger("plan")
+					return true
+				case "research":
+					return false
 				default:
-					break
+					return false
 			}
-
-			if (agent.directory) {
-				const client = getProjectClient(agent.directory)
-				if (client) {
-					try {
-						await client.session.command({
-							sessionID: agent.sessionId,
-							command: cmdName,
-							arguments: cmdArgs,
-						})
-						return true
-					} catch {
-						// Not a recognized server command
-					}
-				}
-			}
-
-			return false
 		},
-		[agent, onUndo, onRedo, effectiveModel],
+		[agent.directory, agent.sessionId, effectiveModel],
+	)
+
+	const submitTriggeredPrompt = useCallback(
+		async (trigger: ComposerTrigger, text: string, files?: FileAttachment[]) => {
+			if (!agent.directory) throw new Error("No project directory for slash trigger")
+			const client = getProjectClient(agent.directory)
+			if (!client) throw new Error("Not connected to Devo server")
+			const parts: Array<
+				{ type: "text"; text: string } | {
+					type: "file"
+					mime: string
+					filename?: string
+					url: string
+				}
+			> = [{ type: "text", text: `/${trigger} ${text.trim()}` }]
+			for (const file of files ?? []) {
+				parts.push({
+					type: "file",
+					mime: file.mediaType ?? "application/octet-stream",
+					filename: file.filename,
+					url: file.url,
+				})
+			}
+			await client.session.promptAsync({
+				sessionID: agent.sessionId,
+				parts,
+				model: effectiveModel
+					? { providerID: effectiveModel.providerID, modelID: effectiveModel.modelID }
+					: undefined,
+				agent: selectedAgent || undefined,
+				variant: selectedVariant,
+			})
+		},
+		[agent.directory, agent.sessionId, effectiveModel, selectedAgent, selectedVariant],
 	)
 
 	const handleSend = useCallback(
@@ -1248,7 +1553,7 @@ function ChatInputSection({
 				sending,
 				sessionId: agent.sessionId,
 			})
-			if (!text.trim() || !onSendMessage || sending) {
+			if (!text.trim() || (!onSendMessage && !activeTrigger) || sending) {
 				log.warn("handleSend bailed", {
 					emptyText: !text.trim(),
 					noOnSendMessage: !onSendMessage,
@@ -1257,7 +1562,7 @@ function ChatInputSection({
 				return
 			}
 
-			if (text.trim().startsWith("/")) {
+			if (!activeTrigger && text.trim().startsWith("/")) {
 				const handled = await handleSlashCommand(text)
 				if (handled) {
 					slashCommandRef.current?.setText("")
@@ -1293,15 +1598,29 @@ function ChatInputSection({
 				const commentPrefix = serializeCommentsForChat(diffComments)
 				const finalText = commentPrefix ? `${commentPrefix}${text.trim()}` : text.trim()
 
-				await onSendMessage(agent, finalText, {
-					model: effectiveModel ?? undefined,
-					agentName: selectedAgent || undefined,
-					variant: selectedVariant,
-					files,
-				})
-				log.debug("handleSend onSendMessage completed", { sessionId: agent.sessionId })
+				if (activeTrigger) {
+					const trigger = activeTrigger
+					await submitTriggeredPrompt(trigger, finalText, files)
+					log.debug("handleSend triggered prompt completed", {
+						sessionId: agent.sessionId,
+						trigger,
+					})
+					if (trigger === "goal") {
+						setTimeout(() => void refreshGoalStatus(), 400)
+						setTimeout(() => void refreshGoalStatus(), 1_200)
+					}
+				} else {
+					await onSendMessage?.(agent, finalText, {
+						model: effectiveModel ?? undefined,
+						agentName: selectedAgent || undefined,
+						variant: selectedVariant,
+						files,
+					})
+					log.debug("handleSend onSendMessage completed", { sessionId: agent.sessionId })
+				}
 				clearDraft()
 				setMentions([])
+				setActiveTrigger(null)
 				// Clear diff comments after successful send
 				if (diffComments.length > 0) {
 					setDiffComments([])
@@ -1323,6 +1642,9 @@ function ChatInputSection({
 			selectedAgent,
 			selectedVariant,
 			clearDraft,
+			activeTrigger,
+			submitTriggeredPrompt,
+			refreshGoalStatus,
 			handleSlashCommand,
 			scrollRef,
 			diffComments,
@@ -1360,35 +1682,7 @@ function ChatInputSection({
 	const [mentionOpen, setMentionOpen] = useState(false)
 	const [mentionQuery, setMentionQuery] = useState("")
 
-	// --- Skills picker dialog ---
-	const [skillsDialogOpen, setSkillsDialogOpen] = useState(false)
 
-	const handleForkViaSlash = useCallback(async () => {
-		const ctrl = slashCommandRef.current
-		if (ctrl) ctrl.setText("")
-		await onForkFromTurn?.()
-	}, [onForkFromTurn])
-
-	const handleSkillsOpen = useCallback(() => {
-		const ctrl = slashCommandRef.current
-		if (ctrl) ctrl.setText("")
-		setSkillsDialogOpen(true)
-	}, [])
-
-	const handleSkillSelect = useCallback((skillName: string) => {
-		const ctrl = slashCommandRef.current
-		if (ctrl) {
-			ctrl.setText(`/${skillName} `)
-		}
-		requestAnimationFrame(() => {
-			const ta = document.querySelector<HTMLTextAreaElement>("textarea[data-prompt-input]")
-			if (ta) {
-				ta.focus()
-				const len = `/${skillName} `.length
-				ta.setSelectionRange(len, len)
-			}
-		})
-	}, [])
 
 	const slashPopoverRef = useRef<SlashCommandPopoverHandle>(null)
 	const mentionPopoverRef = useRef<MentionPopoverHandle>(null)
@@ -1491,6 +1785,14 @@ function ChatInputSection({
 
 	const handleTextareaKeyDown = useCallback(
 		(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+			if (e.key === "Tab" && e.shiftKey) {
+				e.preventDefault()
+				handleSlashClose()
+				handleMentionClose()
+				setActiveTrigger((current) => (current === "plan" ? null : "plan"))
+				return
+			}
+
 			// Always delegate to popovers first — they guard on their own `open` prop
 			// internally, so we don't need to check slashOpen/mentionOpen here.
 			// This avoids stale-closure issues where the parent's boolean lags behind
@@ -1502,7 +1804,7 @@ function ChatInputSection({
 				handleEscapeAbort()
 			}
 		},
-		[handleEscapeAbort],
+		[handleEscapeAbort, handleSlashClose, handleMentionClose],
 	)
 
 	// Width constraint class: remove max-w when review panel is open
@@ -1582,10 +1884,7 @@ function ChatInputSection({
 								query={slashQuery}
 								open={slashOpen}
 								enabled={isConnected}
-								directory={agent.directory}
 								onSelect={handleSlashSelect}
-								onSkillsOpen={handleSkillsOpen}
-								onFork={handleForkViaSlash}
 								onClose={handleSlashClose}
 							/>
 								<MentionPopover
@@ -1597,8 +1896,19 @@ function ChatInputSection({
 									onSelect={handleMentionSelect}
 									onClose={handleMentionClose}
 								/>
+								<ComposerStatusStack
+									goal={activeGoal}
+									goalAction={goalAction}
+									onEditGoal={handleEditGoal}
+									onPauseGoal={handlePauseGoal}
+									onResumeGoal={handleResumeGoal}
+									onClearGoal={handleClearGoal}
+								/>
 								<PromptInput
-									className="devo-composer bg-background/95 shadow-[0_18px_52px_rgba(0,0,0,0.10)] dark:shadow-[0_18px_58px_rgba(0,0,0,0.34)]"
+									className={cn(
+										"devo-composer bg-background/95 shadow-[0_18px_52px_rgba(0,0,0,0.10)] dark:shadow-[0_18px_58px_rgba(0,0,0,0.34)]",
+										activeGoal && "rounded-t-none border-t-border/70",
+									)}
 									accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
 									multiple
 									maxFileSize={10 * 1024 * 1024}
@@ -1646,6 +1956,12 @@ function ChatInputSection({
 												onSelectVariant={handleVariantSelect}
 												disabled={!isConnected}
 											/>
+											{activeTrigger && (
+												<ComposerTriggerChip
+													trigger={activeTrigger}
+													onRemove={() => setActiveTrigger(null)}
+												/>
+											)}
 										</PromptInputTools>
 										<PromptInputSubmit
 											disabled={!canSend}
@@ -1669,13 +1985,6 @@ function ChatInputSection({
 				</div>
 			</div>
 
-			{/* Skills picker dialog — triggered by /skills command */}
-			<SkillPickerDialog
-				open={skillsDialogOpen}
-				onOpenChange={setSkillsDialogOpen}
-				directory={agent.directory}
-				onSelect={handleSkillSelect}
-			/>
 		</>
 	)
 }

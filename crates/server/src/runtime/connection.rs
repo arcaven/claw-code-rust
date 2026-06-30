@@ -403,6 +403,13 @@ impl ServerRuntime {
             Some(ClientMethod::TurnSteer) => {
                 Some(self.handle_turn_steer(connection_id, id?, params).await)
             }
+            Some(ClientMethod::TurnQueueRemove) => {
+                Some(self.handle_turn_queue_remove(id?, params).await)
+            }
+            Some(ClientMethod::TurnQueueSteer) => Some(
+                self.handle_turn_queue_steer(connection_id, id?, params)
+                    .await,
+            ),
             Some(ClientMethod::WorkspaceChangesRead) => {
                 Some(self.handle_workspace_changes_read(id?, params).await)
             }

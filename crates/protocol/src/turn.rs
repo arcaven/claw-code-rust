@@ -234,6 +234,31 @@ pub struct TurnSteerResult {
     pub disposition: TurnInputDisposition,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct TurnQueueRemoveParams {
+    pub session_id: SessionId,
+    pub queued_input_id: PendingInputId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct TurnQueueRemoveResult {
+    pub removed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct TurnQueueSteerParams {
+    pub session_id: SessionId,
+    pub expected_turn_id: TurnId,
+    pub queued_input_id: PendingInputId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct TurnQueueSteerResult {
+    pub turn_id: TurnId,
+    #[serde(default = "default_steered_disposition")]
+    pub disposition: TurnInputDisposition,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnKind {

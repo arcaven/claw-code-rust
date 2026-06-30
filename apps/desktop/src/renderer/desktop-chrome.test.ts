@@ -172,6 +172,26 @@ describe("desktop chrome CSS", () => {
 		expect(windowsContentAreaDeclarations).toEqual({});
 	});
 
+	test("Windows titlebar stays aligned with the side panel chrome after startup", async () => {
+		const css = await readFile(cssPath, "utf8");
+		const titlebarDeclarations = declarationsForSelector(
+			css,
+			':root[data-platform="win32"][data-window-focused="true"] body::before',
+		);
+		const sidebarInsetDeclarations = declarationsForSelector(
+			css,
+			':root[data-platform="win32"][data-window-focused="true"] [data-slot="sidebar-inset"]',
+		);
+
+		expect(titlebarDeclarations["background-color"]).toBe(
+			"var(--devo-windows-chrome-bg)",
+		);
+		expect(sidebarInsetDeclarations["background-color"]).toBe(
+			"var(--devo-windows-chrome-bg) !important",
+		);
+		expect(css).not.toContain("data-opening-route");
+	});
+
 	test("macOS glass sidebar inset extends to the right and bottom window edges", async () => {
 		const css = await readFile(cssPath, "utf8");
 		const selectors = [

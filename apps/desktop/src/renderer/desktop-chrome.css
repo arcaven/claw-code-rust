@@ -111,6 +111,8 @@
 	height: var(--devo-titlebar-height, 40px);
 	pointer-events: none;
 	background-color: var(--devo-windows-chrome-bg);
+	/* Product requirement - after the splash enters the app, the Windows topbar
+	   should use the same chrome surface as the left side panel. */
 	transition: background-color var(--duration-fast, 150ms) ease;
 }
 
@@ -215,6 +217,12 @@
 
 .devo-composer-shell {
 	overflow: hidden;
+}
+
+.devo-composer-shell[data-popover-open="true"] {
+	/* User requirement: new-session slash and mention popovers must remain visible
+	   above the rounded composer shell instead of being clipped by the shell. */
+	overflow: visible;
 }
 
 .devo-composer [data-slot="input-group"] {

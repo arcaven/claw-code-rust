@@ -22,6 +22,7 @@ use devo_core::TurnId;
 use devo_core::TurnStatus;
 use devo_protocol::ACP_SESSION_UPDATE_METHOD;
 use devo_protocol::AcpStopReason;
+use devo_protocol::AgentListParams;
 use devo_protocol::AgentToolPolicy;
 use devo_protocol::CloseAgentParams;
 use devo_protocol::CommandExecExitedPayload;
@@ -87,6 +88,8 @@ use crate::events::PlanStep;
 use crate::events::PlanStepStatus;
 use crate::events::ResearchArtifactMetadata;
 use crate::events::SessionListEntry;
+use crate::events::SubagentMonitorAgent;
+use crate::events::SubagentMonitorEvent;
 use crate::events::TextItemKind;
 use crate::events::TranscriptItem;
 use crate::events::TranscriptItemKind;
@@ -95,10 +98,18 @@ use crate::events::WorkerEvent;
 mod acp_events;
 mod subagent_events;
 
+#[cfg(test)]
 use acp_events::acp_terminal_output_event;
+use acp_events::acp_terminal_output_event_with_session;
+use acp_events::parse_acp_session_notification;
+use acp_events::session_metadata_from_acp_update;
+use acp_events::spawn_agent_result_from_acp_update;
+use acp_events::subagent_monitor_events_from_acp_session_notification_with_terminal_state;
 #[cfg(test)]
 use acp_events::worker_events_from_acp_notification;
+#[cfg(test)]
 use acp_events::worker_events_from_acp_notification_with_terminal_state;
+use acp_events::worker_events_from_acp_session_notification_with_terminal_state;
 
 const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_millis(100);
 const WORKER_ABORT_JOIN_TIMEOUT: Duration = Duration::from_millis(500);
@@ -132,6 +143,58 @@ fn acp_terminal_snapshot_delta(
     };
     *previous_output = output;
     (!delta.is_empty()).then_some(delta)
+}
+
+async fn maybe_discover_spawned_subagent_from_acp_update(
+    update: &devo_protocol::AcpSessionUpdate,
+    client: &mut StdioServerClient,
+    parent_session_id: SessionId,
+    child_agent_sessions: &mut HashSet<SessionId>,
+    event_tx: &mpsc::UnboundedSender<WorkerEvent>,
+) {
+    let Some(spawn_result) = spawn_agent_result_from_acp_update(update) else {
+        return;
+    };
+    let child_session_id = spawn_result.child_session_id;
+    if child_agent_sessions.contains(&child_session_id) {
+        return;
+    }
+
+    let listed_agent = match client
+        .agent_list(AgentListParams {
+            session_id: parent_session_id,
+            path_prefix: None,
+        })
+        .await
+    {
+        Ok(result) => result
+            .agents
+            .into_iter()
+            .find(|agent| agent.session_id == child_session_id)
+            .and_then(subagent_events::agent_from_info),
+        Err(error) => {
+            tracing::debug!(
+                %error,
+                %parent_session_id,
+                %child_session_id,
+                "failed to hydrate spawned subagent from agent/list"
+            );
+            None
+        }
+    };
+
+    let agent = listed_agent.unwrap_or(SubagentMonitorAgent {
+        session_id: child_session_id,
+        parent_session_id,
+        agent_path: spawn_result.agent_path,
+        nickname: spawn_result.agent_nickname,
+        role: "default".to_string(),
+        status: spawn_result.status,
+        last_task_message: None,
+    });
+    if child_agent_sessions.insert(agent.session_id) {
+        let _ = event_tx.send(WorkerEvent::SubagentDiscovered { agent });
+    }
 }
 
 /// Immutable runtime configuration used to construct the background server client worker.
@@ -775,7 +838,6 @@ async fn run_worker_inner(
     let mut saw_usage_update_for_turn = false;
     let mut latest_completed_agent_message: Option<String> = None;
     let mut child_agent_sessions: HashSet<SessionId> = HashSet::new();
-    let mut latest_completed_agent_messages_by_child: HashMap<SessionId, String> = HashMap::new();
     let mut btw_agent_sessions: HashMap<SessionId, BtwQuestionState> = HashMap::new();
     let mut research_artifacts: HashMap<devo_core::ItemId, ResearchArtifactMetadata> =
         HashMap::new();
@@ -783,6 +845,7 @@ async fn run_worker_inner(
     let mut active_reference_search_id: Option<ReferenceSearchId> = None;
     let mut active_shell_process_ids: HashSet<String> = HashSet::new();
     let mut visible_acp_terminal_ids: HashSet<String> = HashSet::new();
+    let mut visible_acp_terminal_session_ids: HashMap<String, SessionId> = HashMap::new();
     let mut private_acp_terminal_ids: HashSet<String> = HashSet::new();
     let mut pending_acp_terminal_output: HashMap<String, String> = HashMap::new();
     let mut polled_acp_terminal_output: HashMap<String, String> = HashMap::new();
@@ -1116,7 +1179,11 @@ async fn run_worker_inner(
                         session_id = None;
                         child_agent_sessions.clear();
                         btw_agent_sessions.clear();
-                        latest_completed_agent_messages_by_child.clear();
+                        visible_acp_terminal_ids.clear();
+                        visible_acp_terminal_session_ids.clear();
+                        private_acp_terminal_ids.clear();
+                        pending_acp_terminal_output.clear();
+                        polled_acp_terminal_output.clear();
                         active_turn_id = None;
                         active_reference_search_id = None;
                         last_query_total_tokens = 0;
@@ -1573,7 +1640,11 @@ async fn run_worker_inner(
                                 session_id = Some(next_session_id);
                                 child_agent_sessions.clear();
                                 btw_agent_sessions.clear();
-                                latest_completed_agent_messages_by_child.clear();
+                                visible_acp_terminal_ids.clear();
+                                visible_acp_terminal_session_ids.clear();
+                                private_acp_terminal_ids.clear();
+                                pending_acp_terminal_output.clear();
+                                polled_acp_terminal_output.clear();
                                 session_cwd = result.session.cwd.clone();
                                 input_history_cursor = None;
                                 let active_agent_label =
@@ -1822,7 +1893,11 @@ async fn run_worker_inner(
                                         session_id = Some(next_session_id);
                                         child_agent_sessions.clear();
                                         btw_agent_sessions.clear();
-                                        latest_completed_agent_messages_by_child.clear();
+                                        visible_acp_terminal_ids.clear();
+                                        visible_acp_terminal_session_ids.clear();
+                                        private_acp_terminal_ids.clear();
+                                        pending_acp_terminal_output.clear();
+                                        polled_acp_terminal_output.clear();
                                         session_cwd = resumed.session.cwd.clone();
                                         input_history_cursor = None;
                                         let active_agent_label =
@@ -2206,19 +2281,34 @@ async fn run_worker_inner(
                                 snapshot.output,
                                 snapshot.truncated,
                             ) {
-                                let _ = event_tx.send(WorkerEvent::ToolOutputDelta {
-                                    tool_use_id: terminal_id.clone(),
-                                    delta,
-                                });
+                                if let Some(owner_session_id) =
+                                    visible_acp_terminal_session_ids.get(&terminal_id).copied()
+                                    && Some(owner_session_id) != session_id
+                                {
+                                    let _ = event_tx.send(WorkerEvent::SubagentMonitor {
+                                        event: SubagentMonitorEvent::ToolOutputDelta {
+                                            session_id: owner_session_id,
+                                            tool_use_id: terminal_id.clone(),
+                                            delta,
+                                        },
+                                    });
+                                } else {
+                                    let _ = event_tx.send(WorkerEvent::ToolOutputDelta {
+                                        tool_use_id: terminal_id.clone(),
+                                        delta,
+                                    });
+                                }
                             }
                             if snapshot.exit_status.is_some() {
                                 visible_acp_terminal_ids.remove(&terminal_id);
+                                visible_acp_terminal_session_ids.remove(&terminal_id);
                                 polled_acp_terminal_output.remove(&terminal_id);
                             }
                         }
                         Err(error) => {
                             tracing::debug!(%error, terminal_id, "failed to poll ACP terminal output");
                             visible_acp_terminal_ids.remove(&terminal_id);
+                            visible_acp_terminal_session_ids.remove(&terminal_id);
                             polled_acp_terminal_output.remove(&terminal_id);
                         }
                     }
@@ -2273,23 +2363,62 @@ async fn run_worker_inner(
                                 private_acp_terminal_ids.insert(terminal_id.to_string());
                                 polled_acp_terminal_output.remove(terminal_id);
                             }
-                            if let Some(event) = acp_terminal_output_event(
+                            if let Some(event) = acp_terminal_output_event_with_session(
                                 &params,
                                 &visible_acp_terminal_ids,
                                 &mut pending_acp_terminal_output,
+                                session_id,
+                                &visible_acp_terminal_session_ids,
                             ) {
                                 let _ = event_tx.send(event);
                             }
                             continue;
                         }
                         if method == ACP_SESSION_UPDATE_METHOD {
-                            for event in worker_events_from_acp_notification_with_terminal_state(
-                                &params,
-                                session_id,
-                                &mut visible_acp_terminal_ids,
-                                &mut pending_acp_terminal_output,
-                            ) {
-                                let _ = event_tx.send(event);
+                            let Some(notification) = parse_acp_session_notification(&params) else {
+                                continue;
+                            };
+                            if let Some(metadata) =
+                                session_metadata_from_acp_update(&notification.update)
+                                && let Some(agent) = subagent_events::agent_from_session(&metadata)
+                                && Some(agent.parent_session_id) == session_id
+                                && child_agent_sessions.insert(agent.session_id)
+                            {
+                                let _ = event_tx.send(WorkerEvent::SubagentDiscovered { agent });
+                            }
+
+                            let notification_session_id = notification.session_id;
+                            if Some(notification_session_id) == session_id {
+                                if let Some(parent_session_id) = session_id {
+                                    maybe_discover_spawned_subagent_from_acp_update(
+                                        &notification.update,
+                                        &mut client,
+                                        parent_session_id,
+                                        &mut child_agent_sessions,
+                                        event_tx,
+                                    )
+                                    .await;
+                                }
+                                for event in worker_events_from_acp_session_notification_with_terminal_state(
+                                    notification,
+                                    &mut visible_acp_terminal_ids,
+                                    &mut pending_acp_terminal_output,
+                                    Some(&mut visible_acp_terminal_session_ids),
+                                ) {
+                                    let _ = event_tx.send(event);
+                                }
+                                continue;
+                            }
+
+                            if child_agent_sessions.contains(&notification_session_id) {
+                                for event in subagent_monitor_events_from_acp_session_notification_with_terminal_state(
+                                    notification,
+                                    &mut visible_acp_terminal_ids,
+                                    &mut pending_acp_terminal_output,
+                                    &mut visible_acp_terminal_session_ids,
+                                ) {
+                                    let _ = event_tx.send(event);
+                                }
                             }
                             continue;
                         }
@@ -2306,27 +2435,10 @@ async fn run_worker_inner(
                         {
                             continue;
                         }
-                        match subagent_events::route_server_event(
-                            session_id,
-                            &child_agent_sessions,
-                            &event,
-                        ) {
-                            subagent_events::RoutedServerEvent::Discovered(agent) => {
-                                child_agent_sessions.insert(agent.session_id);
-                                let _ = event_tx.send(WorkerEvent::SubagentDiscovered { agent });
-                                continue;
-                            }
-                            subagent_events::RoutedServerEvent::Child => {
-                                subagent_events::emit_subagent_event(
-                                    &method,
-                                    event,
-                                    event_tx,
-                                    &mut latest_completed_agent_messages_by_child,
-                                );
-                                continue;
-                            }
-                            subagent_events::RoutedServerEvent::Ignore => continue,
-                            subagent_events::RoutedServerEvent::Parent => {}
+                        if let Some(event_session_id) = event.session_id()
+                            && Some(event_session_id) != session_id
+                        {
+                            continue;
                         }
                         match method.as_str() {
                             "turn/started" => {
@@ -3581,7 +3693,8 @@ fn project_history_items(items: &[SessionHistoryItem]) -> Vec<TranscriptItem> {
                     index += 1;
                     continue;
                 }
-                SessionHistoryMetadata::Edited { .. } => {}
+                SessionHistoryMetadata::Edited { .. }
+                | SessionHistoryMetadata::ResearchArtifact { .. } => {}
             }
         }
         if item.kind == SessionHistoryItemKind::ToolCall
@@ -4415,17 +4528,20 @@ mod tests {
     use crate::events::PlanStep;
     use crate::events::PlanStepStatus;
     use crate::events::SessionListEntry;
+    use crate::events::SubagentMonitorAgent;
+    use crate::events::SubagentMonitorEvent;
     use crate::events::TextItemKind;
     use crate::events::TranscriptItem;
     use crate::events::TranscriptItemKind;
     use crate::events::WorkerEvent;
     use devo_core::ItemId;
     use devo_core::TurnId;
+    use devo_protocol::DEVO_SESSION_META;
+    use devo_protocol::DEVO_TURN_USAGE_META;
     use devo_protocol::SessionHistoryMetadata;
     use devo_protocol::SessionPlanStepStatus;
     use devo_protocol::ThreadGoal;
     use devo_protocol::ThreadGoalStatus;
-    use devo_protocol::TurnKind;
     use devo_server::EventContext;
     use devo_server::ItemDeltaPayload;
     use devo_server::ItemEnvelope;
@@ -5328,6 +5444,66 @@ mod tests {
     }
 
     #[test]
+    fn acp_usage_update_with_devo_meta_emits_legacy_usage_update() {
+        let session_id = SessionId::new();
+        let turn_usage = devo_protocol::TurnUsageUpdatedPayload {
+            session_id,
+            turn_id: TurnId::new(),
+            usage: devo_protocol::TurnUsage {
+                input_tokens: 7,
+                output_tokens: 2,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: Some(6),
+                reasoning_output_tokens: None,
+                total_tokens: Some(11),
+            },
+            total_input_tokens: 70,
+            total_output_tokens: 20,
+            total_tokens: 90,
+            total_cache_read_tokens: 12,
+            last_query_input_tokens: 7,
+            context_window: Some(200_000),
+        };
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            DEVO_TURN_USAGE_META.to_string(),
+            serde_json::to_value(turn_usage).expect("serialize turn usage payload"),
+        );
+
+        let events = worker_events_from_acp_notification(
+            &serde_json::json!({
+                "sessionId": session_id,
+                "update": {
+                    "sessionUpdate": "usage_update",
+                    "used": 90,
+                    "size": 200000,
+                    "_meta": meta
+                }
+            }),
+            Some(session_id),
+        );
+
+        assert_eq!(
+            events,
+            vec![
+                WorkerEvent::AcpUsageUpdated {
+                    used: 90,
+                    size: 200_000,
+                    cost: None,
+                },
+                WorkerEvent::UsageUpdated {
+                    total_input_tokens: 70,
+                    total_output_tokens: 20,
+                    total_tokens: 90,
+                    total_cache_read_tokens: 12,
+                    last_query_total_tokens: 11,
+                    last_query_input_tokens: 7,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn raw_acp_tool_call_emits_visible_tool_events() {
         let session_id = SessionId::new();
         let events = worker_events_from_acp_notification(
@@ -5900,96 +6076,167 @@ mod tests {
     }
 
     #[test]
-    fn route_server_event_discovers_and_routes_child_agents() {
+    fn acp_session_info_update_discovers_child_subagent_metadata() {
         let parent = SessionId::new();
         let child = SessionId::new();
-        let unrelated = SessionId::new();
-        let child_started =
-            devo_server::ServerEvent::SessionStarted(devo_server::SessionEventPayload {
-                session: test_session_metadata(child, Some(parent)),
-            });
-        let mut child_sessions = std::collections::HashSet::new();
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            DEVO_SESSION_META.to_string(),
+            serde_json::to_value(test_session_metadata(child, Some(parent)))
+                .expect("serialize session metadata"),
+        );
 
-        match super::subagent_events::route_server_event(
-            Some(parent),
-            &child_sessions,
-            &child_started,
-        ) {
-            super::subagent_events::RoutedServerEvent::Discovered(agent) => {
-                assert_eq!(agent.session_id, child);
-                child_sessions.insert(agent.session_id);
+        let notification = super::parse_acp_session_notification(&serde_json::json!({
+            "sessionId": child,
+            "update": {
+                "sessionUpdate": "session_info_update",
+                "_meta": meta
             }
-            super::subagent_events::RoutedServerEvent::Parent
-            | super::subagent_events::RoutedServerEvent::Child
-            | super::subagent_events::RoutedServerEvent::Ignore => {
-                panic!("expected child discovery")
-            }
-        }
+        }))
+        .expect("ACP session notification");
+        let metadata = super::session_metadata_from_acp_update(&notification.update)
+            .expect("session metadata");
+        let agent = super::subagent_events::agent_from_session(&metadata).expect("subagent");
 
-        let child_status = devo_server::ServerEvent::SessionStatusChanged(
-            devo_server::SessionStatusChangedPayload {
+        assert_eq!(
+            agent,
+            SubagentMonitorAgent {
                 session_id: child,
-                status: SessionRuntimeStatus::ActiveTurn,
-            },
+                parent_session_id: parent,
+                agent_path: "root/reviewer".to_string(),
+                nickname: "reviewer".to_string(),
+                role: "default".to_string(),
+                status: "idle".to_string(),
+                last_task_message: None,
+            }
         );
-        let unrelated_status = devo_server::ServerEvent::SessionStatusChanged(
-            devo_server::SessionStatusChangedPayload {
-                session_id: unrelated,
-                status: SessionRuntimeStatus::ActiveTurn,
-            },
-        );
-
-        assert!(matches!(
-            super::subagent_events::route_server_event(
-                Some(parent),
-                &child_sessions,
-                &child_status
-            ),
-            super::subagent_events::RoutedServerEvent::Child
-        ));
-        assert!(matches!(
-            super::subagent_events::route_server_event(
-                Some(parent),
-                &child_sessions,
-                &unrelated_status
-            ),
-            super::subagent_events::RoutedServerEvent::Ignore
-        ));
     }
 
     #[test]
-    fn route_server_event_ignores_session_events_without_active_session() {
-        let session_id = SessionId::new();
-        let turn_started = devo_server::ServerEvent::TurnStarted(devo_server::TurnEventPayload {
-            session_id,
-            turn: devo_server::TurnMetadata {
-                turn_id: devo_core::TurnId::new(),
-                session_id,
-                sequence: 1,
-                status: devo_core::TurnStatus::Running,
-                kind: TurnKind::Regular,
-                model: "test-model".to_string(),
-                model_binding_id: None,
-                reasoning_effort_selection: None,
-                reasoning_effort: None,
-                request_model: "test-model".to_string(),
-                request_thinking: None,
-                started_at: Utc::now(),
-                completed_at: None,
-                usage: None,
-                stop_reason: None,
-                failure_reason: None,
-            },
-        });
+    fn child_acp_agent_message_routes_to_subagent_monitor() {
+        let child = SessionId::new();
+        let item_id = ItemId::new();
+        let notification = super::parse_acp_session_notification(&serde_json::json!({
+            "sessionId": child,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {
+                    "type": "text",
+                    "text": "latest child preview"
+                },
+                "messageId": item_id.to_string()
+            }
+        }))
+        .expect("ACP session notification");
+        let mut visible_terminal_ids = HashSet::new();
+        let mut pending_terminal_output = HashMap::new();
+        let mut terminal_session_ids = HashMap::new();
 
-        assert!(matches!(
-            super::subagent_events::route_server_event(
-                /*active_session_id*/ None,
-                &std::collections::HashSet::new(),
-                &turn_started
-            ),
-            super::subagent_events::RoutedServerEvent::Ignore
-        ));
+        let events =
+            super::subagent_monitor_events_from_acp_session_notification_with_terminal_state(
+                notification,
+                &mut visible_terminal_ids,
+                &mut pending_terminal_output,
+                &mut terminal_session_ids,
+            );
+
+        assert_eq!(
+            events,
+            vec![WorkerEvent::SubagentMonitor {
+                event: SubagentMonitorEvent::TextItemDelta {
+                    session_id: child,
+                    item_id: Some(item_id),
+                    kind: TextItemKind::Assistant,
+                    delta: "latest child preview".to_string(),
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn child_acp_tool_result_updates_subagent_preview() {
+        let child = SessionId::new();
+        let notification = super::parse_acp_session_notification(&serde_json::json!({
+            "sessionId": child,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call-1",
+                "title": "Read result",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "content",
+                        "content": {
+                            "type": "text",
+                            "text": "done"
+                        }
+                    }
+                ]
+            }
+        }))
+        .expect("ACP session notification");
+        let mut visible_terminal_ids = HashSet::new();
+        let mut pending_terminal_output = HashMap::new();
+        let mut terminal_session_ids = HashMap::new();
+
+        let events =
+            super::subagent_monitor_events_from_acp_session_notification_with_terminal_state(
+                notification,
+                &mut visible_terminal_ids,
+                &mut pending_terminal_output,
+                &mut terminal_session_ids,
+            );
+
+        assert_eq!(
+            events,
+            vec![
+                WorkerEvent::SubagentMonitor {
+                    event: SubagentMonitorEvent::ToolCallUpdated {
+                        session_id: child,
+                        tool_use_id: "call-1".to_string(),
+                        summary: "Read result".to_string(),
+                    },
+                },
+                WorkerEvent::SubagentMonitor {
+                    event: SubagentMonitorEvent::ToolResult {
+                        session_id: child,
+                        tool_use_id: "call-1".to_string(),
+                        title: "Read result".to_string(),
+                        preview: "done".to_string(),
+                        is_error: false,
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parent_acp_spawn_tool_result_extracts_subagent_discovery_signal() {
+        let parent = SessionId::new();
+        let child = SessionId::new();
+        let notification = super::parse_acp_session_notification(&serde_json::json!({
+            "sessionId": parent,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "call-spawn",
+                "status": "completed",
+                "rawOutput": {
+                    "child_session_id": child,
+                    "agent_path": "root/researcher",
+                    "agent_nickname": "researcher",
+                    "status": "running"
+                }
+            }
+        }))
+        .expect("ACP session notification");
+
+        let result = super::spawn_agent_result_from_acp_update(&notification.update)
+            .expect("spawn agent result");
+
+        assert_eq!(result.child_session_id, child);
+        assert_eq!(result.agent_path, "root/researcher");
+        assert_eq!(result.agent_nickname, "researcher");
+        assert_eq!(result.status, "running");
     }
 
     #[test]

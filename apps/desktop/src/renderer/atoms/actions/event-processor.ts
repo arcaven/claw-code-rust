@@ -1,6 +1,7 @@
 import { createLogger } from "../../lib/logger"
 import { queryClient } from "../../lib/query-client"
 import type { Event } from "../../lib/types"
+import { compactionStatusFamily } from "../compaction"
 import { serverConnectedAtom } from "../connection"
 import { discoveryAtom } from "../discovery"
 import { removeMessageAtom, upsertMessageAtom } from "../messages"
@@ -122,6 +123,33 @@ export function processEvent(event: Event): void {
 					sessionId: sessionID,
 					error: { name: error.name, data: error.data },
 				})
+			}
+			break
+		}
+
+		case "session.compaction.started":
+		case "session/compaction/started": {
+			const sessionID = event.properties.sessionID ?? event.properties.session_id
+			if (sessionID) {
+				set(compactionStatusFamily(sessionID), "started")
+			}
+			break
+		}
+
+		case "session.compaction.completed":
+		case "session/compaction/completed": {
+			const sessionID = event.properties.sessionID ?? event.properties.session_id
+			if (sessionID) {
+				set(compactionStatusFamily(sessionID), "completed")
+			}
+			break
+		}
+
+		case "session.compaction.failed":
+		case "session/compaction/failed": {
+			const sessionID = event.properties.sessionID ?? event.properties.session_id
+			if (sessionID) {
+				set(compactionStatusFamily(sessionID), null)
 			}
 			break
 		}

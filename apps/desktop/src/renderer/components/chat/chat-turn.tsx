@@ -22,14 +22,13 @@ import {
 	CopyIcon,
 	FileIcon,
 	GitForkIcon,
-	ListOrderedIcon,
 	Loader2Icon,
-	SendIcon,
 	Undo2Icon,
 	XIcon,
 } from "lucide-react"
 import { memo, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { useDisplayMode } from "../../hooks/use-agents"
+import type { SessionCompactionStatus } from "../../atoms/compaction"
 import type { ChatMessageEntry, ChatTurn as ChatTurnType } from "../../hooks/use-session-chat"
 import {
 	computeTurnCost,
@@ -48,12 +47,19 @@ import type {
 	ToolPart,
 } from "../../lib/types"
 import { ChatToolCall, getToolInfo, getToolSubtitle } from "./chat-tool-call"
+import {
+	CompactionStatusDivider,
+	isCompactionStatusText,
+} from "./compaction-status-divider"
 import { PermissionItem } from "./chat-permission"
 import { getToolCategory, type ToolCategory } from "./tool-card"
 
 // ============================================================
 // Utility functions
 // ============================================================
+
+const DEVO_ITEM_KIND_META = "devo/itemKind"
+const DEVO_RESEARCH_ARTIFACT_TITLE_META = "devo/researchArtifactTitle"
 
 /**
  * Formats a timestamp (milliseconds) to relative or absolute time.
@@ -261,7 +267,7 @@ function AttachmentThumbnail({
 /** A renderable part — either a tool call, an intermediate text block, or reasoning */
 type RenderablePart =
 	| { kind: "tool"; part: ToolPart }
-	| { kind: "text"; id: string; text: string }
+	| { kind: "text"; id: string; text: string; metadata?: Record<string, unknown> }
 	| { kind: "reasoning"; part: ReasoningPart }
 
 type TextRenderablePart = Extract<RenderablePart, { kind: "text" }>
@@ -286,7 +292,9 @@ function getPartsAndTools(assistantMessages: ChatMessageEntry[]): {
 				if (part.tool === "todoread" && part.state.status !== "completed") continue
 				ordered.push({ kind: "tool", part })
 			} else if (part.type === "text" && !part.synthetic && part.text.trim()) {
-				ordered.push({ kind: "text", id: part.id, text: part.text })
+				if (isCompactionStatusText(part.text)) continue
+				const metadata = (part as { metadata?: Record<string, unknown> }).metadata
+				ordered.push({ kind: "text", id: part.id, text: part.text, metadata })
 			} else if (part.type === "reasoning") {
 				// Strip OpenRouter's encrypted [REDACTED] chunks
 				const cleaned = part.text.replace("[REDACTED]", "").trim()
@@ -297,6 +305,12 @@ function getPartsAndTools(assistantMessages: ChatMessageEntry[]): {
 		}
 	}
 	return { ordered, tools }
+}
+
+function hasCompactionStatusMarker(assistantMessages: ChatMessageEntry[]): boolean {
+	return assistantMessages.some((msg) =>
+		msg.parts.some((part) => part.type === "text" && isCompactionStatusText(part.text)),
+	)
 }
 
 /**
@@ -330,6 +344,39 @@ function splitCompletedTurnParts(orderedParts: RenderablePart[]): {
 	const finalResponsePart = orderedParts[finalResponseIndex] as TextRenderablePart
 	const completedProcessParts = orderedParts.filter((_, index) => index !== finalResponseIndex)
 	return { completedProcessParts, finalResponsePart }
+}
+
+function researchArtifactTitle(item: TextRenderablePart): string | undefined {
+	const metadata = item.metadata
+	if (metadata?.[DEVO_ITEM_KIND_META] !== "research_artifact") return undefined
+	const title = metadata[DEVO_RESEARCH_ARTIFACT_TITLE_META]
+	return typeof title === "string" && title.trim() ? title : undefined
+}
+
+function ResearchArtifactBlock({ item }: { item: TextRenderablePart }) {
+	const title = researchArtifactTitle(item)
+	if (!title) {
+		return (
+			<Message from="assistant">
+				<MessageContent>
+					<MessageResponse>{item.text}</MessageResponse>
+				</MessageContent>
+			</Message>
+		)
+	}
+	return (
+		<div className="border-l border-primary/30 pl-3">
+			<div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+				<FileIcon className="size-3" aria-hidden="true" />
+				<span>{title}</span>
+			</div>
+			<Message from="assistant">
+				<MessageContent>
+					<MessageResponse>{item.text}</MessageResponse>
+				</MessageContent>
+			</Message>
+		</div>
+	)
 }
 
 function getError(assistantMessages: ChatMessageEntry[]): string | undefined {
@@ -399,9 +446,18 @@ function messageEntryFingerprint(entry: ChatMessageEntry): string {
 	const completed = entry.info.role === "assistant" ? (entry.info.time.completed ?? 0) : 0
 	let textLen = 0
 	const toolSegments: string[] = []
+	const textMetadataSegments: string[] = []
 	for (const part of entry.parts) {
 		if (part.type === "text" || part.type === "reasoning") {
 			textLen += part.text.length
+			if (part.type === "text") {
+				const metadata = (part as { metadata?: Record<string, unknown> }).metadata
+				if (metadata?.[DEVO_ITEM_KIND_META] === "research_artifact") {
+					textMetadataSegments.push(
+						`${part.id}:${metadata[DEVO_ITEM_KIND_META]}:${metadata[DEVO_RESEARCH_ARTIFACT_TITLE_META] ?? ""}`,
+					)
+				}
+			}
 		} else if (part.type === "tool") {
 			const outLen =
 				part.state.status === "completed"
@@ -412,7 +468,7 @@ function messageEntryFingerprint(entry: ChatMessageEntry): string {
 			toolSegments.push(`${part.id}:${part.state.status}:${outLen}`)
 		}
 	}
-	return `${entry.info.id}:${completed}:${entry.parts.length}:${lastPart?.id ?? ""}:${textLen}:${toolSegments.join(",")}`
+	return `${entry.info.id}:${completed}:${entry.parts.length}:${lastPart?.id ?? ""}:${textLen}:${textMetadataSegments.join(",")}:${toolSegments.join(",")}`
 }
 
 /** Compare two turns by content fingerprint rather than reference equality */
@@ -448,7 +504,7 @@ function areTurnsEqual(a: ChatTurnType, b: ChatTurnType): boolean {
  *   tool-group: { category: "run", tools: [bash] }
  */
 type StreamItem =
-	| { kind: "text"; id: string; text: string }
+	| { kind: "text"; id: string; text: string; metadata?: Record<string, unknown> }
 	| { kind: "reasoning-process"; items: (RenderablePart & { kind: "reasoning" | "tool" })[] }
 	| { kind: "tool-group"; category: ToolCategory; tools: ToolPart[] }
 
@@ -488,7 +544,7 @@ function groupPartsForStream(ordered: RenderablePart[]): StreamItem[] {
 			flushGroup()
 			flushProcessGroup()
 			if (part.kind === "text") {
-				items.push({ kind: "text", id: part.id, text: part.text })
+				items.push({ kind: "text", id: part.id, text: part.text, metadata: part.metadata })
 			}
 		}
 	}
@@ -654,6 +710,7 @@ interface ChatTurnProps {
 	agent?: Agent
 	pendingPermission?: PendingPermission
 	isConnected?: boolean
+	compactionStatus?: SessionCompactionStatus | null
 	onApprovePermission?: (
 		agent: Agent,
 		permissionSessionId: string,
@@ -667,8 +724,6 @@ interface ChatTurnProps {
 	) => Promise<void>
 	/** Revert to this turn's user message (for per-turn undo) */
 	onRevertToMessage?: (messageId: string) => Promise<void>
-	/** Interrupt the current work and send this queued message immediately */
-	onSendNow?: (turn: ChatTurnType) => Promise<void>
 	/** Fork the conversation from this turn boundary */
 	onForkFromTurn?: () => Promise<void>
 	/** Delete a specific part from a message (for error recovery) */
@@ -785,10 +840,10 @@ export const ChatTurnComponent = memo(
 		agent,
 		pendingPermission,
 		isConnected = false,
+		compactionStatus,
 		onApprovePermission,
 		onDenyPermission,
 		onRevertToMessage,
-		onSendNow,
 		onForkFromTurn,
 		onDeletePart,
 		stepsExpanded: controlledStepsExpanded,
@@ -834,6 +889,15 @@ export const ChatTurnComponent = memo(
 			() => splitCompletedTurnParts(orderedParts),
 			[orderedParts],
 		)
+		const hasCompactionMarker = useMemo(
+			() => hasCompactionStatusMarker(turn.assistantMessages),
+			[turn.assistantMessages],
+		)
+		const displayedCompactionStatus: SessionCompactionStatus | null = hasCompactionMarker
+			? compactionStatus === "completed"
+				? "completed"
+				: "started"
+			: null
 
 		// The last text for streaming display and copy action
 		const rawResponseText = useMemo(() => getLastResponseText(orderedParts), [orderedParts])
@@ -852,8 +916,8 @@ export const ChatTurnComponent = memo(
 		}, [turn.assistantMessages])
 
 		const working = isLast && isWorking
-		const isQueued = isWorking && turn.assistantMessages.length === 0 && !isLast
-		const isQueuedLast = isWorking && turn.assistantMessages.length === 0 && isLast
+		// User requirement: queue state belongs in the composer status stack;
+		// this transcript must not infer queued state from an empty assistant response.
 		const processOrderedParts = working ? orderedParts : completedProcessParts
 		const processToolParts = useMemo(
 			() => processOrderedParts.flatMap((part) => (part.kind === "tool" ? [part.part] : [])),
@@ -941,17 +1005,6 @@ export const ChatTurnComponent = memo(
 			}
 		}, [onForkFromTurn, forking])
 
-		const [sendingNow, setSendingNow] = useState(false)
-		const handleSendNow = useCallback(async () => {
-			if (!onSendNow || sendingNow) return
-			setSendingNow(true)
-			try {
-				await onSendNow(turn)
-			} finally {
-				setSendingNow(false)
-			}
-		}, [onSendNow, sendingNow, turn])
-
 		const handleDeleteFile = useCallback(
 			async (file: FilePart) => {
 				if (!onDeletePart) return
@@ -1006,23 +1059,6 @@ export const ChatTurnComponent = memo(
 								/>
 							)}
 							<p className="whitespace-pre-wrap">{userText}</p>
-							{(isQueued || isQueuedLast) && (
-								<span className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground/60">
-									<ListOrderedIcon className="size-3" />
-									Queued
-									{onSendNow && (
-										<button
-											type="button"
-											onClick={handleSendNow}
-											disabled={sendingNow}
-											className="ml-1 inline-flex items-center gap-0.5 rounded-full bg-muted/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary disabled:opacity-50"
-										>
-											<SendIcon className="size-2.5" />
-											{sendingNow ? "Sending..." : "Send now"}
-										</button>
-									)}
-								</span>
-							)}
 						</MessageContent>
 					</Message>
 				)}
@@ -1049,11 +1085,7 @@ export const ChatTurnComponent = memo(
 									if (item.kind === "text") {
 										return (
 											<div key={item.id} className="py-0.5">
-												<Message from="assistant">
-													<MessageContent>
-														<MessageResponse>{item.text}</MessageResponse>
-													</MessageContent>
-												</Message>
+												<ResearchArtifactBlock item={item} />
 											</div>
 										)
 									}
@@ -1176,11 +1208,7 @@ export const ChatTurnComponent = memo(
 									}
 									return (
 										<div key={item.id} className="py-0.5">
-											<Message from="assistant">
-												<MessageContent>
-													<MessageResponse>{item.text}</MessageResponse>
-												</MessageContent>
-											</Message>
+											<ResearchArtifactBlock item={item} />
 										</div>
 									)
 								})}
@@ -1209,11 +1237,15 @@ export const ChatTurnComponent = memo(
 
 				{/* Completed final response */}
 				{!working && finalResponsePart && responseText && (
-					<Message from="assistant">
-						<MessageContent>
-							<MessageResponse>{responseText}</MessageResponse>
-						</MessageContent>
-					</Message>
+					researchArtifactTitle(finalResponsePart) ? (
+						<ResearchArtifactBlock item={{ ...finalResponsePart, text: responseText }} />
+					) : (
+						<Message from="assistant">
+							<MessageContent>
+								<MessageResponse>{responseText}</MessageResponse>
+							</MessageContent>
+						</Message>
+					)
 				)}
 
 				{/* Streaming response — visible while working, when text isn't already inline */}
@@ -1223,6 +1255,12 @@ export const ChatTurnComponent = memo(
 							<MessageResponse animated>{responseText}</MessageResponse>
 						</MessageContent>
 					</Message>
+				)}
+
+				{/* User requirement: render compaction lifecycle as a transcript divider,
+				   not as a normal assistant message that can hide the previous reply. */}
+				{displayedCompactionStatus && (
+					<CompactionStatusDivider status={displayedCompactionStatus} />
 				)}
 
 				{/* Per-turn metadata — shown on completed turns so badges are visible after long responses */}
@@ -1274,6 +1312,7 @@ export const ChatTurnComponent = memo(
 		if (prev.agent?.projectDirectory !== next.agent?.projectDirectory) return false
 		if (prev.agent?.worktreePath !== next.agent?.worktreePath) return false
 		if (prev.isConnected !== next.isConnected) return false
+		if (prev.compactionStatus !== next.compactionStatus) return false
 		if (prev.stepsExpanded !== next.stepsExpanded) return false
 		if (
 			pendingPermissionFingerprint(prev.pendingPermission) !==
