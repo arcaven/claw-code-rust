@@ -30,6 +30,7 @@ import {
 } from "lucide-react"
 import { memo, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { useDisplayMode } from "../../hooks/use-agents"
+import type { SessionCompactionStatus } from "../../atoms/compaction"
 import type { ChatMessageEntry, ChatTurn as ChatTurnType } from "../../hooks/use-session-chat"
 import {
 	computeTurnCost,
@@ -48,6 +49,10 @@ import type {
 	ToolPart,
 } from "../../lib/types"
 import { ChatToolCall, getToolInfo, getToolSubtitle } from "./chat-tool-call"
+import {
+	CompactionStatusDivider,
+	isCompactionStatusText,
+} from "./compaction-status-divider"
 import { PermissionItem } from "./chat-permission"
 import { getToolCategory, type ToolCategory } from "./tool-card"
 
@@ -286,6 +291,7 @@ function getPartsAndTools(assistantMessages: ChatMessageEntry[]): {
 				if (part.tool === "todoread" && part.state.status !== "completed") continue
 				ordered.push({ kind: "tool", part })
 			} else if (part.type === "text" && !part.synthetic && part.text.trim()) {
+				if (isCompactionStatusText(part.text)) continue
 				ordered.push({ kind: "text", id: part.id, text: part.text })
 			} else if (part.type === "reasoning") {
 				// Strip OpenRouter's encrypted [REDACTED] chunks
@@ -297,6 +303,12 @@ function getPartsAndTools(assistantMessages: ChatMessageEntry[]): {
 		}
 	}
 	return { ordered, tools }
+}
+
+function hasCompactionStatusMarker(assistantMessages: ChatMessageEntry[]): boolean {
+	return assistantMessages.some((msg) =>
+		msg.parts.some((part) => part.type === "text" && isCompactionStatusText(part.text)),
+	)
 }
 
 /**
@@ -654,6 +666,7 @@ interface ChatTurnProps {
 	agent?: Agent
 	pendingPermission?: PendingPermission
 	isConnected?: boolean
+	compactionStatus?: SessionCompactionStatus | null
 	onApprovePermission?: (
 		agent: Agent,
 		permissionSessionId: string,
@@ -785,6 +798,7 @@ export const ChatTurnComponent = memo(
 		agent,
 		pendingPermission,
 		isConnected = false,
+		compactionStatus,
 		onApprovePermission,
 		onDenyPermission,
 		onRevertToMessage,
@@ -834,6 +848,15 @@ export const ChatTurnComponent = memo(
 			() => splitCompletedTurnParts(orderedParts),
 			[orderedParts],
 		)
+		const hasCompactionMarker = useMemo(
+			() => hasCompactionStatusMarker(turn.assistantMessages),
+			[turn.assistantMessages],
+		)
+		const displayedCompactionStatus: SessionCompactionStatus | null = hasCompactionMarker
+			? compactionStatus === "completed"
+				? "completed"
+				: "started"
+			: null
 
 		// The last text for streaming display and copy action
 		const rawResponseText = useMemo(() => getLastResponseText(orderedParts), [orderedParts])
@@ -1225,6 +1248,12 @@ export const ChatTurnComponent = memo(
 					</Message>
 				)}
 
+				{/* User requirement: render compaction lifecycle as a transcript divider,
+				   not as a normal assistant message that can hide the previous reply. */}
+				{displayedCompactionStatus && (
+					<CompactionStatusDivider status={displayedCompactionStatus} />
+				)}
+
 				{/* Per-turn metadata — shown on completed turns so badges are visible after long responses */}
 				{!working && turn.assistantMessages.length > 0 && (turnModel || turnCostStr) && (
 					<div className="flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground/40">
@@ -1274,6 +1303,7 @@ export const ChatTurnComponent = memo(
 		if (prev.agent?.projectDirectory !== next.agent?.projectDirectory) return false
 		if (prev.agent?.worktreePath !== next.agent?.worktreePath) return false
 		if (prev.isConnected !== next.isConnected) return false
+		if (prev.compactionStatus !== next.compactionStatus) return false
 		if (prev.stepsExpanded !== next.stepsExpanded) return false
 		if (
 			pendingPermissionFingerprint(prev.pendingPermission) !==

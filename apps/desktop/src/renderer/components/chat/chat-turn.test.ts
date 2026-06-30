@@ -4,6 +4,18 @@ import { describe, expect, test } from "bun:test"
 const source = readFileSync(new URL("./chat-turn.tsx", import.meta.url), "utf8")
 const chatViewSource = readFileSync(new URL("./chat-view.tsx", import.meta.url), "utf8")
 const chatToolCallSource = readFileSync(new URL("./chat-tool-call.tsx", import.meta.url), "utf8")
+const compactionDividerSource = readFileSync(
+	new URL("./compaction-status-divider.tsx", import.meta.url),
+	"utf8",
+)
+const eventProcessorSource = readFileSync(
+	new URL("../../atoms/actions/event-processor.ts", import.meta.url),
+	"utf8",
+)
+const clientSource = readFileSync(
+	new URL("../../../../packages/devo-ai-sdk/src/v2/client.ts", import.meta.url),
+	"utf8",
+)
 const sharedReasoningSource = readFileSync(
 	new URL("../../../../packages/ui/src/components/ai-elements/reasoning.tsx", import.meta.url),
 	"utf8",
@@ -213,6 +225,48 @@ describe("ChatTurnComponent transcript controls", () => {
 			keepsActiveThinkingCue: true,
 			completedReasoningRendersDirectly: true,
 			verboseReasoningRendersDirectly: true,
+		})
+	})
+
+	test("renders compaction lifecycle as a transcript divider", () => {
+		expect({
+			filtersStartedTextFromAssistantResponse:
+				source.includes("isCompactionStatusText(part.text)") &&
+				source.includes("continue"),
+			rendersDividerAfterResponse: source.includes("<CompactionStatusDivider status={displayedCompactionStatus} />"),
+			updatesMemoWhenCompactionStatusChanges: source.includes(
+				"prev.compactionStatus !== next.compactionStatus",
+			),
+			chatViewPassesSessionCompactionStatus:
+				chatViewSource.includes("compactionStatusFamily(agent.sessionId)") &&
+				chatViewSource.includes("compactionStatus={compactionStatus}"),
+			usesRequestedIcons:
+				compactionDividerSource.includes("BubblesIcon") &&
+				compactionDividerSource.includes("PackageCheckIcon"),
+			usesRequestedLabels:
+				compactionDividerSource.includes("Start context compaction") &&
+				compactionDividerSource.includes("Context compacted"),
+			keepsIconStyleConsistent:
+				compactionDividerSource.includes("size-3.5") &&
+				compactionDividerSource.includes("stroke-[1.5]"),
+			handlesCompactionEvents:
+				eventProcessorSource.includes("session.compaction.started") &&
+				eventProcessorSource.includes("session.compaction.completed") &&
+				eventProcessorSource.includes("session.compaction.failed"),
+			bridgesRuntimeCompactionEvents:
+				clientSource.includes("sessionCompactionFromOriginalEvent") &&
+				clientSource.includes("SessionCompactionCompleted") &&
+				clientSource.includes("session.compaction.${compaction.status}"),
+		}).toEqual({
+			filtersStartedTextFromAssistantResponse: true,
+			rendersDividerAfterResponse: true,
+			updatesMemoWhenCompactionStatusChanges: true,
+			chatViewPassesSessionCompactionStatus: true,
+			usesRequestedIcons: true,
+			usesRequestedLabels: true,
+			keepsIconStyleConsistent: true,
+			handlesCompactionEvents: true,
+			bridgesRuntimeCompactionEvents: true,
 		})
 	})
 })

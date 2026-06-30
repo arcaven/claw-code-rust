@@ -304,6 +304,65 @@ function sessionStatusChangedFromOriginalEvent(
 	return typeof sessionId === "string" && typeof status === "string" ? { sessionId, status } : null
 }
 
+function sessionCompactionFromOriginalEvent(
+	original: unknown,
+	originalMethod?: string,
+): { sessionId: string; status: "started" | "completed" | "failed"; message?: string } | null {
+	const event = objectRecord(original)
+	if (!event) return null
+
+	let status: "started" | "completed" | "failed" | null = null
+	let payload: Record<string, unknown> | undefined
+	if (originalMethod === "session/compaction/started") {
+		status = "started"
+		payload = objectRecord(event.SessionCompactionStarted) ?? event
+	} else if (originalMethod === "session/compaction/completed") {
+		status = "completed"
+		payload = objectRecord(event.SessionCompactionCompleted) ?? event
+	} else if (originalMethod === "session/compaction/failed") {
+		status = "failed"
+		payload = objectRecord(event.SessionCompactionFailed) ?? event
+	} else {
+		const candidates: Array<
+			["started" | "completed" | "failed", Record<string, unknown> | undefined]
+		> = [
+			["started", objectRecord(event.SessionCompactionStarted)],
+			["started", objectRecord(event.session_compaction_started)],
+			["started", objectRecord(event.sessionCompactionStarted)],
+			["completed", objectRecord(event.SessionCompactionCompleted)],
+			["completed", objectRecord(event.session_compaction_completed)],
+			["completed", objectRecord(event.sessionCompactionCompleted)],
+			["failed", objectRecord(event.SessionCompactionFailed)],
+			["failed", objectRecord(event.session_compaction_failed)],
+			["failed", objectRecord(event.sessionCompactionFailed)],
+		]
+		const found = candidates.find(([, value]) => value)
+		if (found) {
+			status = found[0]
+			payload = found[1]
+		} else if (event.kind === "session_compaction_started") {
+			status = "started"
+			payload = event
+		} else if (event.kind === "session_compaction_completed") {
+			status = "completed"
+			payload = event
+		} else if (event.kind === "session_compaction_failed") {
+			status = "failed"
+			payload = event
+		}
+	}
+
+	if (!status || !payload) return null
+	const sessionId = payload.session_id ?? payload.sessionId
+	if (typeof sessionId !== "string" || !sessionId) return null
+	const message = payload.message
+	return {
+		sessionId,
+		status,
+		...(typeof message === "string" && message ? { message } : {}),
+	}
+}
+
 function workspaceChangesUpdatedEventProperties(
 	payload: WorkspaceChangesUpdatedPayload,
 ): WorkspaceChangesUpdatedEventProperties {
@@ -1216,6 +1275,17 @@ class AcpClient {
 		const changedStatus = sessionStatusChangedFromOriginalEvent(original, originalMethod)
 		if (changedStatus) {
 			this.rememberSessionStatus(changedStatus.sessionId, directory, changedStatus.status)
+			return
+		}
+		const compaction = sessionCompactionFromOriginalEvent(original, originalMethod)
+		if (compaction) {
+			this.emit(directory, {
+				type: `session.compaction.${compaction.status}`,
+				properties: {
+					sessionID: compaction.sessionId,
+					...(compaction.message ? { message: compaction.message } : {}),
+				},
+			})
 			return
 		}
 		if ("RequestUserInput" in original) {

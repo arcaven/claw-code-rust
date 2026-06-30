@@ -43,6 +43,7 @@ import {
 	useRef,
 	useState,
 } from "react"
+import { compactionStatusFamily } from "../../atoms/compaction"
 import { messagesFamily, removeMessageAtom } from "../../atoms/messages"
 import { projectModelsAtom, setProjectModelAtom } from "../../atoms/preferences"
 import type { SessionSetupPhase } from "../../atoms/sessions"
@@ -599,6 +600,7 @@ export function ChatView({
 	const sessionEntry = useAtomValue(sessionFamily(agent.sessionId))
 	const sessionError = sessionEntry?.error
 	const setupPhase = sessionEntry?.setupPhase
+	const compactionStatus = useAtomValue(compactionStatusFamily(agent.sessionId))
 
 	useLayoutEffect(() => {
 		if (setupPhase) {
@@ -806,6 +808,7 @@ export function ChatView({
 				agent={agent}
 				pendingPermission={index === turns.length - 1 ? effectivePermission : undefined}
 				isConnected={isConnected}
+				compactionStatus={compactionStatus}
 				stepsExpanded={expandedStepTurnIds.has(turn.id)}
 				onStepsExpandedChange={handleStepsExpandedChange}
 				onApprovePermission={handleApprovePermission}
@@ -826,6 +829,7 @@ export function ChatView({
 		[
 			agent,
 			effectivePermission,
+			compactionStatus,
 			expandedStepTurnIds,
 			handleApprovePermission,
 			handleDenyPermission,
