@@ -9,6 +9,11 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use super::research_capture::{
+    ClarificationQueryCapture, FinalReportWrite, PendingResearchToolCall,
+    ResearchArtifactQueryCapture, ResearchQueryCapture, ResearchStageCapture, StreamedTextItem,
+    SupervisorQueryCapture,
+};
 use super::research_context::ResearchClarificationContext;
 use super::research_context::ResearchRequestContext;
 use super::research_stages::RESEARCH_FILE_TOOL_NAMES;
@@ -40,53 +45,6 @@ struct SupervisorOutput {
     worker_count: usize,
 }
 
-#[derive(Default)]
-struct ResearchQueryCapture {
-    text: String,
-    assistant: StreamedTextItem,
-    pending_tools: HashMap<String, PendingResearchToolCall>,
-    final_report_write: Option<FinalReportWrite>,
-    reasoning: StreamedTextItem,
-    usage_invocation_index: usize,
-    turn_completed: bool,
-}
-
-#[derive(Default)]
-struct ClarificationQueryCapture {
-    text: String,
-    pending_request_user_input_questions: HashMap<String, Vec<(String, String)>>,
-    request_user_input_exchanges: Vec<ResearchClarificationContext>,
-    clarifications: Vec<ResearchClarificationContext>,
-    reasoning: StreamedTextItem,
-    usage_invocation_index: usize,
-}
-
-#[derive(Default)]
-struct SupervisorQueryCapture {
-    text: String,
-    artifact: StreamedTextItem,
-    pending_tools: HashMap<String, PendingResearchToolCall>,
-    reasoning: StreamedTextItem,
-    usage_invocation_index: usize,
-    spawned_worker_count: usize,
-}
-
-#[derive(Default)]
-struct ResearchArtifactQueryCapture {
-    text: String,
-    artifact: StreamedTextItem,
-    reasoning: StreamedTextItem,
-    usage_invocation_index: usize,
-    turn_completed: bool,
-}
-
-enum ResearchStageCapture<'a> {
-    Clarification(&'a mut ClarificationQueryCapture),
-    Artifact(&'a mut ResearchArtifactQueryCapture),
-    Supervisor(&'a mut SupervisorQueryCapture),
-    FinalReport(&'a mut ResearchQueryCapture),
-}
-
 struct ResearchQueryEventContext<'a> {
     session_id: SessionId,
     turn_id: TurnId,
@@ -97,26 +55,6 @@ struct ResearchQueryEventContext<'a> {
 struct ResearchArtifactEventContext<'a> {
     query: ResearchQueryEventContext<'a>,
     artifact: &'a StreamedResearchArtifact,
-}
-
-struct PendingResearchToolCall {
-    item_id: ItemId,
-    item_seq: u64,
-    tool_name: String,
-    input: serde_json::Value,
-}
-
-#[derive(Debug, Clone)]
-struct FinalReportWrite {
-    path: String,
-    content: String,
-}
-
-#[derive(Debug, Default)]
-struct StreamedTextItem {
-    item_id: Option<ItemId>,
-    item_seq: Option<u64>,
-    text: String,
 }
 
 struct ResearchPipelineInput<'a> {
