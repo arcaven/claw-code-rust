@@ -4,17 +4,16 @@ mod acp_session_setup;
 use anyhow::Context;
 use anyhow::Result;
 use pretty_assertions::assert_eq;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 use acp_session_setup::STDIO_SERVER_STARTUP_TIMEOUT;
+use acp_session_setup::devo_command;
 use acp_session_setup::read_stdio_json;
 use acp_session_setup::read_stdio_json_until;
 use acp_session_setup::write_stdio_json;
 use acp_session_setup::write_test_config;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader as AsyncBufReader;
-use tokio::process::Command;
 
 #[tokio::test]
 async fn stdio_model_config_returns_cold_start_model_options_without_creating_session() -> Result<()>
@@ -163,7 +162,7 @@ async fn spawn_initialized_stdio_server(
     tokio::io::Lines<AsyncBufReader<tokio::process::ChildStdout>>,
     AsyncBufReader<tokio::process::ChildStderr>,
 )> {
-    let mut command = built_devo_command().await?;
+    let mut command = devo_command()?;
     let mut child = command
         .arg("server")
         .arg("--transport")
@@ -210,42 +209,6 @@ async fn spawn_initialized_stdio_server(
     assert_eq!(initialize_response["error"], serde_json::Value::Null);
 
     Ok((child, stdin, stdout_reader, stderr_reader))
-}
-
-async fn built_devo_command() -> Result<Command> {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .context("canonicalize workspace root")?;
-    let cargo_path = std::env::var_os("CARGO")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("cargo"));
-    let status = Command::new(cargo_path)
-        .current_dir(&workspace)
-        .arg("build")
-        .arg("--quiet")
-        .arg("--manifest-path")
-        .arg(workspace.join("Cargo.toml"))
-        .arg("-p")
-        .arg("devo-cli")
-        .arg("--bin")
-        .arg("devo")
-        .status()
-        .await
-        .context("build fresh devo binary for model/config e2e")?;
-    anyhow::ensure!(status.success(), "devo binary build failed");
-
-    let mut binary = workspace.join("target").join("debug").join("devo");
-    if cfg!(windows) {
-        binary.set_extension("exe");
-    }
-    anyhow::ensure!(
-        binary.is_file(),
-        "devo binary was not built at {}",
-        binary.display()
-    );
-    Ok(Command::new(binary))
 }
 
 fn acp_config_option<'a>(

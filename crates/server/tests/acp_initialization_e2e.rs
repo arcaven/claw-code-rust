@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -513,6 +514,11 @@ fn devo_command() -> Result<Command> {
         return Ok(Command::new(binary_path));
     }
 
+    let binary_path = devo_binary_path()?;
+    if binary_path.is_file() {
+        return Ok(Command::new(binary_path));
+    }
+
     let cargo_path = std::env::var_os("CARGO")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cargo"));
@@ -527,4 +533,33 @@ fn devo_command() -> Result<Command> {
         .arg("devo")
         .arg("--");
     Ok(command)
+}
+
+fn devo_binary_path() -> Result<PathBuf> {
+    let workspace = workspace_root()?;
+    Ok(target_debug_binary(&workspace, "devo"))
+}
+
+fn workspace_root() -> Result<PathBuf> {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .canonicalize()
+        .context("canonicalize workspace root")
+}
+
+fn target_debug_binary(workspace: &Path, name: &str) -> PathBuf {
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"));
+    let target_dir = if target_dir.is_absolute() {
+        target_dir
+    } else {
+        workspace.join(target_dir)
+    };
+    let mut binary = target_dir.join("debug").join(name);
+    if cfg!(windows) {
+        binary.set_extension("exe");
+    }
+    binary
 }
