@@ -1,5 +1,9 @@
 use super::super::*;
 use crate::TurnInputDisposition;
+use crate::TurnQueueRemoveParams;
+use crate::TurnQueueRemoveResult;
+use crate::TurnQueueSteerParams;
+use crate::TurnQueueSteerResult;
 
 fn pending_turn_metadata(
     collaboration_mode: devo_protocol::CollaborationMode,
@@ -997,6 +1001,215 @@ impl ServerRuntime {
             },
         })
         .expect("serialize turn/steer response")
+    }
+
+    pub(crate) async fn handle_turn_queue_remove(
+        &self,
+        request_id: serde_json::Value,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        let params: TurnQueueRemoveParams = match serde_json::from_value(params) {
+            Ok(params) => params,
+            Err(error) => {
+                return self.error_response(
+                    request_id,
+                    ProtocolErrorCode::InvalidParams,
+                    format!("invalid turn/queue/remove params: {error}"),
+                );
+            }
+        };
+        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::SessionNotFound,
+                "session does not exist",
+            );
+        };
+        let (pending_turn_queue, is_ephemeral) = {
+            let session = session_arc.lock().await;
+            (
+                Arc::clone(&session.pending_turn_queue),
+                session.summary.ephemeral,
+            )
+        };
+        let removed = {
+            let mut queue = pending_turn_queue
+                .lock()
+                .expect("pending turn queue mutex should not be poisoned");
+            let before = queue.len();
+            queue.retain(|item| item.id != params.queued_input_id);
+            queue.len() != before
+        };
+        if removed
+            && !is_ephemeral
+            && let Err(error) = self.deps.db.remove_pending_by_id(
+                &params.session_id,
+                QueueType::Turn,
+                &params.queued_input_id,
+            )
+        {
+            tracing::warn!(
+                session_id = %params.session_id,
+                queued_input_id = %params.queued_input_id,
+                error = %error,
+                "failed to remove pending turn message from database"
+            );
+        }
+        if removed {
+            self.broadcast_updated_queue(params.session_id).await;
+        }
+        serde_json::to_value(SuccessResponse {
+            id: request_id,
+            result: TurnQueueRemoveResult { removed },
+        })
+        .expect("serialize turn/queue/remove response")
+    }
+
+    pub(crate) async fn handle_turn_queue_steer(
+        &self,
+        connection_id: u64,
+        request_id: serde_json::Value,
+        params: serde_json::Value,
+    ) -> serde_json::Value {
+        let params: TurnQueueSteerParams = match serde_json::from_value(params) {
+            Ok(params) => params,
+            Err(error) => {
+                return self.error_response(
+                    request_id,
+                    ProtocolErrorCode::InvalidParams,
+                    format!("invalid turn/queue/steer params: {error}"),
+                );
+            }
+        };
+        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::SessionNotFound,
+                "session does not exist",
+            );
+        };
+        let (turn_id, pending_turn_queue, btw_input_queue, is_ephemeral) = {
+            let session = session_arc.lock().await;
+            let Some(active_turn) = session.active_turn.as_ref() else {
+                return self.error_response(
+                    request_id,
+                    ProtocolErrorCode::NoActiveTurn,
+                    "no active turn exists",
+                );
+            };
+            if active_turn.turn_id != params.expected_turn_id {
+                return self.error_response(
+                    request_id,
+                    ProtocolErrorCode::ExpectedTurnMismatch,
+                    "active turn did not match expectedTurnId",
+                );
+            }
+            if active_turn.kind != devo_core::TurnKind::Regular {
+                return self.error_response(
+                    request_id,
+                    ProtocolErrorCode::ActiveTurnNotSteerable,
+                    "cannot steer a non-regular turn",
+                );
+            }
+            (
+                active_turn.turn_id,
+                Arc::clone(&session.pending_turn_queue),
+                Arc::clone(&session.btw_input_queue),
+                session.summary.ephemeral,
+            )
+        };
+        let (item, display_input) = {
+            let mut queue = pending_turn_queue
+                .lock()
+                .expect("pending turn queue mutex should not be poisoned");
+            let Some(index) = queue
+                .iter()
+                .position(|item| item.id == params.queued_input_id)
+            else {
+                return self.error_response(
+                    request_id,
+                    ProtocolErrorCode::InvalidParams,
+                    "queued input does not exist",
+                );
+            };
+            let display_input = match &queue[index].kind {
+                devo_core::PendingInputKind::UserText { text } => text.clone(),
+                devo_core::PendingInputKind::UserInput { display_text, .. } => display_text.clone(),
+                _ => {
+                    return self.error_response(
+                        request_id,
+                        ProtocolErrorCode::InvalidParams,
+                        "queued input cannot be steered",
+                    );
+                }
+            };
+            let item = queue
+                .remove(index)
+                .expect("queued item index should remain valid");
+            (item, display_input)
+        };
+
+        btw_input_queue
+            .lock()
+            .expect("btw input queue mutex should not be poisoned")
+            .push_back(item.clone());
+
+        if !is_ephemeral {
+            if let Err(error) = self.deps.db.remove_pending_by_id(
+                &params.session_id,
+                QueueType::Turn,
+                &params.queued_input_id,
+            ) {
+                tracing::warn!(
+                    session_id = %params.session_id,
+                    queued_input_id = %params.queued_input_id,
+                    error = %error,
+                    "failed to remove steered queued message from database"
+                );
+            }
+            if let Err(error) = self
+                .deps
+                .db
+                .push_pending(&params.session_id, QueueType::Btw, &item)
+            {
+                tracing::warn!(
+                    session_id = %params.session_id,
+                    queued_input_id = %params.queued_input_id,
+                    error = %error,
+                    "failed to persist steered queued message to database"
+                );
+            }
+        }
+
+        self.emit_turn_item(
+            params.session_id,
+            turn_id,
+            ItemKind::UserMessage,
+            TurnItem::SteerInput(TextItem {
+                text: display_input.clone(),
+            }),
+            serde_json::json!({ "title": "You", "text": display_input }),
+        )
+        .await;
+        self.broadcast_updated_queue(params.session_id).await;
+        self.emit_to_connection(
+            connection_id,
+            "serverRequest/resolved",
+            ServerEvent::ServerRequestResolved(ServerRequestResolvedPayload {
+                session_id: params.session_id,
+                request_id: "queued-steer-accepted".into(),
+                turn_id: Some(turn_id),
+            }),
+        )
+        .await;
+        serde_json::to_value(SuccessResponse {
+            id: request_id,
+            result: TurnQueueSteerResult {
+                turn_id,
+                disposition: TurnInputDisposition::Steered,
+            },
+        })
+        .expect("serialize turn/queue/steer response")
     }
 
     pub(crate) async fn handle_events_subscribe(

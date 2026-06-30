@@ -220,6 +220,10 @@ pub fn generate_protocol_typescript() -> String {
     push_decl::<TurnInterruptResult>(&cfg, &mut output);
     push_decl::<TurnSteerParams>(&cfg, &mut output);
     push_decl::<TurnSteerResult>(&cfg, &mut output);
+    push_decl::<TurnQueueRemoveParams>(&cfg, &mut output);
+    push_decl::<TurnQueueRemoveResult>(&cfg, &mut output);
+    push_decl::<TurnQueueSteerParams>(&cfg, &mut output);
+    push_decl::<TurnQueueSteerResult>(&cfg, &mut output);
     push_decl::<TurnKind>(&cfg, &mut output);
     push_decl::<WorkspaceChangeScope>(&cfg, &mut output);
     push_decl::<WorkspaceDiffDetail>(&cfg, &mut output);
@@ -693,6 +697,10 @@ fn register_devo_protocol_schemas(
     schema::<TurnInterruptResult>(schemas);
     schema::<TurnSteerParams>(schemas);
     schema::<TurnSteerResult>(schemas);
+    schema::<TurnQueueRemoveParams>(schemas);
+    schema::<TurnQueueRemoveResult>(schemas);
+    schema::<TurnQueueSteerParams>(schemas);
+    schema::<TurnQueueSteerResult>(schemas);
     schema::<WorkspaceChangesReadParams>(schemas);
     schema::<WorkspaceChangesReadResult>(schemas);
     schema::<WorkspaceChangesUpdatedPayload>(schemas);
@@ -797,6 +805,14 @@ fn register_devo_protocol_schemas(
     devo_method::<ShellCommandParams, ShellCommandResult>(methods, ClientMethod::TurnShellCommand);
     devo_method::<TurnInterruptParams, TurnInterruptResult>(methods, ClientMethod::TurnInterrupt);
     devo_method::<TurnSteerParams, TurnSteerResult>(methods, ClientMethod::TurnSteer);
+    devo_method::<TurnQueueRemoveParams, TurnQueueRemoveResult>(
+        methods,
+        ClientMethod::TurnQueueRemove,
+    );
+    devo_method::<TurnQueueSteerParams, TurnQueueSteerResult>(
+        methods,
+        ClientMethod::TurnQueueSteer,
+    );
     devo_method::<WorkspaceChangesReadParams, WorkspaceChangesReadResult>(
         methods,
         ClientMethod::WorkspaceChangesRead,

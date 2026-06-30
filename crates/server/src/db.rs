@@ -650,6 +650,28 @@ impl Database {
         Ok(items)
     }
 
+    /// Removes one pending message from the specified queue by its stable pending input id.
+    pub fn remove_pending_by_id(
+        &self,
+        session_id: &SessionId,
+        queue: QueueType,
+        pending_input_id: &PendingInputId,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().expect("database mutex poisoned");
+        let affected = conn
+            .execute(
+                "DELETE FROM pending_messages
+                 WHERE session_id = ?1 AND queue_type = ?2 AND pending_input_id = ?3",
+                params![
+                    session_id.to_string(),
+                    queue.as_str(),
+                    pending_input_id.to_string(),
+                ],
+            )
+            .context("failed to remove pending message by id")?;
+        Ok(affected > 0)
+    }
+
     /// Clears all pending messages from the specified queue.
     pub fn clear_pending(&self, session_id: &SessionId, queue: QueueType) -> Result<()> {
         let conn = self.conn.lock().expect("database mutex poisoned");
@@ -972,6 +994,48 @@ mod tests {
             .count_pending(&meta.session_id, QueueType::Turn)
             .expect("count");
         assert_eq!(turn_count, 1);
+    }
+
+    #[test]
+    fn remove_pending_by_id_only_removes_matching_item() {
+        let (db, _dir) = test_db();
+        let meta = sample_session("session-1");
+        db.upsert_session(&meta).expect("upsert");
+
+        let first = PendingInputItem::new(
+            PendingInputKind::UserText {
+                text: "first".into(),
+            },
+            None,
+            Utc::now(),
+        );
+        let second = PendingInputItem::new(
+            PendingInputKind::UserText {
+                text: "second".into(),
+            },
+            None,
+            Utc::now(),
+        );
+
+        db.push_pending(&meta.session_id, QueueType::Turn, &first)
+            .expect("push first");
+        db.push_pending(&meta.session_id, QueueType::Turn, &second)
+            .expect("push second");
+
+        let removed = db
+            .remove_pending_by_id(&meta.session_id, QueueType::Turn, &first.id)
+            .expect("remove first");
+        assert!(removed);
+        let removed_again = db
+            .remove_pending_by_id(&meta.session_id, QueueType::Turn, &first.id)
+            .expect("remove first again");
+        assert!(!removed_again);
+
+        let remaining = db
+            .drain_pending(&meta.session_id, QueueType::Turn)
+            .expect("drain");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, second.id);
     }
 
     #[test]
