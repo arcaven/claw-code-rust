@@ -263,20 +263,18 @@ mod tests {
                 session_id: parent_session_id,
                 target: None,
                 after_sequence: None,
-                timeout_ms: Some(1),
+                timeout_secs: Some(0),
             })
             .await?;
         assert_eq!(
             wait_result.events,
-            vec![devo_protocol::AgentOutputEvent {
+            vec![devo_protocol::ParentAgentOutputEvent {
                 sequence: 1,
-                child_session_id,
                 agent_path: "root/review".to_string(),
-                turn_id: wait_result.events[0].turn_id,
-                kind: "status".to_string(),
+                agent_nickname: "review".to_string(),
+                kind: devo_protocol::AgentOutputEventKind::Status,
                 text: Some("failed to start child agent: rollout append failed".to_string()),
                 status: Some("failed".to_string()),
-                created_at: wait_result.events[0].created_at,
             }]
         );
 

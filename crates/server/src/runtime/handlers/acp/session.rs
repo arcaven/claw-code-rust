@@ -518,6 +518,7 @@ impl ServerRuntime {
         self.goal_stores.lock().await.remove(&session_id);
         self.agent_mailboxes.lock().await.remove(&session_id);
         self.agent_output_buffers.lock().await.remove(&session_id);
+        self.agent_wait_cursors.lock().await.remove(&session_id);
         {
             let mut registries = self.agent_registries.lock().await;
             registries.remove(&session_id);

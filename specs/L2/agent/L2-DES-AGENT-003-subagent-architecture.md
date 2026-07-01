@@ -65,7 +65,7 @@ Parent agents need to send additional input to child agents without treating the
 
 The parent must be able to monitor child progress and completion without receiving child-authored mailbox messages.
 
-**Decision**: Each parent session has a sequence-numbered output buffer for direct child assistant text and terminal status events. Child assistant deltas are appended as they stream. Child terminal status changes are appended as status events. The `wait_agent` tool polls this buffer with an optional target and sequence cursor.
+**Decision**: Each parent session has a sequence-numbered output buffer for direct child assistant text and terminal status events. Child assistant streaming deltas for the same turn are accumulated into a single `assistant_message` event before the parent polls them. Child terminal status changes are appended as status events. The `wait_agent` tool polls this buffer with an optional target and sequence cursor. When `after_sequence` is omitted, the runtime fills it from a per-parent, per-target cursor so repeated polls do not re-deliver consumed events.
 
 ### DD-6: Subagents inherit permission and safety boundaries, never bypass them
 
@@ -264,21 +264,24 @@ Sender Agent                    Mailbox                      Recipient Agent
 The parent does not receive child-authored mailbox messages. Instead, each parent session has an output buffer:
 
 ```rust
-struct AgentOutputEvent {
+enum AgentOutputEventKind {
+    AssistantMessage,  // full accumulated assistant text for one child turn
+    Status,              // terminal turn status (completed, failed, ...)
+}
+
+struct ParentAgentOutputEvent {
     sequence: u64,
-    child_session_id: SessionId,
     agent_path: String,
-    turn_id: Option<TurnId>,
-    kind: String,              // "assistant_delta" or "status"
+    agent_nickname: String,
+    kind: AgentOutputEventKind,
     text: Option<String>,
     status: Option<String>,
-    created_at: DateTime<Utc>,
 }
 ```
 
-`wait_agent` reads events after an optional `after_sequence` cursor. If matching events already exist, it returns immediately. Otherwise it waits with a deadline and returns either new events or `timed_out = true`.
+`wait_agent` reads events after an optional `after_sequence` cursor. When `after_sequence` is omitted, the runtime substitutes the stored cursor for the target key. If matching events already exist, it returns immediately. Otherwise it waits with a deadline and returns either new events or `timed_out = true`.
 
-Timeout bounds are configurable per session (`min_wait_timeout_ms`, `max_wait_timeout_ms`, `default_wait_timeout_ms`).
+Default and maximum wait timeouts are server constants (`default_wait_timeout_secs = 5`, `max_wait_timeout_secs = 120`). Callers pass `timeout_secs`.
 
 ### Agent Status Lifecycle
 
@@ -345,11 +348,11 @@ Polls child assistant output and terminal status events, optionally waiting for 
 
 | Parameter | Required | Type | Description |
 |-----------|----------|------|-------------|
-| `target` | No | string | Optional child agent path or session id |
-| `after_sequence` | No | integer | Only return events after this parent-buffer sequence |
-| `timeout_ms` | No | integer | Wait timeout in milliseconds (clamped to `[min_wait_timeout_ms, max_wait_timeout_ms]`) |
+| `target` | No | string | Optional child agent path or nickname |
+| `after_sequence` | No | integer | Only return events after this parent-buffer sequence; omitted values use the runtime per-target cursor |
+| `timeout_secs` | No | integer | Wait timeout in seconds (default 5, max 120). Returns immediately when matching events already exist. |
 
-**Output**: `{ "events": AgentOutputEvent[], "next_sequence": integer, "timed_out": bool }`.
+**Output**: `{ "events": ParentAgentOutputEvent[], "next_sequence": integer, "timed_out": bool }`. Model-facing events omit internal session and turn ids; address children by `agent_path` or nickname.
 
 **Behavior**: If matching output events after `after_sequence` already exist, returns immediately. Otherwise waits until a matching event arrives or the timeout expires.
 

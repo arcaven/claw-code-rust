@@ -2,19 +2,32 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use devo_protocol::{
-    AgentContextMode, AgentListParams, AgentMessageParams, AgentToolPolicy, CloseAgentParams,
-    SessionId, SpawnAgentParams, WaitAgentParams,
-};
+use devo_protocol::AgentContextMode;
+use devo_protocol::AgentListParams;
+use devo_protocol::AgentMessageParams;
+use devo_protocol::AgentToolPolicy;
+use devo_protocol::CloseAgentParams;
+use devo_protocol::ParentAgentInfo;
+use devo_protocol::ParentAgentListResult;
+use devo_protocol::ParentSpawnAgentResult;
+use devo_protocol::SessionId;
+use devo_protocol::SpawnAgentParams;
+use devo_protocol::WaitAgentParams;
 
-use crate::contracts::{
-    ToolCallError, ToolContext, ToolProgress, ToolProgressSender, ToolResult, ToolResultContent,
-};
+use crate::contracts::ToolCallError;
+use crate::contracts::ToolContext;
+use crate::contracts::ToolProgress;
+use crate::contracts::ToolProgressSender;
+use crate::contracts::ToolResult;
+use crate::contracts::ToolResultContent;
 use crate::json_schema::JsonSchema;
 use crate::registry::ToolExposure;
 use crate::registry::ToolRegistryBuilder;
 use crate::tool_handler::ToolHandler;
-use crate::tool_spec::{ToolExecutionMode, ToolOutputMode, ToolPreparationFeedback, ToolSpec};
+use crate::tool_spec::ToolExecutionMode;
+use crate::tool_spec::ToolOutputMode;
+use crate::tool_spec::ToolPreparationFeedback;
+use crate::tool_spec::ToolSpec;
 
 #[derive(Clone, Copy)]
 enum AgentToolKind {
@@ -111,7 +124,7 @@ impl ToolHandler for AgentToolHandler {
                         ephemeral: false,
                     })
                     .await?;
-                json_result(result, "agent spawned")
+                json_result(ParentSpawnAgentResult::from(result), "agent spawned")
             }
             AgentToolKind::SendMessage => {
                 let input: AgentMessageInput = parse_input(input)?;
@@ -136,7 +149,7 @@ impl ToolHandler for AgentToolHandler {
                     session_id,
                     target: input.target,
                     after_sequence: input.after_sequence,
-                    timeout_ms: input.timeout_ms,
+                    timeout_secs: input.timeout_secs,
                 };
                 let result = tokio::select! {
                     result = coordinator.wait_agent(params) => result?,
@@ -152,7 +165,12 @@ impl ToolHandler for AgentToolHandler {
                         path_prefix: input.path_prefix,
                     })
                     .await?;
-                json_result(serde_json::json!({ "agents": agents }), "agents listed")
+                json_result(
+                    ParentAgentListResult {
+                        agents: agents.into_iter().map(ParentAgentInfo::from).collect(),
+                    },
+                    "agents listed",
+                )
             }
             AgentToolKind::Close => {
                 let input: CloseAgentInput = parse_input(input)?;
@@ -188,7 +206,7 @@ struct WaitAgentInput {
     #[serde(default)]
     after_sequence: Option<u64>,
     #[serde(default)]
-    timeout_ms: Option<u64>,
+    timeout_secs: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -242,19 +260,19 @@ fn spec(name: &str, description: &str, schema: JsonSchema) -> ToolSpec {
 fn spawn_spec() -> ToolSpec {
     spec(
         "spawn_agent",
-        "Launch a new Devo agent to handle complex, multi-step tasks autonomously.\n\nUse this from a parent session to parallelize independent research or implementation work, then use wait_agent to collect child output. Launch multiple agents concurrently whenever possible when the work is independent.\n\nWriting the prompt:\n- Brief the agent like a smart colleague who just walked into the room: it has not seen this conversation, does not know what you have tried, and does not understand why the task matters unless you tell it.\n- Explain what you are trying to accomplish and why.\n- Describe what you have already learned or ruled out.\n- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following narrow instructions.\n- If you need a short response, say so, for example \"report in under 200 words\".\n- Lookups: hand over the exact command. Investigations: hand over the question; prescribed steps become dead weight when the premise is wrong.\n- Terse command-style prompts produce shallow, generic work.\n- Never delegate understanding. Do not write \"based on your findings, fix the bug\" or \"based on the research, implement it.\" Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, and what specifically to change.\n\nWhen not to use an agent:\n- If you want to read a specific file path, use the read tool or file search instead.\n- If you are searching for a specific class, symbol, or string, use grep/code search instead when available.\n- If you are searching within a specific file or a small set of files, read those files directly.\n- Do not use an agent for tasks unrelated to available agent descriptions or the current request.\n\nThe agent's result is not visible to the user. To show the user the result, send a concise summary after wait_agent returns.",
+        "Launch a new child agent for complex multi-step work. Agent coordination tools (spawn_agent, send_message, wait_agent, list_agents, close_agent) are parent-only.\n\nTypical flow: spawn_agent -> wait_agent until status completes -> optionally send_message for a follow-up turn -> wait_agent again. Use list_agents for status without child text; close_agent to stop a child. Parallelize independent work by spawning multiple children whenever possible.\n\nChild output is only visible through wait_agent. Never infer or summarize child findings before wait_agent returns.\n\nWriting the prompt:\n- Brief the agent like a colleague who just arrived: no shared conversation unless fork_turns provides history.\n- State goal, why it matters, what you already ruled out, and the expected deliverable.\n- Lookups: give exact commands. Investigations: give the question, not a brittle script.\n- Never delegate understanding with phrases like \"based on your findings, fix it.\" Include concrete paths, symbols, and constraints.\n\nWhen not to use:\n- Reading a known file path -> read tool.\n- Searching a symbol or string -> grep/code search.\n- Small scoped file reads -> read directly.\n\nThe user does not see child output directly. Summarize for the user after wait_agent returns.\n\nExample: spawn_agent({message:\"Survey crates/server for wait_agent usage and summarize call sites.\"})",
         JsonSchema::object(
             BTreeMap::from([
                 (
                     "message".to_string(),
                     JsonSchema::string(Some(
-                        "Initial task message for the child agent. Include the goal, scope, files or subsystems to inspect, context needed for judgment calls, and the expected result.",
+                        "Initial child task. Include goal, scope, relevant paths, and expected result format.",
                     )),
                 ),
                 (
                     "fork_turns".to_string(),
                     JsonSchema::string(Some(
-                        "Optional history fork mode. In coding-agent sessions, use \"all\" (default) when the child needs stable completed parent history; it excludes the active parent turn. Use \"none\" for a clean child context containing only the task message. In DeepResearch sessions, this is always forced to \"none\". Do not assume the child sees your active turn unless you include needed context in message.",
+                        "\"all\" (coding-agent default): stable completed parent history, excludes the active parent turn. \"none\": only the task message. DeepResearch sessions always force \"none\".",
                     )),
                 ),
             ]),
@@ -267,7 +285,7 @@ fn spawn_spec() -> ToolSpec {
 fn send_message_spec() -> ToolSpec {
     spec(
         "send_message",
-        "Parent-only tool that sends additional user input to an existing child agent. If the child is idle, the message starts a child turn; if active, it queues for the next turn. Use this to continue a previously spawned agent with the agent's full context preserved. Each newly spawned agent starts from its configured fork context, so provide a complete task description when spawning rather than relying on hidden assumptions.",
+        "Send more input to an existing child agent. Idle children start a new turn immediately; active children queue the message for the next turn.\n\nWhen to use:\n- Follow up after a completed turn on the same child.\n- Correct or narrow the task without spawning a duplicate worker.\n\nWhen not to use:\n- Collecting output -> wait_agent.\n- Checking if still running -> list_agents.\n- Stopping a child -> close_agent.\n\nMulti-turn rule: each send_message starts a new child turn. Prior wait_agent results belong to the previous turn only. After send_message, call wait_agent again and wait for a fresh status event before treating output as final.\n\nExample: send_message({target:\"brave-apple\", message:\"Also check error paths in coordinator.rs.\"})",
         message_schema(),
     )
 }
@@ -275,26 +293,24 @@ fn send_message_spec() -> ToolSpec {
 fn wait_agent_spec() -> ToolSpec {
     spec(
         "wait_agent",
-        "Parent-only tool that polls child assistant output and terminal status events. Use after spawn_agent or send_message to collect incremental child results.\n\nDo not peek at generated transcript files or tail child output unless the user explicitly asks for a progress check. Reading a transcript mid-flight pulls the child agent's tool noise into your context and defeats the point of delegation.\n\nDo not race. After launching a child agent, you know nothing about what it found. Never fabricate or predict child results in any format: not as prose, summary, or structured output. If the user asks a follow-up before output lands, tell them the child agent is still running and give status, not a guess.",
+        "Collect child assistant output and turn-completion status. Each assistant_message event is the full accumulated text for that turn, not token deltas.\n\nDecision tree:\n1. After spawn_agent or send_message -> wait_agent with a longer timeout_secs (e.g. 60-120) until a status event (completed/failed/interrupted/closed).\n2. If timed_out with no events -> list_agents; if still running, wait_agent again with a short timeout_secs (e.g. 2-5).\n3. If completed with assistant_message -> use the output; send_message only if more work is needed.\n4. If off-track, stuck, or user wants to stop -> close_agent.\n\nDo not read child transcript files mid-flight. Do not fabricate child results. If the user asks early, report list_agents status instead of guessing.\n\nExample: wait_agent({\"target\":\"brave-apple\",\"timeout_secs\":90}) -> on timed_out with no events, list_agents({}) then wait_agent({\"target\":\"brave-apple\",\"timeout_secs\":3})",
         JsonSchema::object(
             BTreeMap::from([
                 (
                     "target".to_string(),
                     JsonSchema::string(Some(
-                        "Optional child agent path, generated nickname, or session id. Omit to poll all direct children.",
+                        "Child agent_nickname or agent_path from spawn_agent, list_agents, or prior wait_agent output. Omit to poll all direct children.",
                     )),
                 ),
                 (
                     "after_sequence".to_string(),
                     JsonSchema::integer(Some(
-                        "Only return output events with sequence greater than this value. To poll incrementally, pass the largest sequence value from the previous events list.",
+                        "Return events with sequence greater than this value. Omit on first poll to use the runtime cursor.",
                     )),
                 ),
                 (
-                    "timeout_ms".to_string(),
-                    JsonSchema::integer(Some(
-                        "Optional wait timeout in milliseconds. If no newer output exists, wait up to this timeout before returning timed_out.",
-                    )),
+                    "timeout_secs".to_string(),
+                    JsonSchema::integer(Some("Wait up to this many seconds (default 5, max 120).")),
                 ),
             ]),
             None,
@@ -306,11 +322,11 @@ fn wait_agent_spec() -> ToolSpec {
 fn list_agents_spec() -> ToolSpec {
     spec(
         "list_agents",
-        "Parent-only tool that lists child agents for the current session, including generated path, nickname, status, and last task message.",
+        "Lightweight status snapshot for child agents. Does not return assistant text and does not block.\n\nWhen to use:\n- Right after spawn_agent to confirm registration and copy agent_nickname/agent_path.\n- After wait_agent timed_out with no events to see if the child is still running.\n- Before send_message or close_agent when multiple children exist.\n- When the user asks for progress without needing findings yet.\n\nWhen not to use:\n- Collecting child findings -> wait_agent.\n- Stopping a child -> close_agent.\n\nStatus values: running, completed, failed, interrupted, closed, spawning. running with an empty wait_agent poll usually means the child is still working.\n\nExample: list_agents({})",
         JsonSchema::object(
             BTreeMap::from([(
                 "path_prefix".to_string(),
-                JsonSchema::string(Some("Optional generated child path or path prefix filter.")),
+                JsonSchema::string(Some("Optional agent_path prefix filter.")),
             )]),
             None,
             Some(false),
@@ -321,12 +337,12 @@ fn list_agents_spec() -> ToolSpec {
 fn close_agent_spec() -> ToolSpec {
     spec(
         "close_agent",
-        "Parent-only tool that closes an existing child agent, interrupts active work if needed, and records a terminal output event.",
+        "Stop a child agent, interrupt active work if needed, and record a terminal status event.\n\nWhen to use:\n- Child is off-track or producing useless work.\n- Child stays running with no useful progress after list_agents + short wait_agent polls.\n- User asks to cancel or you no longer need the worker.\n- You spawned the wrong worker and will not use its output.\n\nWhen not to use:\n- Collecting output from a healthy completed child -> wait_agent first, then close if cleanup is needed.\n- Checking status -> list_agents.\n- Sending corrections -> send_message.\n\nExample: close_agent({target:\"brave-apple\"})",
         JsonSchema::object(
             BTreeMap::from([(
                 "target".to_string(),
                 JsonSchema::string(Some(
-                    "Target child agent path, generated nickname, or session id.",
+                    "Child agent_nickname or agent_path from spawn_agent or list_agents.",
                 )),
             )]),
             Some(vec!["target".to_string()]),
@@ -341,14 +357,12 @@ fn message_schema() -> JsonSchema {
             (
                 "target".to_string(),
                 JsonSchema::string(Some(
-                    "Target child agent path, generated nickname, or session id.",
+                    "Child agent_nickname or agent_path from spawn_agent or list_agents.",
                 )),
             ),
             (
                 "message".to_string(),
-                JsonSchema::string(Some(
-                    "Additional task input to deliver to the child as user text.",
-                )),
+                JsonSchema::string(Some("Follow-up user message for the child agent.")),
             ),
         ]),
         Some(vec!["target".to_string(), "message".to_string()]),
@@ -543,36 +557,54 @@ mod tests {
             .as_str()
             .expect("fork_turns description");
 
+        assert!(spawn.description.contains("parent-only"));
         assert!(spawn.description.contains("wait_agent"));
-        assert!(fork_description.contains("\"all\" (default)"));
+        assert!(
+            spawn
+                .description
+                .contains("only visible through wait_agent")
+        );
+        assert!(fork_description.contains("\"all\" (coding-agent default)"));
         assert!(fork_description.contains("stable completed parent history"));
         assert!(fork_description.contains("excludes the active parent turn"));
         assert!(fork_description.contains("DeepResearch sessions"));
-        assert!(fork_description.contains("always forced to \"none\""));
+        assert!(fork_description.contains("always force \"none\""));
         assert!(fork_description.contains("\"none\""));
-        assert!(send_message_spec().description.contains("Parent-only"));
+
+        let send = send_message_spec();
+        assert!(!send.description.contains("Parent-only"));
         assert!(
-            send_message_spec()
-                .description
-                .contains("queues for the next turn")
+            send.description
+                .contains("queue the message for the next turn")
         );
-        assert!(
-            wait_agent_spec()
-                .description
-                .contains("polls child assistant output")
-        );
-        let wait_schema = wait_agent_spec().input_schema.to_json_value();
+        assert!(send.description.contains("Multi-turn rule"));
+        assert!(send.description.contains("wait_agent again"));
+
+        let wait = wait_agent_spec();
+        assert!(!wait.description.contains("Parent-only"));
+        assert!(wait.description.contains("Decision tree"));
+        assert!(wait.description.contains(r#"wait_agent({"target""#));
+        assert!(wait.description.contains("assistant_message"));
+        assert!(wait.description.contains("not token deltas"));
+        assert!(wait.description.contains("list_agents"));
+        assert!(wait.description.contains("close_agent"));
+        let wait_schema = wait.input_schema.to_json_value();
         let after_sequence_description = wait_schema["properties"]["after_sequence"]["description"]
             .as_str()
             .expect("after_sequence description");
-        assert!(after_sequence_description.contains("largest sequence value"));
-        assert!(!after_sequence_description.contains("previous next_sequence"));
-        assert!(list_agents_spec().description.contains("generated path"));
-        assert!(
-            close_agent_spec()
-                .description
-                .contains("terminal output event")
-        );
+        assert!(after_sequence_description.contains("runtime cursor"));
+        assert!(wait_schema["properties"].get("timeout_secs").is_some());
+
+        let list = list_agents_spec();
+        assert!(!list.description.contains("Parent-only"));
+        assert!(list.description.contains("timed_out with no events"));
+        assert!(list.description.contains("Does not return assistant text"));
+        assert!(list.description.contains("agent_nickname"));
+
+        let close = close_agent_spec();
+        assert!(!close.description.contains("Parent-only"));
+        assert!(close.description.contains("off-track"));
+        assert!(close.description.contains("terminal status event"));
     }
 
     #[tokio::test]

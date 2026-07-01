@@ -319,6 +319,18 @@ pub(super) fn session_metadata_from_acp_update(
     serde_json::from_value(meta.get(DEVO_SESSION_META)?.clone()).ok()
 }
 
+pub(super) fn spawn_task_message_from_acp_update(update: &AcpSessionUpdate) -> Option<String> {
+    let raw_input = match update {
+        AcpSessionUpdate::ToolCall { raw_input, .. } => raw_input.as_ref(),
+        AcpSessionUpdate::ToolCallUpdate { raw_input, .. } => raw_input.as_ref(),
+        _ => None,
+    }?;
+    raw_input
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
 pub(super) fn spawn_agent_result_from_acp_update(
     update: &AcpSessionUpdate,
 ) -> Option<SpawnAgentResult> {
@@ -450,8 +462,16 @@ pub(super) fn subagent_monitor_events_from_acp_session_notification_with_termina
                 owner_session_id: Some(session_id),
             },
         ),
-        AcpSessionUpdate::UserMessageChunk { .. }
-        | AcpSessionUpdate::SessionInfoUpdate { .. }
+        AcpSessionUpdate::UserMessageChunk { content, .. } => acp_content_display_text(&content)
+            .into_iter()
+            .map(|message| WorkerEvent::SubagentMonitor {
+                event: SubagentMonitorEvent::TaskMessage {
+                    session_id,
+                    message,
+                },
+            })
+            .collect(),
+        AcpSessionUpdate::SessionInfoUpdate { .. }
         | AcpSessionUpdate::AvailableCommandsUpdate { .. }
         | AcpSessionUpdate::CurrentModeUpdate { .. }
         | AcpSessionUpdate::ConfigOptionUpdate { .. }

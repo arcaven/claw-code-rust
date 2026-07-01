@@ -8,7 +8,7 @@ use super::research_capture::{
 use super::research_parsing::{
     is_request_user_input_tool_name, is_spawn_agent_tool_name,
     request_user_input_exchanges_from_response, request_user_input_questions_from_input,
-    spawn_agent_child_session_id, tool_content_to_json,
+    spawn_agent_child_session_id, spawn_agent_child_target, tool_content_to_json,
 };
 use super::research_stages::ResearchStageKind;
 use super::research_stages::StreamedResearchArtifact;
@@ -200,13 +200,23 @@ impl ServerRuntime {
                 summary,
             } => {
                 let output = tool_content_to_json(content);
-                if is_spawn_agent_tool_name(&tool_name)
-                    && !is_error
-                    && let Some(child_session_id) = spawn_agent_child_session_id(&output)
-                {
-                    self.remember_research_child_agent(session_id, child_session_id)
-                        .await;
-                    capture.spawned_worker_count += 1;
+                if is_spawn_agent_tool_name(&tool_name) && !is_error {
+                    let child_session_id =
+                        if let Some(child_session_id) = spawn_agent_child_session_id(&output) {
+                            Some(child_session_id)
+                        } else if let Some(target) = spawn_agent_child_target(&output) {
+                            self.resolve_child_agent(session_id, &target)
+                                .await
+                                .ok()
+                                .map(|metadata| metadata.session_id)
+                        } else {
+                            None
+                        };
+                    if let Some(child_session_id) = child_session_id {
+                        self.remember_research_child_agent(session_id, child_session_id)
+                            .await;
+                        capture.spawned_worker_count += 1;
+                    }
                 }
                 if let Some(pending) = capture.pending_tools.remove(&tool_use_id) {
                     self.complete_item(

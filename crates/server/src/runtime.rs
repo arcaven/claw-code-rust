@@ -222,6 +222,8 @@ pub struct ServerRuntime {
     agent_mailboxes: Mutex<HashMap<SessionId, SubagentMailbox>>,
     /// Per-parent child-output buffers used by wait_agent polling.
     agent_output_buffers: Mutex<HashMap<SessionId, SubagentOutputBuffer>>,
+    /// Per-parent `wait_agent` sequence cursors keyed by optional target string.
+    agent_wait_cursors: Mutex<HashMap<SessionId, HashMap<String, u64>>>,
     /// Child agents owned by an active `/research` pipeline.
     research_child_agents: Mutex<HashMap<SessionId, HashSet<SessionId>>>,
     /// Latest subagent turn usage grouped under the parent turn that requested the work.
@@ -366,6 +368,7 @@ impl ServerRuntime {
             agent_registries: Mutex::new(HashMap::new()),
             agent_mailboxes: Mutex::new(HashMap::new()),
             agent_output_buffers: Mutex::new(HashMap::new()),
+            agent_wait_cursors: Mutex::new(HashMap::new()),
             research_child_agents: Mutex::new(HashMap::new()),
             subagent_usage: Mutex::new(subagent_usage::SubagentUsageState::default()),
             reference_searches: Mutex::new(HashMap::new()),

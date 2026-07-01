@@ -10,8 +10,6 @@ mod coordinator;
 mod handlers;
 mod lifecycle;
 
-const DEFAULT_WAIT_AGENT_TIMEOUT: Duration = Duration::from_secs(300);
-const MAX_WAIT_AGENT_TIMEOUT: Duration = Duration::from_secs(900);
 const AGENT_NAME_ADJECTIVES: &[&str] = &[
     "brave", "clever", "silent", "happy", "gentle", "swift", "bright", "lazy", "wild", "calm",
     "fuzzy", "tiny", "bold", "lucky", "mighty",
@@ -275,6 +273,15 @@ impl ServerRuntime {
             },
         )
         .await;
+        if let Some(parent_turn_id) = parent_active_turn_id {
+            self.record_subagent_status_event(
+                parent_session_id,
+                child_session_id,
+                SubagentStatus::Spawning,
+                parent_turn_id,
+            )
+            .await;
+        }
         self.register_subagent_usage_owner(
             parent_session_id,
             child_session_id,
@@ -555,6 +562,16 @@ impl ServerRuntime {
         let turn_for_task = turn.clone();
         let turn_config_for_task = turn_config.clone();
         let cancel_token = CancellationToken::new();
+        let parent_session_id = {
+            let session = session_arc.lock().await;
+            session.summary.parent_session_id
+        };
+        if let Some(parent_session_id) = parent_session_id {
+            let mut connections = self.active_turn_connections.lock().await;
+            if let Some(connection_id) = connections.get(&parent_session_id).copied() {
+                connections.insert(session_id, connection_id);
+            }
+        }
         self.active_turn_cancellations
             .lock()
             .await
@@ -679,7 +696,7 @@ impl ServerRuntime {
         Ok(())
     }
 
-    async fn resolve_child_agent(
+    pub(in crate::runtime) async fn resolve_child_agent(
         &self,
         parent_session_id: SessionId,
         target: &str,
@@ -889,7 +906,7 @@ impl ServerRuntime {
                 child_session_id,
                 agent_path,
                 turn_id: payload.context.turn_id,
-                kind: "assistant_delta".to_string(),
+                kind: devo_protocol::AgentOutputEventKind::AssistantMessage,
                 text: Some(payload.delta.clone()),
                 status: None,
                 created_at: Utc::now(),
@@ -937,7 +954,7 @@ impl ServerRuntime {
                 child_session_id,
                 agent_path,
                 turn_id: Some(turn_id),
-                kind: "status".to_string(),
+                kind: devo_protocol::AgentOutputEventKind::Status,
                 text,
                 status: Some(status.as_str().to_string()),
                 created_at: Utc::now(),

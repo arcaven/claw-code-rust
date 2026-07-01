@@ -104,6 +104,7 @@ use acp_events::acp_terminal_output_event_with_session;
 use acp_events::parse_acp_session_notification;
 use acp_events::session_metadata_from_acp_update;
 use acp_events::spawn_agent_result_from_acp_update;
+use acp_events::spawn_task_message_from_acp_update;
 use acp_events::subagent_monitor_events_from_acp_session_notification_with_terminal_state;
 #[cfg(test)]
 use acp_events::worker_events_from_acp_notification;
@@ -157,7 +158,8 @@ async fn maybe_discover_spawned_subagent_from_acp_update(
     };
     let child_session_id = spawn_result.child_session_id;
     if child_agent_sessions.contains(&child_session_id) {
-        return;
+        // Child may already be registered from session_info_update; still hydrate
+        // status and last_task_message from agent/list when spawn completes.
     }
 
     let listed_agent = match client
@@ -190,11 +192,10 @@ async fn maybe_discover_spawned_subagent_from_acp_update(
         nickname: spawn_result.agent_nickname,
         role: "default".to_string(),
         status: spawn_result.status,
-        last_task_message: None,
+        last_task_message: spawn_task_message_from_acp_update(update),
     });
-    if child_agent_sessions.insert(agent.session_id) {
-        let _ = event_tx.send(WorkerEvent::SubagentDiscovered { agent });
-    }
+    child_agent_sessions.insert(agent.session_id);
+    let _ = event_tx.send(WorkerEvent::SubagentDiscovered { agent });
 }
 
 /// Immutable runtime configuration used to construct the background server client worker.

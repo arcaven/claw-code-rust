@@ -5,9 +5,10 @@ use anyhow::Context;
 use anyhow::Result;
 use devo_protocol::AgentInfo;
 use devo_protocol::AgentMessageResult;
-use devo_protocol::AgentOutputEvent;
+use devo_protocol::AgentOutputEventKind;
 use devo_protocol::ErrorResponse;
 use devo_protocol::ModelRequest;
+use devo_protocol::ParentAgentOutputEvent;
 use devo_protocol::ProtocolErrorCode;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -333,32 +334,28 @@ async fn wait_agent_reports_child_output_and_terminal_status() -> Result<()> {
         spawn_result.child_session_id,
     )
     .await?;
-    let wait_result = request_agent_wait(&runtime, connection_id, parent_session_id, 1_000).await?;
+    let wait_result = request_agent_wait(&runtime, connection_id, parent_session_id, 1).await?;
 
     assert_eq!(wait_result.timed_out, false);
     assert_eq!(wait_result.next_sequence, 3);
     assert_eq!(
         wait_result.events,
         vec![
-            AgentOutputEvent {
+            ParentAgentOutputEvent {
                 sequence: 1,
-                child_session_id: spawn_result.child_session_id,
                 agent_path: spawn_result.agent_path.clone(),
-                turn_id: wait_result.events[0].turn_id,
-                kind: "assistant_delta".to_string(),
+                agent_nickname: spawn_result.agent_nickname.clone(),
+                kind: AgentOutputEventKind::AssistantMessage,
                 text: Some("child finished review".to_string()),
                 status: None,
-                created_at: wait_result.events[0].created_at,
             },
-            AgentOutputEvent {
+            ParentAgentOutputEvent {
                 sequence: 2,
-                child_session_id: spawn_result.child_session_id,
                 agent_path: spawn_result.agent_path.clone(),
-                turn_id: wait_result.events[1].turn_id,
-                kind: "status".to_string(),
+                agent_nickname: spawn_result.agent_nickname.clone(),
+                kind: AgentOutputEventKind::Status,
                 text: None,
                 status: Some("completed".to_string()),
-                created_at: wait_result.events[1].created_at,
             },
         ]
     );
@@ -399,7 +396,7 @@ async fn wait_agent_polls_incremental_child_output() -> Result<()> {
         parent_session_id,
         Some(spawn_result.child_session_id),
         Some(0),
-        1_000,
+        1,
     )
     .await?;
     assert_eq!(
@@ -408,7 +405,11 @@ async fn wait_agent_polls_incremental_child_output() -> Result<()> {
             .iter()
             .filter_map(|event| event.text.as_deref())
             .collect::<Vec<_>>(),
-        vec!["alpha ", "beta"]
+        vec!["alpha beta"]
+    );
+    assert_eq!(
+        first_poll.events[0].kind,
+        AgentOutputEventKind::AssistantMessage
     );
 
     let second_poll = request_agent_wait_with(
@@ -426,10 +427,9 @@ async fn wait_agent_polls_incremental_child_output() -> Result<()> {
             .iter()
             .map(|event| event.sequence)
             .collect::<Vec<_>>(),
-        vec![2, 3]
+        vec![2]
     );
-    assert_eq!(second_poll.events[0].text.as_deref(), Some("beta"));
-    assert_eq!(second_poll.events[1].status.as_deref(), Some("completed"));
+    assert_eq!(second_poll.events[0].status.as_deref(), Some("completed"));
 
     Ok(())
 }
@@ -440,7 +440,7 @@ async fn wait_agent_preserves_full_child_report_for_parent_model() -> Result<()>
     let full_report = format!("{}END_OF_LONG_SURVEY_REPORT", "survey finding ".repeat(900));
     let provider = Arc::new(ScriptedProvider::new([
         ScriptedProvider::completed(&full_report),
-        ScriptedProvider::wait_agent_tool_call(1_000),
+        ScriptedProvider::wait_agent_tool_call(120),
         ScriptedProvider::completed("parent consumed child report"),
     ]));
     let runtime = build_runtime(data_root.path(), Arc::clone(&provider) as _)?;
@@ -656,7 +656,7 @@ async fn close_agent_records_closed_output_event_once() -> Result<()> {
     )
     .await?;
     assert_eq!(close_result.status, "closed");
-    let wait_result = request_agent_wait(&runtime, connection_id, parent_session_id, 1_000).await?;
+    let wait_result = request_agent_wait(&runtime, connection_id, parent_session_id, 1).await?;
     assert_eq!(
         wait_result
             .events

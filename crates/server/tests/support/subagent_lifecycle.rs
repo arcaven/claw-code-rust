@@ -121,8 +121,8 @@ impl ScriptedProvider {
         ])
     }
 
-    pub fn wait_agent_tool_call(timeout_ms: u64) -> StreamScript {
-        let input = serde_json::json!({ "timeout_ms": timeout_ms });
+    pub fn wait_agent_tool_call(timeout_secs: u64) -> StreamScript {
+        let input = serde_json::json!({ "timeout_secs": timeout_secs });
         let tool_call_id = "wait-agent-call".to_string();
         StreamScript::Events(vec![
             StreamEvent::ToolCallStart {
@@ -407,7 +407,7 @@ pub async fn request_agent_wait(
     runtime: &Arc<ServerRuntime>,
     connection_id: u64,
     session_id: devo_protocol::SessionId,
-    timeout_ms: u64,
+    timeout_secs: u64,
 ) -> Result<WaitAgentResult> {
     request_agent_wait_with(
         runtime,
@@ -415,7 +415,7 @@ pub async fn request_agent_wait(
         session_id,
         None::<String>,
         None,
-        timeout_ms,
+        timeout_secs,
     )
     .await
 }
@@ -426,7 +426,7 @@ pub async fn request_agent_wait_with<T: serde::Serialize>(
     session_id: devo_protocol::SessionId,
     target: Option<T>,
     after_sequence: Option<u64>,
-    timeout_ms: u64,
+    timeout_secs: u64,
 ) -> Result<WaitAgentResult> {
     let target = target
         .map(serde_json::to_value)
@@ -442,7 +442,7 @@ pub async fn request_agent_wait_with<T: serde::Serialize>(
                     "session_id": session_id,
                     "target": target,
                     "after_sequence": after_sequence,
-                    "timeout_ms": timeout_ms
+                    "timeout_secs": timeout_secs
                 }
             }),
         )

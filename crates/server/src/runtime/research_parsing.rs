@@ -93,6 +93,23 @@ pub(super) fn spawn_agent_child_session_id(output: &serde_json::Value) -> Option
         .map(|result| result.child_session_id)
 }
 
+pub(super) fn spawn_agent_child_target(output: &serde_json::Value) -> Option<String> {
+    output
+        .get("agent_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            output
+                .get("agent_nickname")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .map(str::to_string)
+        })
+}
+
 pub(super) fn tool_content_to_json(content: ToolContent) -> serde_json::Value {
     match content {
         ToolContent::Text(text) => serde_json::Value::String(text),

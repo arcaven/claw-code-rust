@@ -708,9 +708,13 @@ impl ServerRuntime {
         if let Some(task) = self.active_tasks.lock().await.remove(&params.session_id) {
             task.abort();
         }
-        Arc::clone(self)
-            .close_research_child_agents(params.session_id)
-            .await;
+        let close_children_runtime = Arc::clone(self);
+        let close_children_parent = params.session_id;
+        tokio::spawn(async move {
+            close_children_runtime
+                .close_research_child_agents(close_children_parent)
+                .await;
+        });
         let interrupted_turn = {
             let mut session = session_arc.lock().await;
             let Some(mut turn) = session.active_turn.take() else {

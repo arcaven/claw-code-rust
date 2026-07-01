@@ -5,6 +5,8 @@
 //! the selected child through the normal transcript pager.
 
 use std::collections::HashMap;
+use std::time::Duration;
+use std::time::Instant;
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -31,13 +33,18 @@ use super::ActiveCellTranscriptKey;
 use super::ChatWidget;
 use super::DotStatus;
 use super::TranscriptOverlayCell;
+use super::UserMessage;
 use super::subagent_live_list;
 use super::subagent_live_list::SubagentLiveListRow;
 use super::subagent_live_list::SubagentLiveListRowKey;
 
+const SUBAGENT_INACTIVE_GRACE: Duration = Duration::from_secs(12);
+const SUBAGENT_CTRL_X_REVEAL: Duration = Duration::from_secs(15);
+
 #[derive(Debug, Default)]
 pub(super) struct SubagentMonitorState {
     live_list_focused: bool,
+    list_reveal_until: Option<Instant>,
     agents: Vec<SubagentMonitorAgent>,
     selected: Option<SessionId>,
     user_selected: bool,
@@ -54,6 +61,7 @@ struct SubagentSessionView {
     active_turn: Option<devo_core::TurnId>,
     latest_preview: String,
     has_runtime_update: bool,
+    last_activity_at: Option<Instant>,
     revision: u64,
 }
 
@@ -73,6 +81,7 @@ struct MonitorToolItem {
 
 #[derive(Clone, Copy, Debug)]
 enum MonitorTranscriptKind {
+    User,
     Assistant,
     Reasoning,
     Tool,
@@ -94,17 +103,51 @@ impl ChatWidget {
     }
 
     pub(super) fn focus_subagent_live_list(&mut self) {
-        if !self.has_live_subagents() {
+        if self.subagent_monitor.agents.is_empty() {
             self.subagent_monitor.live_list_focused = false;
             self.set_status_message("No active sub-agents");
             self.frame_requester.schedule_frame();
             return;
         }
 
+        let now = Instant::now();
+        if !self.has_visible_subagent_list(now) {
+            self.subagent_monitor.list_reveal_until = Some(now + SUBAGENT_CTRL_X_REVEAL);
+            self.frame_requester
+                .schedule_frame_in(SUBAGENT_CTRL_X_REVEAL);
+        }
+
         self.subagent_monitor.live_list_focused = true;
-        self.ensure_live_subagent_selected();
+        self.ensure_visible_subagent_selected(now);
         self.set_status_message("Select sub-agent");
         self.frame_requester.schedule_frame();
+    }
+
+    pub(super) fn tick_subagent_monitor(&mut self, now: Instant) {
+        let reveal_expired = self
+            .subagent_monitor
+            .list_reveal_until
+            .is_some_and(|until| until <= now);
+        if reveal_expired {
+            self.subagent_monitor.list_reveal_until = None;
+            self.sync_subagent_hint(now);
+            self.frame_requester.schedule_frame();
+            return;
+        }
+
+        let had_visible = self.has_visible_subagent_list(now);
+        self.sync_subagent_hint(now);
+        if had_visible
+            && !self.has_visible_subagent_list(now)
+            && self.subagent_monitor.agents.iter().any(|agent| {
+                self.subagent_monitor
+                    .sessions
+                    .contains_key(&agent.session_id)
+            })
+        {
+            self.frame_requester
+                .schedule_frame_in(SUBAGENT_INACTIVE_GRACE);
+        }
     }
 
     pub(super) fn handle_subagent_live_list_key_event(&mut self, key: KeyEvent) {
@@ -184,7 +227,7 @@ impl ChatWidget {
             "subagent discovered by chat widget"
         );
         self.upsert_subagent(agent);
-        self.sync_subagent_hint();
+        self.sync_subagent_hint(Instant::now());
         self.frame_requester.schedule_frame();
     }
 
@@ -226,7 +269,7 @@ impl ChatWidget {
             view.agent = Some(updated_agent);
         }
 
-        self.sync_subagent_hint();
+        self.sync_subagent_hint(Instant::now());
         let view = self.subagent_monitor.sessions.get(&session_id);
         let latest_preview = view.map(|view| view.latest_preview.as_str()).unwrap_or("");
         let has_runtime_update = view.is_some_and(|view| view.has_runtime_update);
@@ -314,6 +357,18 @@ impl ChatWidget {
     }
 
     #[cfg(test)]
+    pub(crate) fn expire_subagent_inactivity_for_test(&mut self) {
+        let expired = Instant::now()
+            .checked_sub(SUBAGENT_INACTIVE_GRACE + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        for view in self.subagent_monitor.sessions.values_mut() {
+            view.last_activity_at = Some(expired);
+        }
+        self.subagent_monitor.list_reveal_until = None;
+        self.sync_subagent_hint(Instant::now());
+    }
+
+    #[cfg(test)]
     pub(crate) fn is_subagent_monitor_open_for_test(&self) -> bool {
         self.subagent_monitor.live_list_focused
     }
@@ -347,23 +402,35 @@ impl ChatWidget {
             .entry(session_id)
             .or_default();
         view.status = agent.status.clone();
-        view.agent = Some(agent);
+        view.agent = Some(agent.clone());
+        if is_active_subagent_status(&normalize_subagent_display_status(&agent.status)) {
+            view.touch_activity();
+            if !is_terminal_status(&view.status) {
+                view.status = "working".to_string();
+            }
+        }
+        if let Some(message) = agent.last_task_message.as_deref() {
+            view.seed_initial_task_message(message);
+        }
     }
 
-    fn sync_subagent_hint(&mut self) {
-        let has_live = self.has_live_subagents();
-        if !has_live {
+    fn sync_subagent_hint(&mut self, now: Instant) {
+        let has_active = self.has_active_subagents();
+        let has_visible = self.has_visible_subagent_list(now);
+        if !has_visible {
             self.subagent_monitor.live_list_focused = false;
             self.subagent_monitor.selected = None;
             self.subagent_monitor.user_selected = false;
         } else {
-            self.ensure_live_subagent_selected();
+            self.ensure_visible_subagent_selected(now);
         }
-        self.bottom_pane.set_subagent_hint_visible(has_live);
+        self.bottom_pane.set_subagent_hint_visible(has_active);
         tracing::debug!(
             target: "devo_tui::subagent",
-            has_live,
-            live_count = self.live_subagent_ids().len(),
+            has_active,
+            has_visible,
+            live_count = self.active_subagent_ids().len(),
+            visible_count = self.visible_subagent_ids(now).len(),
             selected = ?self.subagent_monitor.selected,
             focused = self.subagent_monitor.live_list_focused,
             user_selected = self.subagent_monitor.user_selected,
@@ -371,40 +438,86 @@ impl ChatWidget {
         );
     }
 
-    fn has_live_subagents(&self) -> bool {
+    fn has_active_subagents(&self) -> bool {
+        self.subagent_monitor.agents.iter().any(|agent| {
+            is_active_subagent_status(&self.subagent_display_status(agent))
+                || self
+                    .subagent_monitor
+                    .sessions
+                    .get(&agent.session_id)
+                    .is_some_and(SubagentSessionView::has_live_tail)
+        })
+    }
+
+    fn has_visible_subagent_list(&self, now: Instant) -> bool {
+        if self
+            .subagent_monitor
+            .list_reveal_until
+            .is_some_and(|until| until > now)
+        {
+            return !self.subagent_monitor.agents.is_empty();
+        }
         self.subagent_monitor
             .agents
             .iter()
-            .any(|agent| is_live_status(&self.subagent_status_for_agent(agent)))
+            .any(|agent| self.is_agent_visible_in_list(agent, now))
+    }
+
+    fn is_agent_visible_in_list(&self, agent: &SubagentMonitorAgent, now: Instant) -> bool {
+        if is_active_subagent_status(&self.subagent_display_status(agent)) {
+            return true;
+        }
+        let Some(view) = self.subagent_monitor.sessions.get(&agent.session_id) else {
+            return false;
+        };
+        if view.has_live_tail() {
+            return true;
+        }
+        view.last_activity_at
+            .is_some_and(|at| now.duration_since(at) < SUBAGENT_INACTIVE_GRACE)
+    }
+
+    fn has_live_subagents(&self) -> bool {
+        self.has_active_subagents()
     }
 
     fn selected_live_subagent(&self) -> Option<SessionId> {
         let selected = self.subagent_monitor.selected?;
+        let now = Instant::now();
         self.subagent_agent(selected)
-            .filter(|agent| is_live_status(&self.subagent_status_for_agent(agent)))
+            .filter(|agent| self.is_agent_visible_in_list(agent, now))
             .map(|agent| agent.session_id)
     }
 
-    fn ensure_live_subagent_selected(&mut self) {
+    fn ensure_visible_subagent_selected(&mut self, now: Instant) {
         if self.selected_live_subagent().is_some()
             && (self.subagent_monitor.live_list_focused || self.subagent_monitor.user_selected)
         {
             return;
         }
-        self.subagent_monitor.selected = self.live_subagent_ids().last().copied();
+        self.subagent_monitor.selected = self
+            .visible_subagent_ids(now)
+            .last()
+            .copied()
+            .or_else(|| self.active_subagent_ids().last().copied());
         self.subagent_monitor.user_selected = false;
     }
 
+    fn ensure_live_subagent_selected(&mut self) {
+        self.ensure_visible_subagent_selected(Instant::now());
+    }
+
     fn select_relative_live_subagent(&mut self, delta: isize) {
-        let live_ids = self.live_subagent_ids();
-        if live_ids.is_empty() {
+        let now = Instant::now();
+        let visible_ids = self.visible_subagent_ids(now);
+        if visible_ids.is_empty() {
             return;
         }
         let current = self
             .subagent_monitor
             .selected
             .and_then(|selected| {
-                live_ids
+                visible_ids
                     .iter()
                     .position(|session_id| *session_id == selected)
             })
@@ -414,29 +527,73 @@ impl ChatWidget {
         } else {
             current
                 .saturating_add(delta as usize)
-                .min(live_ids.len().saturating_sub(1))
+                .min(visible_ids.len().saturating_sub(1))
         };
-        self.subagent_monitor.selected = Some(live_ids[next]);
+        self.subagent_monitor.selected = Some(visible_ids[next]);
         self.subagent_monitor.user_selected = true;
         self.frame_requester.schedule_frame();
     }
 
-    fn live_subagent_ids(&self) -> Vec<SessionId> {
+    fn active_subagent_ids(&self) -> Vec<SessionId> {
         self.subagent_monitor
             .agents
             .iter()
-            .filter(|agent| is_live_status(&self.subagent_status_for_agent(agent)))
+            .filter(|agent| {
+                is_active_subagent_status(&self.subagent_display_status(agent))
+                    || self
+                        .subagent_monitor
+                        .sessions
+                        .get(&agent.session_id)
+                        .is_some_and(SubagentSessionView::has_live_tail)
+            })
             .map(|agent| agent.session_id)
             .collect()
     }
 
-    fn subagent_live_list_rows(&self) -> Vec<SubagentLiveListRow> {
-        let mut rows = self
+    fn visible_subagent_ids(&self, now: Instant) -> Vec<SessionId> {
+        let mut indexed = self
             .subagent_monitor
             .agents
             .iter()
-            .filter(|agent| is_live_status(&self.subagent_status_for_agent(agent)))
-            .map(|agent| {
+            .enumerate()
+            .filter(|(_, agent)| self.is_agent_visible_in_list(agent, now))
+            .collect::<Vec<_>>();
+        indexed.sort_by(|(left_index, left), (right_index, right)| {
+            let left_active = is_active_subagent_status(&self.subagent_display_status(left))
+                || self
+                    .subagent_monitor
+                    .sessions
+                    .get(&left.session_id)
+                    .is_some_and(SubagentSessionView::has_live_tail);
+            let right_active = is_active_subagent_status(&self.subagent_display_status(right))
+                || self
+                    .subagent_monitor
+                    .sessions
+                    .get(&right.session_id)
+                    .is_some_and(SubagentSessionView::has_live_tail);
+            match (left_active, right_active) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => left_index.cmp(right_index),
+            }
+        });
+        indexed
+            .into_iter()
+            .map(|(_, agent)| agent.session_id)
+            .collect()
+    }
+
+    fn live_subagent_ids(&self) -> Vec<SessionId> {
+        self.active_subagent_ids()
+    }
+
+    fn subagent_live_list_rows(&self) -> Vec<SubagentLiveListRow> {
+        let now = Instant::now();
+        let mut rows = self
+            .visible_subagent_ids(now)
+            .into_iter()
+            .filter_map(|session_id| {
+                let agent = self.subagent_agent(session_id)?;
                 let view = self.subagent_monitor.sessions.get(&agent.session_id);
                 let preview = if let Some(view) = view
                     && view.has_runtime_update
@@ -450,12 +607,12 @@ impl ChatWidget {
                         .and_then(tail_preview)
                         .unwrap_or_else(|| "Waiting for updates".to_string())
                 };
-                SubagentLiveListRow {
+                Some(SubagentLiveListRow {
                     key: SubagentLiveListRowKey::Session(agent.session_id),
                     name: agent.nickname.clone(),
-                    status: self.subagent_status_for_agent(agent),
+                    status: self.subagent_display_status(agent),
                     preview,
-                }
+                })
             })
             .collect::<Vec<_>>();
         rows.extend(
@@ -487,12 +644,24 @@ impl ChatWidget {
             .unwrap_or_else(|| agent.status.clone())
     }
 
+    fn subagent_display_status(&self, agent: &SubagentMonitorAgent) -> String {
+        let stored = self.subagent_status_for_agent(agent);
+        let Some(view) = self.subagent_monitor.sessions.get(&agent.session_id) else {
+            return normalize_subagent_display_status(&stored);
+        };
+        if view.has_live_tail() || view.active_turn.is_some() {
+            return "working".to_string();
+        }
+        normalize_subagent_display_status(&stored)
+    }
+
     fn subagent_transcript_item_cell(
         &self,
         item: &MonitorTranscriptItem,
         width: u16,
     ) -> TranscriptOverlayCell {
         let lines = match item.kind {
+            MonitorTranscriptKind::User => Vec::new(),
             MonitorTranscriptKind::Assistant => history_cell::AgentMarkdownCell::new(
                 item.body.clone(),
                 &self.session.cwd,
@@ -542,7 +711,8 @@ impl ChatWidget {
         TranscriptOverlayCell {
             lines,
             is_stream_continuation: false,
-            user_message: None,
+            user_message: matches!(item.kind, MonitorTranscriptKind::User)
+                .then(|| UserMessage::from(item.body.clone())),
             is_selected_user: false,
         }
     }
@@ -617,7 +787,7 @@ impl SubagentSessionView {
                 session_id: _,
                 turn_id,
             } => {
-                self.status = "running".to_string();
+                self.mark_working();
                 self.active_turn = Some(turn_id);
                 self.set_latest_preview("Started turn");
             }
@@ -626,6 +796,7 @@ impl SubagentSessionView {
                 item_id,
                 kind,
             } => {
+                self.mark_working();
                 self.active_text.insert(
                     text_key(Some(item_id), kind),
                     MonitorTextItem {
@@ -642,6 +813,7 @@ impl SubagentSessionView {
                 kind,
                 delta,
             } => {
+                self.mark_working();
                 let latest_preview = {
                     let latest = self
                         .active_text
@@ -683,6 +855,7 @@ impl SubagentSessionView {
                 tool_use_id,
                 summary,
             } => {
+                self.mark_working();
                 let latest_preview = format!("Running {summary}");
                 self.active_tools
                     .entry(tool_use_id)
@@ -699,6 +872,7 @@ impl SubagentSessionView {
                 tool_use_id,
                 delta,
             } => {
+                self.mark_working();
                 let latest_preview = {
                     let tool = self
                         .active_tools
@@ -771,6 +945,7 @@ impl SubagentSessionView {
                 session_id: _,
                 status,
             } => {
+                self.touch_activity();
                 self.status = status.clone();
                 self.active_turn = None;
                 self.flush_active_items();
@@ -786,6 +961,7 @@ impl SubagentSessionView {
                 session_id: _,
                 message,
             } => {
+                self.touch_activity();
                 self.status = "failed".to_string();
                 self.active_turn = None;
                 self.flush_active_items();
@@ -797,16 +973,73 @@ impl SubagentSessionView {
                     is_error: true,
                 });
             }
+            SubagentMonitorEvent::TaskMessage {
+                session_id: _,
+                message,
+            } => {
+                self.mark_working();
+                self.append_task_message(message);
+            }
             SubagentMonitorEvent::SessionStatusChanged {
                 session_id: _,
                 status,
             } => {
                 if !is_terminal_status(&self.status) {
-                    self.status = format!("{status:?}").to_lowercase();
+                    self.status = normalize_runtime_status_for_subagent(status);
                     self.set_latest_preview(format!("Status {}", self.status));
                 }
             }
         }
+    }
+
+    fn touch_activity(&mut self) {
+        self.last_activity_at = Some(Instant::now());
+    }
+
+    fn mark_working(&mut self) {
+        self.touch_activity();
+        if !is_terminal_status(&self.status) {
+            self.status = "working".to_string();
+        }
+    }
+
+    fn seed_initial_task_message(&mut self, message: &str) {
+        if message.trim().is_empty()
+            || self
+                .transcript
+                .iter()
+                .any(|item| matches!(item.kind, MonitorTranscriptKind::User))
+        {
+            return;
+        }
+        self.transcript.insert(
+            0,
+            MonitorTranscriptItem {
+                kind: MonitorTranscriptKind::User,
+                title: String::new(),
+                body: message.to_string(),
+                is_error: false,
+            },
+        );
+        self.touch_activity();
+    }
+
+    fn append_task_message(&mut self, message: String) {
+        if message.trim().is_empty() {
+            return;
+        }
+        if self.transcript.last().is_some_and(|item| {
+            matches!(item.kind, MonitorTranscriptKind::User) && item.body == message
+        }) {
+            return;
+        }
+        self.transcript.push(MonitorTranscriptItem {
+            kind: MonitorTranscriptKind::User,
+            title: String::new(),
+            body: message,
+            is_error: false,
+        });
+        self.touch_activity();
     }
 
     fn has_live_tail(&self) -> bool {
@@ -865,6 +1098,7 @@ impl SubagentMonitorEvent {
             | Self::PlanUpdated { session_id, .. }
             | Self::TurnFinished { session_id, .. }
             | Self::TurnFailed { session_id, .. }
+            | Self::TaskMessage { session_id, .. }
             | Self::SessionStatusChanged { session_id, .. } => *session_id,
         }
     }
@@ -883,12 +1117,31 @@ fn subagent_monitor_event_kind(event: &SubagentMonitorEvent) -> &'static str {
         SubagentMonitorEvent::PlanUpdated { .. } => "plan_updated",
         SubagentMonitorEvent::TurnFinished { .. } => "turn_finished",
         SubagentMonitorEvent::TurnFailed { .. } => "turn_failed",
+        SubagentMonitorEvent::TaskMessage { .. } => "task_message",
         SubagentMonitorEvent::SessionStatusChanged { .. } => "session_status_changed",
     }
 }
 
-fn is_live_status(status: &str) -> bool {
-    !is_terminal_status(status)
+fn is_active_subagent_status(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "working" | "running" | "spawning" | "activeturn"
+    )
+}
+
+fn normalize_subagent_display_status(status: &str) -> String {
+    match status.to_ascii_lowercase().as_str() {
+        "running" | "spawning" | "activeturn" => "working".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn normalize_runtime_status_for_subagent(status: devo_protocol::SessionRuntimeStatus) -> String {
+    match status {
+        devo_protocol::SessionRuntimeStatus::ActiveTurn => "working".to_string(),
+        devo_protocol::SessionRuntimeStatus::Idle => "idle".to_string(),
+        other => format!("{other:?}").to_lowercase(),
+    }
 }
 
 fn is_terminal_status(status: &str) -> bool {

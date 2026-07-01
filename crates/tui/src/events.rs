@@ -121,6 +121,10 @@ pub(crate) enum SubagentMonitorEvent {
         session_id: SessionId,
         message: String,
     },
+    TaskMessage {
+        session_id: SessionId,
+        message: String,
+    },
     SessionStatusChanged {
         session_id: SessionId,
         status: SessionRuntimeStatus,

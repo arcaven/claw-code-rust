@@ -1578,7 +1578,7 @@ fn supervisor_stream_events(request: &ModelRequest) -> Vec<Result<StreamEvent>> 
                         .map(str::to_string)
                 })
                 .unwrap_or_default();
-            let mut input = serde_json::json!({ "timeout_ms": 900000 });
+            let mut input = serde_json::json!({ "timeout_secs": 120 });
             if !target.is_empty() {
                 input["target"] = serde_json::Value::String(target);
             }

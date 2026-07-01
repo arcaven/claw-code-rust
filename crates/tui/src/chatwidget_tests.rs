@@ -5581,14 +5581,14 @@ fn subagent_discovery_shows_inline_live_list_without_focusing_it() {
     assert_eq!(widget.selected_subagent_for_test(), Some(child));
     let rows = rendered_rows(&widget, 160, 18).join("\n");
     assert!(rows.contains("ctrl + x agents"), "rows:\n{rows}");
-    assert!(rows.contains("reviewer: running"), "rows:\n{rows}");
+    assert!(rows.contains("reviewer: working"), "rows:\n{rows}");
     assert!(rows.contains("checking files"), "rows:\n{rows}");
     let rendered = rendered_rows(&widget, 160, 18);
     let live_prefix = " ".repeat(usize::from(LIVE_PREFIX_COLS));
     assert!(
         rendered
             .iter()
-            .any(|row| row.starts_with(&format!("{live_prefix}● reviewer: running"))),
+            .any(|row| row.starts_with(&format!("{live_prefix}● reviewer: working"))),
         "live-list title should use the shared live prefix only:\n{}",
         rendered.join("\n")
     );
@@ -5679,7 +5679,7 @@ fn request_user_input_and_subagent_live_list_are_visible_together() {
     });
 
     let rows = rendered_rows(&widget, 120, 28).join("\n");
-    assert!(rows.contains("researcher: running"), "rows:\n{rows}");
+    assert!(rows.contains("researcher: working"), "rows:\n{rows}");
     assert!(rows.contains("Working"), "rows:\n{rows}");
     assert!(
         rows.contains("Which scope should research use?"),
@@ -5711,8 +5711,8 @@ fn ctrl_x_focuses_inline_live_list_and_ctrl_x_esc_or_q_exits() {
     assert_eq!(widget.selected_subagent_for_test(), Some(second));
     let rows = rendered_rows(&widget, 160, 18).join("\n");
     assert!(!rows.contains("Sub-agents"), "rows:\n{rows}");
-    assert!(rows.contains("first: running"), "rows:\n{rows}");
-    assert!(rows.contains("second: running"), "rows:\n{rows}");
+    assert!(rows.contains("first: working"), "rows:\n{rows}");
+    assert!(rows.contains("second: working"), "rows:\n{rows}");
     assert!(rows.contains("run first"), "rows:\n{rows}");
     assert!(!rows.contains("root/second"), "rows:\n{rows}");
 
@@ -5807,6 +5807,10 @@ fn terminal_subagent_status_hides_ctrl_x_hint_when_no_live_children_remain() {
     assert!(!widget.has_live_subagents_for_test());
     assert!(!widget.is_subagent_monitor_open_for_test());
     let rows = rendered_rows(&widget, 100, 18).join("\n");
+    assert!(rows.contains("builder: completed"), "rows:\n{rows}");
+    widget.expire_subagent_inactivity_for_test();
+    let rows = rendered_rows(&widget, 100, 18).join("\n");
+    assert!(!rows.contains("builder: completed"), "rows:\n{rows}");
     assert!(!rows.contains("ctrl + x agents"), "rows:\n{rows}");
 }
 
@@ -5832,6 +5836,9 @@ fn terminal_cancelled_subagent_disappears_from_live_list() {
     });
 
     assert!(!widget.has_live_subagents_for_test());
+    let rows = rendered_rows(&widget, 100, 18).join("\n");
+    assert!(rows.contains("builder: cancelled"), "rows:\n{rows}");
+    widget.expire_subagent_inactivity_for_test();
     let rows = rendered_rows(&widget, 100, 18).join("\n");
     assert!(!rows.contains("builder: cancelled"), "rows:\n{rows}");
     assert!(!rows.contains("ctrl + x agents"), "rows:\n{rows}");
@@ -6082,6 +6089,33 @@ fn subagent_live_list_preview_updates_from_completed_reasoning_tool_and_plan_tai
     let rows = rendered_rows(&widget, 180, 18).join("\n");
     assert!(rows.contains("[~] latest plan step"), "rows:\n{rows}");
     assert!(!rows.contains("old plan note"), "rows:\n{rows}");
+}
+
+#[test]
+fn subagent_transcript_overlay_includes_spawn_task_message() {
+    let model = Model {
+        slug: "test-model".to_string(),
+        display_name: "Test Model".to_string(),
+        ..Model::default()
+    };
+    let (mut widget, _app_event_rx) = widget_with_model(model, PathBuf::from("."));
+    let parent = SessionId::new();
+    let child = SessionId::new();
+
+    widget.handle_worker_event(crate::events::WorkerEvent::SubagentDiscovered {
+        agent: monitor_agent(child, parent, "builder"),
+    });
+
+    let cells = widget
+        .subagent_transcript_overlay_cells(child, 80)
+        .expect("overlay cells");
+    assert!(
+        cells
+            .first()
+            .and_then(|cell| cell.user_message.as_ref())
+            .is_some_and(|message| { message.text.contains("run builder") }),
+        "expected spawn task message at top of subagent overlay"
+    );
 }
 
 #[test]
