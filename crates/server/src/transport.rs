@@ -22,8 +22,10 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
+use crate::AcpErrorCode;
 use crate::ClientTransportKind;
 use crate::ServerRuntime;
+use crate::acp_error_response;
 use crate::runtime::CONNECTION_NOTIFICATION_CHANNEL_CAPACITY;
 use crate::runtime::IncomingResponse;
 use crate::singleton::SERVER_CONTROL_SHUTDOWN_METHOD;
@@ -268,8 +270,16 @@ async fn run_listener_tasks(
     Ok(())
 }
 
+/// Stdio uses **NDJSON** (newline-delimited JSON): one JSON-RPC message per line.
+///
+/// Outbound messages are serialized with `serde_json::to_vec`, which escapes
+/// embedded newlines in string values as `\n`. The trailing `\n` written by the
+/// stdout task is therefore a frame delimiter only, not part of the payload.
+/// Clients must send the same framing: each request, notification, or response
+/// must occupy exactly one line of valid JSON. Pretty-printed or otherwise
+/// multi-line payloads are rejected at the transport layer.
 async fn run_stdio(runtime: Arc<ServerRuntime>) -> Result<()> {
-    // Normal channel for event notifications (TextDelta, TurnStarted, …).
+    // Server → client responses and notifications (TextDelta, TurnStarted, …).
     let (sender, mut receiver) = mpsc::channel(CONNECTION_NOTIFICATION_CHANNEL_CAPACITY);
     let sender_clone = sender.clone();
     let connection_id = runtime
@@ -277,9 +287,8 @@ async fn run_stdio(runtime: Arc<ServerRuntime>) -> Result<()> {
         .await;
     tracing::info!(connection_id, "stdio connection established");
 
-    // Internal channel between the producer (reads from high_pri + normal)
-    // and the writer (writes to stdout). Bounded sends apply backpressure
-    // instead of allowing an unbounded stdout backlog.
+    // Serialized NDJSON lines awaiting stdout. Bounded capacity applies
+    // backpressure when stdout is slow instead of buffering without limit.
     let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(TRANSPORT_WRITE_CHANNEL_CAPACITY);
 
     // --- Writer task ---
@@ -296,19 +305,12 @@ async fn run_stdio(runtime: Arc<ServerRuntime>) -> Result<()> {
     });
 
     // --- Producer task ---
-    // Reads from high_pri and normal channels, serializes immediately,
-    // and pushes to write_tx. A slow writer backpressures this task.
+    // Serializes outbound messages and forwards them to the writer task.
     let producer_task = tokio::spawn(async move {
-        loop {
-            let line: Vec<u8>;
-            tokio::select! {
-                Some(message) = receiver.recv() => {
-                    line = serde_json::to_vec(&message)
-                        .expect("serialize stdio response");
-                }
-                else => break,
-            }
-            if !send_transport_queue_message(&write_tx, line, connection_id, "stdio_write").await {
+        while let Some(message) = receiver.recv().await {
+            let line = serde_json::to_vec(&message).expect("serialize stdio response");
+            if !send_transport_queue_message(&write_tx, line, connection_id, "stdio_write").await
+            {
                 break;
             }
         }
@@ -318,15 +320,11 @@ async fn run_stdio(runtime: Arc<ServerRuntime>) -> Result<()> {
     let stdin = tokio::io::stdin();
     let mut lines = BufReader::new(stdin).lines();
     while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let value: serde_json::Value = serde_json::from_str(&line)?;
-        spawn_incoming_message_handler(
+        accept_incoming_client_message(
             Arc::clone(&runtime),
             connection_id,
             sender_clone.clone(),
-            value,
+            &line,
             "stdio_notifications",
         );
     }
@@ -443,12 +441,11 @@ async fn handle_internal_proxy_connection(
         let frame = frame?;
         match frame {
             Message::Text(text) => {
-                let value: serde_json::Value = serde_json::from_str(&text)?;
-                spawn_incoming_message_handler(
+                accept_incoming_client_message(
                     Arc::clone(&runtime),
                     connection_id,
                     sender_clone.clone(),
-                    value,
+                    text.as_str(),
                     "internal_proxy_notifications",
                 );
             }
@@ -555,12 +552,11 @@ async fn handle_websocket_connection(
         let frame = frame?;
         match frame {
             Message::Text(text) => {
-                let value: serde_json::Value = serde_json::from_str(&text)?;
-                spawn_incoming_message_handler(
+                accept_incoming_client_message(
                     Arc::clone(&runtime),
                     connection_id,
                     sender_clone.clone(),
-                    value,
+                    text.as_str(),
                     "websocket_notifications",
                 );
             }
@@ -573,6 +569,161 @@ async fn handle_websocket_connection(
     tracing::info!(connection_id, "websocket connection closed");
     writer_task.abort();
     Ok(())
+}
+
+/// Parses one inbound client payload (NDJSON line or WebSocket text frame).
+///
+/// Returns `None` when the payload is empty after trimming. Returns `Err` with
+/// a JSON-RPC `ParseError` response when the payload is not valid JSON.
+fn parse_incoming_client_payload(
+    raw_payload: &str,
+) -> Option<Result<serde_json::Value, serde_json::Value>> {
+    let trimmed = raw_payload.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(match serde_json::from_str(trimmed) {
+        Ok(value) => Ok(value),
+        Err(error) => Err(acp_error_response(
+            serde_json::Value::Null,
+            AcpErrorCode::ParseError,
+            format!("malformed client payload: {error}"),
+        )),
+    })
+}
+
+/// Validates a decoded client JSON-RPC 2.0 message before handler dispatch.
+///
+/// Returns `Ok(())` for well-formed requests, notifications, or responses to
+/// server-initiated calls. Returns `Err(error_response)` when the payload is
+/// structurally invalid; the caller should send that response and skip the
+/// handler.
+fn validate_incoming_client_message(
+    value: &serde_json::Value,
+) -> Result<(), serde_json::Value> {
+    let Some(object) = value.as_object() else {
+        return Err(acp_error_response(
+            serde_json::Value::Null,
+            AcpErrorCode::InvalidRequest,
+            "client message must be a JSON object",
+        ));
+    };
+
+    let request_id = object
+        .get("id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    match object.get("jsonrpc").and_then(serde_json::Value::as_str) {
+        Some("2.0") => {}
+        Some(_) => {
+            return Err(acp_error_response(
+                request_id,
+                AcpErrorCode::InvalidRequest,
+                "jsonrpc must be \"2.0\"",
+            ));
+        }
+        None => {
+            return Err(acp_error_response(
+                request_id,
+                AcpErrorCode::InvalidRequest,
+                "jsonrpc field is required",
+            ));
+        }
+    }
+
+    let has_method = object.contains_key("method");
+    let has_result = object.contains_key("result");
+    let has_error = object.contains_key("error");
+
+    if has_result && has_error {
+        return Err(acp_error_response(
+            request_id,
+            AcpErrorCode::InvalidRequest,
+            "client message must not contain both result and error",
+        ));
+    }
+
+    if !has_method
+        && object.contains_key("id")
+        && (has_result || has_error)
+    {
+        return Ok(());
+    }
+
+    if has_method {
+        if has_result || has_error {
+            return Err(acp_error_response(
+                request_id,
+                AcpErrorCode::InvalidRequest,
+                "client request must not contain result or error",
+            ));
+        }
+        let Some(method) = object.get("method").and_then(serde_json::Value::as_str) else {
+            return Err(acp_error_response(
+                request_id,
+                AcpErrorCode::InvalidRequest,
+                "method must be a non-empty string",
+            ));
+        };
+        if method.is_empty() {
+            return Err(acp_error_response(
+                request_id,
+                AcpErrorCode::InvalidRequest,
+                "method must be a non-empty string",
+            ));
+        }
+        if let Some(params) = object.get("params")
+            && !params.is_object()
+            && !params.is_array()
+            && !params.is_null()
+        {
+            return Err(acp_error_response(
+                request_id,
+                AcpErrorCode::InvalidRequest,
+                "params must be an object, array, or null",
+            ));
+        }
+        return Ok(());
+    }
+
+    Err(acp_error_response(
+        request_id,
+        AcpErrorCode::InvalidRequest,
+        "client message must be a request, notification, or response",
+    ))
+}
+
+/// Parses, validates, and dispatches one inbound client payload without blocking
+/// the transport read loop.
+fn accept_incoming_client_message(
+    runtime: Arc<ServerRuntime>,
+    connection_id: u64,
+    sender: mpsc::Sender<serde_json::Value>,
+    raw_payload: &str,
+    queue: &'static str,
+) {
+    let Some(parsed) = parse_incoming_client_payload(raw_payload) else {
+        return;
+    };
+    let value = match parsed {
+        Ok(value) => value,
+        Err(error_response) => {
+            tracing::warn!(connection_id, "rejected malformed client payload");
+            tokio::spawn(async move {
+                send_transport_queue_message(&sender, error_response, connection_id, queue).await;
+            });
+            return;
+        }
+    };
+    if let Err(error_response) = validate_incoming_client_message(&value) {
+        tracing::warn!(connection_id, "rejected invalid client message");
+        tokio::spawn(async move {
+            send_transport_queue_message(&sender, error_response, connection_id, queue).await;
+        });
+        return;
+    }
+    spawn_incoming_message_handler(runtime, connection_id, sender, value, queue);
 }
 
 /// Dispatch a single decoded client message without blocking the connection's
@@ -675,8 +826,11 @@ mod tests {
     use super::ListenTarget;
     use super::internal_proxy_control_response;
     use super::parse_internal_proxy_control_request;
+    use super::parse_incoming_client_payload;
     use super::parse_listen_target;
     use super::resolve_listen_targets;
+    use super::validate_incoming_client_message;
+    use crate::AcpErrorCode;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use std::time::Duration;
@@ -767,6 +921,84 @@ mod tests {
                     "status": "shutting down",
                 },
             })
+        );
+    }
+
+    #[test]
+    fn parse_incoming_client_payload_skips_empty_and_parses_json() {
+        assert_eq!(parse_incoming_client_payload(""), None);
+        assert_eq!(parse_incoming_client_payload("   \n"), None);
+
+        let parsed = parse_incoming_client_payload(r#"  {"jsonrpc":"2.0","id":1}  "#)
+            .expect("non-empty payload")
+            .expect("valid json");
+        assert_eq!(parsed, serde_json::json!({ "jsonrpc": "2.0", "id": 1 }));
+    }
+
+    #[test]
+    fn parse_incoming_client_payload_returns_parse_error_response() {
+        let error_response = parse_incoming_client_payload("{not json}")
+            .expect("non-empty payload")
+            .expect_err("invalid json");
+        assert_eq!(
+            error_response["error"]["code"],
+            AcpErrorCode::ParseError as i64
+        );
+        assert_eq!(error_response["id"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn validate_accepts_client_request_notification_and_response() {
+        assert!(validate_incoming_client_message(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {},
+        }))
+        .is_ok());
+        assert!(validate_incoming_client_message(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {},
+        }))
+        .is_ok());
+        assert!(validate_incoming_client_message(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "result": { "ok": true },
+        }))
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_malformed_client_messages() {
+        let invalid_request = validate_incoming_client_message(&serde_json::json!([]))
+            .expect_err("array payload");
+        assert_eq!(
+            invalid_request["error"]["code"],
+            AcpErrorCode::InvalidRequest as i64
+        );
+
+        let missing_jsonrpc = validate_incoming_client_message(&serde_json::json!({
+            "id": 1,
+            "method": "initialize",
+        }))
+        .expect_err("missing jsonrpc");
+        assert_eq!(
+            missing_jsonrpc["error"]["code"],
+            AcpErrorCode::InvalidRequest as i64
+        );
+
+        let conflicting_fields = validate_incoming_client_message(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "result": {},
+        }))
+        .expect_err("request with result");
+        assert_eq!(
+            conflicting_fields["error"]["code"],
+            AcpErrorCode::InvalidRequest as i64
         );
     }
 
