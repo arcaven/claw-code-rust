@@ -346,33 +346,45 @@ impl ServerRuntime {
         worklog: Option<Worklog>,
     ) {
         if let Some(stream) = self.active_stream_state(session_id).await {
-            let mut stream = stream.lock().await;
-            if let Some(inline) = stream.turn_inline.as_mut() {
-                if inline.turn_id == turn_id
-                    && let Some(history_item) = history_item_from_turn_item(&turn_item)
-                {
-                    inline.history_items.push(history_item);
-                }
-                if inline.turn_id == turn_id {
-                    inline
-                        .persisted_turn_items
-                        .push(crate::execution::PersistedTurnItem {
-                            turn_id,
-                            turn_kind: inline.turn_kind.clone(),
-                            item_id,
-                            turn_item: turn_item.clone(),
-                        });
-                }
-                if let Some(record) = inline.record.clone() {
-                    let item = build_item_record(
-                        session_id,
-                        turn_id,
-                        item_id,
-                        item_seq,
-                        turn_item,
-                        turn_status,
-                        worklog,
-                    );
+            // Mutate inline state under the lock, then release before any
+            // blocking rollout I/O so the event stream cannot pin the async
+            // mutex across synchronous disk writes.
+            let inline_rollout = {
+                let mut stream = stream.lock().await;
+                stream.turn_inline.as_mut().map(|inline| {
+                    if inline.turn_id == turn_id
+                        && let Some(history_item) = history_item_from_turn_item(&turn_item)
+                    {
+                        inline.history_items.push(history_item);
+                    }
+                    if inline.turn_id == turn_id {
+                        inline
+                            .persisted_turn_items
+                            .push(crate::execution::PersistedTurnItem {
+                                turn_id,
+                                turn_kind: inline.turn_kind.clone(),
+                                item_id,
+                                turn_item: turn_item.clone(),
+                            });
+                    }
+                    inline.record.clone().map(|record| {
+                        (
+                            record,
+                            build_item_record(
+                                session_id,
+                                turn_id,
+                                item_id,
+                                item_seq,
+                                turn_item.clone(),
+                                turn_status.clone(),
+                                worklog.clone(),
+                            ),
+                        )
+                    })
+                })
+            };
+            if let Some(rollout) = inline_rollout {
+                if let Some((record, item)) = rollout {
                     if let Err(error) = self.rollout_store.append_item(&record, item) {
                         tracing::warn!(session_id = %session_id, error = %error, "failed to persist item line");
                     }

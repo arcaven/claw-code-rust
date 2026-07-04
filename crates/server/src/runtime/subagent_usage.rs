@@ -90,11 +90,29 @@ pub(crate) struct ParentUsageSnapshot {
     pub(super) context_window: Option<u64>,
 }
 
+/// How a usage sample should update turn accounting.
+///
+/// Provider streams emit partial [`UsageDelta`](devo_core::QueryEvent::UsageDelta)
+/// values (often `output_tokens = 0` at message start) and a final
+/// [`Usage`](devo_core::QueryEvent::Usage) per model call. Tool-use turns run
+/// multiple model calls; completed legs must accumulate while in-flight samples
+/// may only replace the current leg.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UsageUpdateKind {
+    /// Replace the current in-flight leg only (streaming deltas).
+    InFlight,
+    /// Add one completed model-call leg and clear in-flight state.
+    CompletedLeg,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ParentTurnUsage {
     base_session_totals: UsageTotals,
     base_child_totals: UsageTotals,
+    /// Sum of completed model-call legs in this parent turn.
     parent_turn_usage: UsageTotals,
+    /// Latest partial usage for the model call still in progress.
+    inflight_usage: UsageTotals,
     context_window: Option<u64>,
 }
 
@@ -108,7 +126,10 @@ struct ChildUsageOwner {
 struct ChildTurnUsage {
     parent_session_id: SessionId,
     parent_turn_id: Option<TurnId>,
+    /// Sum of completed model-call legs in this child turn.
     usage: UsageTotals,
+    /// Latest partial usage for the model call still in progress.
+    inflight_usage: UsageTotals,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -148,6 +169,7 @@ impl SubagentUsageState {
                 base_session_totals,
                 base_child_totals,
                 parent_turn_usage: UsageTotals::default(),
+                inflight_usage: UsageTotals::default(),
                 context_window,
             });
     }
@@ -173,13 +195,19 @@ impl SubagentUsageState {
         turn_id: TurnId,
         usage: UsageTotals,
         context_window: Option<u64>,
+        kind: UsageUpdateKind,
     ) -> Option<ParentUsageSnapshot> {
         let key = ParentTurnKey {
             session_id,
             turn_id,
         };
         let state = self.parent_turns.get_mut(&key)?;
-        state.parent_turn_usage = usage;
+        apply_usage_update(
+            &mut state.parent_turn_usage,
+            &mut state.inflight_usage,
+            usage,
+            kind,
+        );
         if context_window.is_some() {
             state.context_window = context_window;
         }
@@ -191,25 +219,30 @@ impl SubagentUsageState {
         child_session_id: SessionId,
         child_turn_id: TurnId,
         usage: UsageTotals,
+        kind: UsageUpdateKind,
     ) -> Option<ParentUsageSnapshot> {
         let key = ChildTurnKey {
             session_id: child_session_id,
             turn_id: child_turn_id,
         };
         let owner = if let Some(entry) = self.child_turns.get_mut(&key) {
-            entry.usage = usage;
+            apply_usage_update(&mut entry.usage, &mut entry.inflight_usage, usage, kind);
             ChildUsageOwner {
                 parent_session_id: entry.parent_session_id,
                 parent_turn_id: entry.parent_turn_id,
             }
         } else {
             let owner = *self.child_owners.get(&child_session_id)?;
+            let mut committed = UsageTotals::default();
+            let mut inflight = UsageTotals::default();
+            apply_usage_update(&mut committed, &mut inflight, usage, kind);
             self.child_turns.insert(
                 key,
                 ChildTurnUsage {
                     parent_session_id: owner.parent_session_id,
                     parent_turn_id: owner.parent_turn_id,
-                    usage,
+                    usage: committed,
+                    inflight_usage: inflight,
                 },
             );
             owner
@@ -217,6 +250,25 @@ impl SubagentUsageState {
         owner
             .parent_turn_id
             .and_then(|turn_id| self.snapshot_for_parent_turn(owner.parent_session_id, turn_id))
+    }
+
+    /// Fold any remaining in-flight child usage into committed totals (e.g. on
+    /// interrupt) without recording an extra model-call leg.
+    pub(super) fn commit_child_inflight_usage(
+        &mut self,
+        child_session_id: SessionId,
+        child_turn_id: TurnId,
+    ) -> Option<ParentUsageSnapshot> {
+        let key = ChildTurnKey {
+            session_id: child_session_id,
+            turn_id: child_turn_id,
+        };
+        let entry = self.child_turns.get_mut(&key)?;
+        entry.usage = entry.usage.add(entry.inflight_usage);
+        entry.inflight_usage = UsageTotals::default();
+        let parent_session_id = entry.parent_session_id;
+        let parent_turn_id = entry.parent_turn_id?;
+        self.snapshot_for_parent_turn(parent_session_id, parent_turn_id)
     }
 
     pub(super) fn snapshot_for_parent_turn(
@@ -228,14 +280,15 @@ impl SubagentUsageState {
             session_id,
             turn_id,
         })?;
+        let parent_turn_usage = state.parent_turn_usage.add(state.inflight_usage);
         let child_turn_usage = self.child_totals_for_parent_turn(session_id, turn_id);
         let child_session_delta = self
             .child_totals_for_parent_session(session_id)
             .saturating_sub(state.base_child_totals);
-        let turn_usage = state.parent_turn_usage.add(child_turn_usage);
+        let turn_usage = parent_turn_usage.add(child_turn_usage);
         let session_totals = state
             .base_session_totals
-            .add(state.parent_turn_usage)
+            .add(parent_turn_usage)
             .add(child_session_delta);
         Some(ParentUsageSnapshot {
             session_id,
@@ -251,7 +304,7 @@ impl SubagentUsageState {
             .values()
             .filter(|entry| entry.parent_session_id == parent_session_id)
             .fold(UsageTotals::default(), |total, entry| {
-                total.add(entry.usage)
+                total.add(entry.usage.add(entry.inflight_usage))
             })
     }
 
@@ -267,8 +320,25 @@ impl SubagentUsageState {
                     && entry.parent_turn_id == Some(parent_turn_id)
             })
             .fold(UsageTotals::default(), |total, entry| {
-                total.add(entry.usage)
+                total.add(entry.usage.add(entry.inflight_usage))
             })
+    }
+}
+
+fn apply_usage_update(
+    committed: &mut UsageTotals,
+    inflight: &mut UsageTotals,
+    usage: UsageTotals,
+    kind: UsageUpdateKind,
+) {
+    match kind {
+        UsageUpdateKind::InFlight => {
+            *inflight = usage;
+        }
+        UsageUpdateKind::CompletedLeg => {
+            *committed = committed.add(usage);
+            *inflight = UsageTotals::default();
+        }
     }
 }
 
@@ -316,6 +386,7 @@ impl ServerRuntime {
         turn_id: TurnId,
         usage: TurnUsage,
         context_window: Option<u64>,
+        kind: UsageUpdateKind,
     ) -> Option<ParentUsageSnapshot> {
         self.begin_parent_usage_turn(session_id, turn_id, context_window)
             .await;
@@ -326,6 +397,7 @@ impl ServerRuntime {
                 turn_id,
                 UsageTotals::from_turn_usage(&usage),
                 context_window,
+                kind,
             )
         }?;
         self.apply_parent_usage_snapshot(snapshot).await;
@@ -337,6 +409,7 @@ impl ServerRuntime {
         child_session_id: SessionId,
         child_turn_id: TurnId,
         usage: TurnUsage,
+        kind: UsageUpdateKind,
     ) -> Option<ParentUsageSnapshot> {
         let snapshot = {
             let mut usage_state = self.subagent_usage.lock().await;
@@ -344,7 +417,21 @@ impl ServerRuntime {
                 child_session_id,
                 child_turn_id,
                 UsageTotals::from_turn_usage(&usage),
+                kind,
             )
+        }?;
+        self.apply_parent_usage_snapshot(snapshot).await;
+        Some(snapshot)
+    }
+
+    pub(super) async fn commit_subagent_inflight_usage(
+        &self,
+        child_session_id: SessionId,
+        child_turn_id: TurnId,
+    ) -> Option<ParentUsageSnapshot> {
+        let snapshot = {
+            let mut usage_state = self.subagent_usage.lock().await;
+            usage_state.commit_child_inflight_usage(child_session_id, child_turn_id)
         }?;
         self.apply_parent_usage_snapshot(snapshot).await;
         Some(snapshot)
@@ -362,8 +449,32 @@ impl ServerRuntime {
     }
 
     async fn apply_parent_usage_snapshot(&self, snapshot: ParentUsageSnapshot) {
-        if let Some(session_handle) = self.session(snapshot.session_id).await {
-            session_handle.apply_parent_usage_snapshot(snapshot).await;
+        // The turn event stream runs while the session actor is blocked inside
+        // `execute_turn_in_actor` awaiting that same stream. Any mailbox send to
+        // `snapshot.session_id` here can fill the actor mailbox and then block
+        // forever on `send().await`, which stops the event stream from `recv`ing,
+        // fills the event channel, and wedges the whole turn. Prefer the in-flight
+        // turn inline state whenever it is registered.
+        let applied_inline = if let Some(stream) = self.active_stream_state(snapshot.session_id).await
+        {
+            let mut stream = stream.lock().await;
+            if let Some(inline) = stream.turn_inline.as_mut() {
+                snapshot.apply_to_summary(&mut inline.summary);
+                inline.hook_context.summary = inline.summary.clone();
+                if inline.turn_id == snapshot.turn_id {
+                    inline.active_turn_usage = Some(snapshot.turn_usage.to_turn_usage());
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !applied_inline {
+            if let Some(session_handle) = self.session(snapshot.session_id).await {
+                session_handle.apply_parent_usage_snapshot(snapshot).await;
+            }
         }
         self.broadcast_event(ServerEvent::TurnUsageUpdated(
             snapshot.to_turn_usage_updated_payload(),
@@ -391,12 +502,7 @@ impl ParentUsageSnapshot {
         self,
         state: &mut crate::runtime::session_actor::state::SessionActorState,
     ) {
-        state.summary.total_input_tokens = self.session_totals.input_tokens;
-        state.summary.total_output_tokens = self.session_totals.output_tokens;
-        state.summary.total_tokens = self.session_totals.total_tokens;
-        state.summary.total_cache_creation_tokens = self.session_totals.cache_creation_input_tokens;
-        state.summary.total_cache_read_tokens = self.session_totals.cache_read_input_tokens;
-        state.summary.last_query_total_tokens = self.turn_usage.total_tokens;
+        self.apply_to_summary(&mut state.summary);
         if let Some(active_turn) = state.active_turn.as_mut()
             && active_turn.turn_id == self.turn_id
         {
@@ -407,6 +513,15 @@ impl ParentUsageSnapshot {
         state.core.total_tokens = self.session_totals.total_tokens;
         state.core.total_cache_creation_tokens = self.session_totals.cache_creation_input_tokens;
         state.core.total_cache_read_tokens = self.session_totals.cache_read_input_tokens;
+    }
+
+    fn apply_to_summary(self, summary: &mut crate::session::SessionMetadata) {
+        summary.total_input_tokens = self.session_totals.input_tokens;
+        summary.total_output_tokens = self.session_totals.output_tokens;
+        summary.total_tokens = self.session_totals.total_tokens;
+        summary.total_cache_creation_tokens = self.session_totals.cache_creation_input_tokens;
+        summary.total_cache_read_tokens = self.session_totals.cache_read_input_tokens;
+        summary.last_query_total_tokens = self.turn_usage.total_tokens;
     }
 }
 
@@ -436,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn child_usage_replaces_latest_value_without_double_counting() {
+    fn child_usage_replaces_latest_inflight_without_double_counting() {
         let mut state = SubagentUsageState::default();
         let parent_session_id = SessionId::new();
         let parent_turn_id = TurnId::new();
@@ -452,22 +567,86 @@ mod tests {
         state.register_child_owner(parent_session_id, child_session_id, Some(parent_turn_id));
 
         let parent_snapshot = state
-            .record_parent_turn_usage(parent_session_id, parent_turn_id, totals(8, 2), None)
+            .record_parent_turn_usage(
+                parent_session_id,
+                parent_turn_id,
+                totals(8, 2),
+                None,
+                UsageUpdateKind::CompletedLeg,
+            )
             .expect("parent snapshot");
         assert_eq!(parent_snapshot.turn_usage, totals(8, 2));
         assert_eq!(parent_snapshot.session_totals, totals(108, 12));
 
         let child_snapshot = state
-            .record_child_turn_usage(child_session_id, child_turn_id, totals(20, 5))
+            .record_child_turn_usage(
+                child_session_id,
+                child_turn_id,
+                totals(20, 5),
+                UsageUpdateKind::InFlight,
+            )
             .expect("child snapshot");
         assert_eq!(child_snapshot.turn_usage, totals(28, 7));
         assert_eq!(child_snapshot.session_totals, totals(128, 17));
 
         let updated_child_snapshot = state
-            .record_child_turn_usage(child_session_id, child_turn_id, totals(25, 6))
+            .record_child_turn_usage(
+                child_session_id,
+                child_turn_id,
+                totals(25, 6),
+                UsageUpdateKind::InFlight,
+            )
             .expect("updated child snapshot");
         assert_eq!(updated_child_snapshot.turn_usage, totals(33, 8));
         assert_eq!(updated_child_snapshot.session_totals, totals(133, 18));
+    }
+
+    #[test]
+    fn tool_use_legs_accumulate_and_inflight_output_zero_does_not_reset_totals() {
+        let mut state = SubagentUsageState::default();
+        let parent_session_id = SessionId::new();
+        let parent_turn_id = TurnId::new();
+
+        state.begin_parent_turn(parent_session_id, parent_turn_id, totals(100, 10), None);
+
+        // First model call completes with output.
+        let after_first_leg = state
+            .record_parent_turn_usage(
+                parent_session_id,
+                parent_turn_id,
+                totals(600, 50),
+                None,
+                UsageUpdateKind::CompletedLeg,
+            )
+            .expect("first leg");
+        assert_eq!(after_first_leg.turn_usage, totals(600, 50));
+        assert_eq!(after_first_leg.session_totals, totals(700, 60));
+
+        // Second model call starts (typical UsageDelta with output_tokens = 0).
+        let after_second_start = state
+            .record_parent_turn_usage(
+                parent_session_id,
+                parent_turn_id,
+                totals(700, 0),
+                None,
+                UsageUpdateKind::InFlight,
+            )
+            .expect("second leg start");
+        assert_eq!(after_second_start.turn_usage, totals(1300, 50));
+        assert_eq!(after_second_start.session_totals, totals(1400, 60));
+
+        // Second model call completes.
+        let after_second_leg = state
+            .record_parent_turn_usage(
+                parent_session_id,
+                parent_turn_id,
+                totals(700, 30),
+                None,
+                UsageUpdateKind::CompletedLeg,
+            )
+            .expect("second leg complete");
+        assert_eq!(after_second_leg.turn_usage, totals(1300, 80));
+        assert_eq!(after_second_leg.session_totals, totals(1400, 90));
     }
 
     #[test]
@@ -491,7 +670,12 @@ mod tests {
             child_session_id,
             Some(first_parent_turn_id),
         );
-        state.record_child_turn_usage(child_session_id, first_child_turn_id, totals(20, 5));
+        state.record_child_turn_usage(
+            child_session_id,
+            first_child_turn_id,
+            totals(20, 5),
+            UsageUpdateKind::CompletedLeg,
+        );
 
         state.begin_parent_turn(
             parent_session_id,
@@ -505,7 +689,12 @@ mod tests {
             Some(second_parent_turn_id),
         );
         let snapshot = state
-            .record_child_turn_usage(child_session_id, second_child_turn_id, totals(7, 3))
+            .record_child_turn_usage(
+                child_session_id,
+                second_child_turn_id,
+                totals(7, 3),
+                UsageUpdateKind::CompletedLeg,
+            )
             .expect("second turn child snapshot");
 
         assert_eq!(snapshot.turn_usage, totals(7, 3));
@@ -538,7 +727,12 @@ mod tests {
             child_session_id,
             Some(first_parent_turn_id),
         );
-        state.record_child_turn_usage(child_session_id, child_turn_id, totals(20, 5));
+        state.record_child_turn_usage(
+            child_session_id,
+            child_turn_id,
+            totals(20, 5),
+            UsageUpdateKind::InFlight,
+        );
 
         state.register_child_owner(
             parent_session_id,
@@ -546,7 +740,12 @@ mod tests {
             Some(second_parent_turn_id),
         );
         let snapshot = state
-            .record_child_turn_usage(child_session_id, child_turn_id, totals(25, 6))
+            .record_child_turn_usage(
+                child_session_id,
+                child_turn_id,
+                totals(25, 6),
+                UsageUpdateKind::InFlight,
+            )
             .expect("updated child snapshot");
 
         assert_eq!(snapshot.turn_id, first_parent_turn_id);

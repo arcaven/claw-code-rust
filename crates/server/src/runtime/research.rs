@@ -1096,6 +1096,7 @@ impl ServerRuntime {
                 turn.turn_id,
                 own_usage.clone(),
                 /*context_window*/ None,
+                super::subagent_usage::UsageUpdateKind::InFlight,
             )
             .await
             .map(|snapshot| snapshot.turn_usage.to_turn_usage())
@@ -1170,11 +1171,14 @@ impl ServerRuntime {
             ledger.by_invocation.insert(usage_key, usage);
             ledger.aggregate()
         };
+        // Research ledger already aggregates all invocations; publish as
+        // in-flight replacement so repeated updates do not double-count.
         self.publish_parent_turn_usage(
             session_id,
             turn_id,
             aggregate.to_turn_usage(),
             context_window,
+            super::subagent_usage::UsageUpdateKind::InFlight,
         )
         .await;
     }

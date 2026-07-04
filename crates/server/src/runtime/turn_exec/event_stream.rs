@@ -38,10 +38,16 @@ pub(super) fn enqueue_query_event(
     match event_tx.try_send(event) {
         Ok(()) => {}
         Err(tokio::sync::mpsc::error::TrySendError::Full(event)) => {
-            let event_tx = event_tx.clone();
-            tokio::spawn(async move {
-                let _ = event_tx.send(event).await;
-            });
+            // Never spawn unbounded waiters here: if the event stream stalls,
+            // those tasks park forever on `send().await`, keep sender clones
+            // alive, and prevent the stream from ever observing channel close.
+            // Dropping under backpressure preserves liveness; the stream still
+            // receives later events once it resumes.
+            tracing::warn!(
+                capacity = QUERY_EVENT_CHANNEL_CAPACITY,
+                event_kind = query_event_trace_kind(&event),
+                "dropping query event because the turn event channel is full"
+            );
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
     }
@@ -224,16 +230,17 @@ pub(crate) fn spawn_turn_event_stream(
                     )
                     .await;
                 }
-                devo_core::QueryEvent::UsageDelta { usage }
-                | devo_core::QueryEvent::Usage { usage } => {
+                devo_core::QueryEvent::UsageDelta { usage } => {
                     let turn_usage = devo_core::TurnUsage::from_usage(&usage);
                     latest_usage = Some(turn_usage.clone());
+                    let kind = super::super::subagent_usage::UsageUpdateKind::InFlight;
                     if usage_parent_session_id.is_some() {
                         let _ = runtime
                             .publish_subagent_turn_usage(
                                 session_id,
                                 turn_for_events.turn_id,
                                 turn_usage,
+                                kind,
                             )
                             .await;
                     } else if let Some(snapshot) = runtime
@@ -242,6 +249,33 @@ pub(crate) fn spawn_turn_event_stream(
                             turn_for_events.turn_id,
                             turn_usage,
                             usage_context_window,
+                            kind,
+                        )
+                        .await
+                    {
+                        latest_usage = Some(snapshot.turn_usage.to_turn_usage());
+                    }
+                }
+                devo_core::QueryEvent::Usage { usage } => {
+                    let turn_usage = devo_core::TurnUsage::from_usage(&usage);
+                    latest_usage = Some(turn_usage.clone());
+                    let kind = super::super::subagent_usage::UsageUpdateKind::CompletedLeg;
+                    if usage_parent_session_id.is_some() {
+                        let _ = runtime
+                            .publish_subagent_turn_usage(
+                                session_id,
+                                turn_for_events.turn_id,
+                                turn_usage,
+                                kind,
+                            )
+                            .await;
+                    } else if let Some(snapshot) = runtime
+                        .publish_parent_turn_usage(
+                            session_id,
+                            turn_for_events.turn_id,
+                            turn_usage,
+                            usage_context_window,
+                            kind,
                         )
                         .await
                     {

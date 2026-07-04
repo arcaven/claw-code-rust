@@ -44,10 +44,11 @@ impl ServerRuntime {
             .as_ref()
             .and_then(|summary| summary.latest_usage.clone());
         let terminal_stop_reason = event_summary.and_then(|summary| summary.stop_reason);
-        if usage_parent_session_id.is_some()
-            && let Some(usage) = latest_usage.clone()
-        {
-            self.publish_subagent_turn_usage(session_id, turn.turn_id, usage)
+        if usage_parent_session_id.is_some() {
+            // Completed legs were already accumulated by the event stream.
+            // Only fold any trailing in-flight delta (e.g. interrupted mid-stream).
+            let _ = self
+                .commit_subagent_inflight_usage(session_id, turn.turn_id)
                 .await;
         } else if usage_parent_session_id.is_none()
             && let Some(snapshot) = self.parent_usage_snapshot(session_id, turn.turn_id).await

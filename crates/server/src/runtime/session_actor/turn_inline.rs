@@ -3,6 +3,7 @@ use std::sync::Arc;
 use devo_core::SessionRecord;
 use devo_core::TurnId;
 use devo_core::TurnKind;
+use devo_core::TurnUsage;
 use devo_protocol::CollaborationMode;
 
 use crate::execution::ApprovalGrantCache;
@@ -26,6 +27,7 @@ pub(crate) struct TurnInlineState {
     pub(crate) session_approval_cache: ApprovalGrantCache,
     pub(crate) turn_approval_cache: ApprovalGrantCache,
     pub(crate) summary: SessionMetadata,
+    pub(crate) active_turn_usage: Option<TurnUsage>,
     pub(crate) collaboration_mode: CollaborationMode,
     pub(crate) hook_context: HookContextSnapshot,
 }
@@ -43,6 +45,10 @@ impl TurnInlineState {
             session_approval_cache: state.session_approval_cache.clone(),
             turn_approval_cache: state.turn_approval_cache.clone(),
             summary: state.summary.clone(),
+            active_turn_usage: state
+                .active_turn
+                .as_ref()
+                .and_then(|turn| turn.usage.clone()),
             collaboration_mode: state.core.collaboration_mode,
             hook_context: HookContextSnapshot {
                 runtime_context: Arc::clone(&state.runtime_context),
@@ -67,5 +73,21 @@ impl TurnInlineState {
         state.history_items.extend(self.history_items);
         state.session_approval_cache = self.session_approval_cache;
         state.turn_approval_cache = self.turn_approval_cache;
+        state.summary.total_input_tokens = self.summary.total_input_tokens;
+        state.summary.total_output_tokens = self.summary.total_output_tokens;
+        state.summary.total_tokens = self.summary.total_tokens;
+        state.summary.total_cache_creation_tokens = self.summary.total_cache_creation_tokens;
+        state.summary.total_cache_read_tokens = self.summary.total_cache_read_tokens;
+        state.summary.last_query_total_tokens = self.summary.last_query_total_tokens;
+        state.core.total_input_tokens = self.summary.total_input_tokens;
+        state.core.total_output_tokens = self.summary.total_output_tokens;
+        state.core.total_tokens = self.summary.total_tokens;
+        state.core.total_cache_creation_tokens = self.summary.total_cache_creation_tokens;
+        state.core.total_cache_read_tokens = self.summary.total_cache_read_tokens;
+        if let Some(active_turn) = state.active_turn.as_mut()
+            && active_turn.turn_id == self.turn_id
+        {
+            active_turn.usage = self.active_turn_usage;
+        }
     }
 }

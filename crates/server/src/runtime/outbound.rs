@@ -160,6 +160,16 @@ pub(crate) fn log_outbound_frame(frame: &OutboundFrame, notification: &serde_jso
     }
 }
 
+/// Enqueue an outbound frame, waiting when the channel is full.
+///
+/// Attempts to reserve a send permit within
+/// [`OUTBOUND_BACKPRESSURE_LOG_THRESHOLD`]. If the channel is still full after
+/// that window, logs a backpressure warning and blocks until a permit is
+/// available (or the receiver is dropped).
+///
+/// Returns `true` when the frame is accepted, or `false` when the outbound
+/// receiver has already been dropped. `queue` is a static label used only in
+/// log fields to identify which outbound path is under pressure.
 pub(crate) async fn enqueue_outbound(
     tx: &mpsc::Sender<OutboundFrame>,
     frame: OutboundFrame,
@@ -167,6 +177,8 @@ pub(crate) async fn enqueue_outbound(
 ) -> bool {
     let connection_id = frame.connection_id();
     let reserve_started_at = Instant::now();
+    // Prefer a timed reserve so slow consumers surface as backpressure logs
+    // instead of silent stalls.
     let permit = match tokio::time::timeout(OUTBOUND_BACKPRESSURE_LOG_THRESHOLD, tx.reserve()).await
     {
         Ok(Ok(permit)) => permit,
@@ -175,6 +187,8 @@ pub(crate) async fn enqueue_outbound(
             return false;
         }
         Err(_) => {
+            // Timed out waiting for capacity; keep blocking so messages are not
+            // dropped, but record that the consumer is lagging.
             tracing::warn!(
                 connection_id,
                 queue,
