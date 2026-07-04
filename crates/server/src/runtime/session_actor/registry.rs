@@ -64,6 +64,38 @@ impl ServerRuntime {
         summaries
     }
 
+    /// Reads turn reservation state, preferring runtime caches while the session
+    /// actor is blocked in `ExecuteTurn` (mailbox would deadlock callers).
+    pub(crate) async fn session_turn_reservation_snapshot(
+        &self,
+        session_id: SessionId,
+    ) -> Option<super::snapshots::TurnReservationSnapshot> {
+        if self.runtime_active_turn_id(session_id).await.is_some()
+            && self.active_stream_state(session_id).await.is_some()
+        {
+            let handle = self.session(session_id).await?;
+            let spawn = self.active_spawn_snapshot_for_session(session_id).await?;
+            let active_turn = self
+                .active_turn_metadata
+                .lock()
+                .await
+                .get(&session_id)
+                .cloned()?;
+            return Some(super::snapshots::TurnReservationSnapshot {
+                max_turns: handle.max_turns(),
+                active_turn: Some(active_turn),
+                latest_turn: spawn.parent_latest_turn,
+                pending_turn_queue: handle.pending_turn_queue(),
+                ephemeral: spawn.parent_summary.ephemeral,
+                parent_session_id: spawn.parent_summary.parent_session_id,
+                summary: spawn.parent_summary,
+                runtime_context: spawn.runtime_context,
+            });
+        }
+        let handle = self.session(session_id).await?;
+        handle.turn_reservation_snapshot().await
+    }
+
     pub(crate) async fn register_turn_spawn_snapshot(
         &self,
         session_id: SessionId,

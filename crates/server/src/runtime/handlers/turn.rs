@@ -83,7 +83,10 @@ impl ServerRuntime {
                 "session does not exist",
             );
         };
-        let Some(reservation) = session_handle.turn_reservation_snapshot().await else {
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -205,9 +208,7 @@ impl ServerRuntime {
                 now,
             );
             let queued_input_id = item.id;
-            session_handle
-                .enqueue_pending_turn_input(item.clone())
-                .await;
+            session_handle.push_pending_turn_input(item.clone());
             if !reservation.ephemeral
                 && let Err(err) =
                     self.deps
@@ -310,7 +311,7 @@ impl ServerRuntime {
             )
             .await;
         }
-        self.maybe_start_title_generation_from_user_input(params.session_id, &display_input)
+        self.maybe_prepare_title_generation_from_user_input(params.session_id, &display_input)
             .await;
         if let Some(persistence) = session_handle.turn_persistence_snapshot().await
             && let Some(record) = persistence.record
@@ -345,10 +346,8 @@ impl ServerRuntime {
             .lock()
             .await
             .insert(params.session_id, CancellationToken::new());
-        self.active_turn_ids
-            .lock()
-            .await
-            .insert(params.session_id, turn.turn_id);
+        self.register_runtime_active_turn(params.session_id, turn.clone())
+            .await;
         if let Some(connection_id) = connection_id {
             self.active_turn_connections
                 .lock()
@@ -459,7 +458,10 @@ impl ServerRuntime {
             },
             None => None,
         };
-        let Some(reservation) = session_handle.turn_reservation_snapshot().await else {
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -574,10 +576,8 @@ impl ServerRuntime {
             .lock()
             .await
             .insert(params.session_id, CancellationToken::new());
-        self.active_turn_ids
-            .lock()
-            .await
-            .insert(params.session_id, turn.turn_id);
+        self.register_runtime_active_turn(params.session_id, turn.clone())
+            .await;
         if let Some(connection_id) = connection_id {
             self.active_turn_connections
                 .lock()
@@ -603,176 +603,6 @@ impl ServerRuntime {
             },
         })
         .expect("serialize turn/shell_command response")
-    }
-
-    pub(crate) async fn handle_turn_interrupt(
-        self: &Arc<Self>,
-        request_id: serde_json::Value,
-        params: serde_json::Value,
-    ) -> serde_json::Value {
-        let params: TurnInterruptParams = match serde_json::from_value(params) {
-            Ok(params) => params,
-            Err(error) => {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::InvalidParams,
-                    format!("invalid turn/interrupt params: {error}"),
-                );
-            }
-        };
-        let Some(session_handle) = self.session(params.session_id).await else {
-            return self.error_response(
-                request_id,
-                ProtocolErrorCode::SessionNotFound,
-                "session does not exist",
-            );
-        };
-
-        // Cancel before any session-actor mailbox round-trip: the actor may be blocked
-        // waiting for a permission response and cannot process commands until cancelled.
-        if let Some(cancel_token) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .get(&params.session_id)
-            .cloned()
-        {
-            cancel_token.cancel();
-        }
-        if let Some(task) = self.active_tasks.lock().await.remove(&params.session_id) {
-            task.abort();
-        }
-
-        let removed_len = self
-            .session_interactive
-            .clear_pending_user_inputs_for_turn(params.session_id, params.turn_id)
-            .await;
-        if removed_len > 0 {
-            tracing::info!(
-                session_id = %params.session_id,
-                turn_id = %params.turn_id,
-                removed_len,
-                "cleared pending request_user_input requests for interrupted turn"
-            );
-        }
-
-        // Cancel via a clone rather than `remove`: see the comment in
-        // `interrupt_child_runtime_work` for why removing here races with
-        // `run_turn_model_query` fetching the same token.
-        let close_children_parent = params.session_id;
-        Arc::clone(self)
-            .interrupt_all_child_agents(close_children_parent)
-            .await;
-        if self.runtime_active_turn_id(params.session_id).await != Some(params.turn_id) {
-            return self.error_response(
-                request_id,
-                ProtocolErrorCode::TurnNotFound,
-                "turn is not active",
-            );
-        }
-        let Some(interrupted_turn) = session_handle.interrupt_active_turn().await.flatten() else {
-            return self.error_response(
-                request_id,
-                ProtocolErrorCode::TurnNotFound,
-                "turn is not active",
-            );
-        };
-        if interrupted_turn.turn_id != params.turn_id {
-            return self.error_response(
-                request_id,
-                ProtocolErrorCode::TurnNotFound,
-                "turn does not exist",
-            );
-        }
-
-        let deferred = session_handle.take_deferred_items().await;
-        if let Some((item_id, item_seq, text)) = deferred.assistant {
-            self.complete_item(
-                params.session_id,
-                params.turn_id,
-                item_id,
-                item_seq,
-                ItemKind::AgentMessage,
-                TurnItem::AgentMessage(TextItem { text: text.clone() }),
-                serde_json::json!({ "title": "Assistant", "text": text }),
-            )
-            .await;
-        }
-        if let Some((item_id, item_seq, text)) = deferred.reasoning {
-            self.complete_item(
-                params.session_id,
-                params.turn_id,
-                item_id,
-                item_seq,
-                ItemKind::Reasoning,
-                TurnItem::Reasoning(TextItem { text: text.clone() }),
-                serde_json::json!({ "title": "Reasoning", "text": text }),
-            )
-            .await;
-        }
-        if let Some(persistence) = session_handle.turn_persistence_snapshot().await
-            && let Some(record) = persistence.record
-            && let Err(error) = self.rollout_store.append_turn(
-                &record,
-                build_turn_record(
-                    &interrupted_turn,
-                    persistence.session_context,
-                    persistence.latest_turn_context,
-                ),
-            )
-        {
-            return self.error_response(
-                request_id,
-                ProtocolErrorCode::InternalError,
-                format!("failed to persist interrupted turn: {error}"),
-            );
-        }
-
-        tracing::info!(
-            session_id = %params.session_id,
-            turn_id = %interrupted_turn.turn_id,
-            status = ?interrupted_turn.status,
-            "interrupted turn"
-        );
-        self.finalize_turn_workspace_changes(params.session_id, &interrupted_turn)
-            .await;
-        self.broadcast_event(ServerEvent::TurnInterrupted(TurnEventPayload {
-            session_id: params.session_id,
-            turn: interrupted_turn.clone(),
-        }))
-        .await;
-        self.broadcast_event(ServerEvent::TurnCompleted(TurnEventPayload {
-            session_id: params.session_id,
-            turn: interrupted_turn.clone(),
-        }))
-        .await;
-        self.broadcast_event(ServerEvent::SessionStatusChanged(
-            SessionStatusChangedPayload {
-                session_id: params.session_id,
-                status: SessionRuntimeStatus::Idle,
-            },
-        ))
-        .await;
-        self.record_terminal_turn_status(
-            interrupted_turn.turn_id,
-            TerminalTurnSnapshot::from_turn(&interrupted_turn),
-        )
-        .await;
-
-        let runtime = Arc::clone(self);
-        let sid = params.session_id;
-        tokio::spawn(async move {
-            runtime.spawn_next_turn_from_queue(sid).await;
-        });
-
-        serde_json::to_value(SuccessResponse {
-            id: request_id,
-            result: TurnInterruptResult {
-                turn_id: interrupted_turn.turn_id,
-                status: interrupted_turn.status,
-            },
-        })
-        .expect("serialize turn/interrupt response")
     }
 
     pub(crate) async fn handle_turn_steer(
@@ -812,7 +642,10 @@ impl ServerRuntime {
                 "session does not exist",
             );
         };
-        let Some(reservation) = session_handle.turn_reservation_snapshot().await else {
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -952,14 +785,17 @@ impl ServerRuntime {
                 );
             }
         };
-        let Some(session_handle) = self.session(params.session_id).await else {
+        let Some(_session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
                 "session does not exist",
             );
         };
-        let Some(reservation) = session_handle.turn_reservation_snapshot().await else {
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -1024,7 +860,10 @@ impl ServerRuntime {
                 "session does not exist",
             );
         };
-        let Some(reservation) = session_handle.turn_reservation_snapshot().await else {
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,

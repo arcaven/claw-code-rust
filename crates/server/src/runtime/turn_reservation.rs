@@ -55,6 +55,21 @@ impl ServerRuntime {
         self.active_turn_ids.lock().await.get(&session_id).copied()
     }
 
+    pub(super) async fn register_runtime_active_turn(
+        &self,
+        session_id: SessionId,
+        turn: TurnMetadata,
+    ) {
+        self.active_turn_ids
+            .lock()
+            .await
+            .insert(session_id, turn.turn_id);
+        self.active_turn_metadata
+            .lock()
+            .await
+            .insert(session_id, turn);
+    }
+
     pub(super) async fn clear_active_turn_runtime_handles(&self, session_id: SessionId) {
         self.active_tasks.lock().await.remove(&session_id);
         self.active_turn_cancellations
@@ -62,6 +77,7 @@ impl ServerRuntime {
             .await
             .remove(&session_id);
         self.active_turn_ids.lock().await.remove(&session_id);
+        self.active_turn_metadata.lock().await.remove(&session_id);
         self.active_turn_connections
             .lock()
             .await

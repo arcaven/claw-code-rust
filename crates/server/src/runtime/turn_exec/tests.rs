@@ -38,7 +38,7 @@ fn command_progress_uses_command_execution_item_id() {
     );
     assert_eq!(
         command_execution_item_id_for_progress(&pending_tool_calls, "read"),
-        None
+        Some(tool_item_id)
     );
     assert_eq!(
         command_execution_item_id_for_progress(&pending_tool_calls, "missing"),

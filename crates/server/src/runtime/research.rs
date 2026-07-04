@@ -290,10 +290,8 @@ impl ServerRuntime {
             .lock()
             .await
             .insert(params.session_id, CancellationToken::new());
-        self.active_turn_ids
-            .lock()
-            .await
-            .insert(params.session_id, turn.turn_id);
+        self.register_runtime_active_turn(params.session_id, turn.clone())
+            .await;
         if let Some(connection_id) = connection_id {
             self.active_turn_connections
                 .lock()
@@ -301,7 +299,7 @@ impl ServerRuntime {
                 .insert(params.session_id, connection_id);
         }
         let research_display_input = research_display_input(&display_input);
-        self.maybe_start_title_generation_from_user_input(
+        self.maybe_prepare_title_generation_from_user_input(
             params.session_id,
             &research_display_input,
         )

@@ -189,10 +189,8 @@ impl ServerRuntime {
                         false
                     } else {
                         cancellations.insert(session_id, cancel_token);
-                        self.active_turn_ids
-                            .lock()
-                            .await
-                            .insert(session_id, turn.turn_id);
+                        self.register_runtime_active_turn(session_id, turn.clone())
+                            .await;
                         let task = tokio::spawn(async move {
                             runtime
                                 .execute_turn(ExecuteTurnRequest {
@@ -442,39 +440,6 @@ impl ServerRuntime {
         session_handle.clear_active_turn_if_matches(turn_id).await;
     }
 
-    async fn complete_deferred_items_for_goal_turn(
-        &self,
-        session_handle: &SessionHandle,
-        session_id: SessionId,
-        turn_id: TurnId,
-    ) {
-        let deferred = session_handle.take_deferred_items().await;
-        if let Some((item_id, item_seq, text)) = deferred.assistant {
-            self.complete_item(
-                session_id,
-                turn_id,
-                item_id,
-                item_seq,
-                ItemKind::AgentMessage,
-                TurnItem::AgentMessage(TextItem { text: text.clone() }),
-                serde_json::json!({ "title": "Assistant", "text": text }),
-            )
-            .await;
-        }
-        if let Some((item_id, item_seq, text)) = deferred.reasoning {
-            self.complete_item(
-                session_id,
-                turn_id,
-                item_id,
-                item_seq,
-                ItemKind::Reasoning,
-                TurnItem::Reasoning(TextItem { text: text.clone() }),
-                serde_json::json!({ "title": "Reasoning", "text": text }),
-            )
-            .await;
-        }
-    }
-
     pub(super) async fn interrupt_active_goal_continuation_turn(
         self: &Arc<Self>,
         session_id: SessionId,
@@ -488,32 +453,37 @@ impl ServerRuntime {
         else {
             return false;
         };
-        let Some(session_handle) = self.session(session_id).await else {
-            self.goal_continuation_turn_goals
-                .lock()
-                .await
-                .remove(&turn_id);
-            return false;
-        };
-        let active_turn_matches = session_handle
-            .active_turn_id()
+        self.goal_continuation_turn_goals
+            .lock()
             .await
-            .is_some_and(|active_turn_id| active_turn_id == Some(turn_id));
-        if !active_turn_matches {
-            self.goal_continuation_turn_goals
-                .lock()
-                .await
-                .remove(&turn_id);
-            return false;
-        }
-        self.complete_deferred_items_for_goal_turn(&session_handle, session_id, turn_id)
-            .await;
+            .remove(&turn_id);
 
-        let Some(interrupted_turn) = session_handle.interrupt_active_turn().await.flatten() else {
-            return false;
-        };
-        if interrupted_turn.turn_id != turn_id {
-            return false;
+        // Turns run inline on the session actor. Do not touch the actor mailbox
+        // while ExecuteTurn is in flight — cancel the turn token and wait for
+        // `finalize_executed_turn` to emit lifecycle events instead.
+        if self.runtime_active_turn_id(session_id).await != Some(turn_id) {
+            let already_terminal = self.recent_terminal_turn_status(turn_id).await.is_some();
+            if already_terminal {
+                tracing::info!(
+                    session_id = %session_id,
+                    turn_id = %turn_id,
+                    reason,
+                    "goal continuation turn already terminal"
+                );
+            }
+            return already_terminal;
+        }
+
+        let terminal_rx = self.subscribe_terminal_turn_status(turn_id).await;
+        if let Some(snapshot) = self.recent_terminal_turn_status(turn_id).await {
+            self.record_terminal_turn_status(turn_id, snapshot).await;
+            tracing::info!(
+                session_id = %session_id,
+                turn_id = %turn_id,
+                reason,
+                "goal continuation turn already terminal"
+            );
+            return true;
         }
 
         // Cancel via a clone rather than `remove`: see the comment in
@@ -532,60 +502,20 @@ impl ServerRuntime {
             task.abort();
         }
 
-        let (record, session_context, turn_context) = {
-            let persistence = session_handle.turn_persistence_snapshot().await;
-            match persistence {
-                Some(persistence) => (
-                    persistence.record,
-                    persistence.session_context,
-                    persistence.latest_turn_context,
-                ),
-                None => (None, None, None),
-            }
-        };
-        if let Some(record) = record
-            && let Err(error) = self.rollout_store.append_turn(
-                &record,
-                build_turn_record(&interrupted_turn, session_context, turn_context),
-            )
-        {
-            tracing::warn!(
+        let completed =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), terminal_rx).await {
+                Ok(Ok(_)) => true,
+                Ok(Err(_)) | Err(_) => self.recent_terminal_turn_status(turn_id).await.is_some(),
+            };
+        if completed {
+            tracing::info!(
                 session_id = %session_id,
-                turn_id = %interrupted_turn.turn_id,
-                error = %error,
-                "failed to persist interrupted goal continuation turn"
+                turn_id = %turn_id,
+                reason,
+                "interrupted active goal continuation turn"
             );
         }
-
-        tracing::info!(
-            session_id = %session_id,
-            turn_id = %interrupted_turn.turn_id,
-            reason,
-            "interrupted active goal continuation turn"
-        );
-        self.broadcast_event(ServerEvent::TurnInterrupted(TurnEventPayload {
-            session_id,
-            turn: interrupted_turn.clone(),
-        }))
-        .await;
-        self.broadcast_event(ServerEvent::TurnCompleted(TurnEventPayload {
-            session_id,
-            turn: interrupted_turn,
-        }))
-        .await;
-        self.broadcast_event(ServerEvent::SessionStatusChanged(
-            SessionStatusChangedPayload {
-                session_id,
-                status: SessionRuntimeStatus::Idle,
-            },
-        ))
-        .await;
-
-        let runtime = Arc::clone(self);
-        tokio::spawn(async move {
-            runtime.spawn_next_turn_from_queue(session_id).await;
-        });
-        true
+        completed
     }
 }
 

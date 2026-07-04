@@ -1,9 +1,7 @@
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use anyhow::Result;
@@ -901,6 +899,7 @@ async fn interrupted_research_closes_delegated_child_agent() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 33,
                 "method": "_devo/turn/interrupt",
                 "params": {
@@ -923,6 +922,7 @@ async fn interrupted_research_closes_delegated_child_agent() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 34,
                 "method": "_devo/agent/list",
                 "params": {
@@ -1006,6 +1006,7 @@ async fn interrupted_research_clears_pending_clarification_request() -> Result<(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 32,
                 "method": "_devo/turn/interrupt",
                 "params": {
@@ -1017,8 +1018,10 @@ async fn interrupted_research_clears_pending_clarification_request() -> Result<(
         )
         .await
         .context("turn/interrupt response")?;
+    eprintln!("response: {:?}", interrupt_response);
     let interrupt_response: devo_server::SuccessResponse<devo_server::TurnInterruptResult> =
         serde_json::from_value(interrupt_response)?;
+
     assert_eq!(interrupt_response.result.turn_id.to_string(), turn_id);
 
     let stale_response = respond_to_clarification_raw(
@@ -1497,21 +1500,6 @@ fn supervisor_stream_events(request: &ModelRequest) -> Vec<Result<StreamEvent>> 
                 let wait_id = supervisor_wait_tool_id(attempt, poll_index);
                 let wait_content =
                     request_tool_result_content(request, &wait_id).unwrap_or_default();
-                // #region agent log
-                agent_debug_log(
-                    "deep_research_e2e.rs:supervisor_stream_events",
-                    "supervisor wait_agent poll result",
-                    serde_json::json!({
-                        "attempt": attempt,
-                        "pollIndex": poll_index,
-                        "waitId": wait_id,
-                        "terminal": wait_agent_result_is_terminal(&wait_content),
-                        "failed": wait_agent_result_indicates_failure(&wait_content),
-                        "succeeded": wait_agent_result_indicates_success(&wait_content),
-                    }),
-                    "A",
-                );
-                // #endregion
                 if wait_agent_result_indicates_failure(&wait_content) {
                     break;
                 }
@@ -1572,10 +1560,6 @@ fn wait_agent_result_indicates_success(content: &str) -> bool {
     }) || wait_agent_statuses(content).any(|status| status == "completed")
 }
 
-fn wait_agent_result_is_terminal(content: &str) -> bool {
-    wait_agent_result_indicates_failure(content) || wait_agent_result_indicates_success(content)
-}
-
 fn wait_agent_events(content: &str) -> Vec<serde_json::Value> {
     serde_json::from_str::<serde_json::Value>(content)
         .ok()
@@ -1599,31 +1583,6 @@ fn wait_agent_statuses(content: &str) -> impl Iterator<Item = String> {
             .map(str::to_string)
     })
 }
-
-// #region agent log
-fn agent_debug_log(location: &str, message: &str, data: serde_json::Value, hypothesis_id: &str) {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    let payload = serde_json::json!({
-        "sessionId": "ec5e4e",
-        "location": location,
-        "message": message,
-        "data": data,
-        "hypothesisId": hypothesis_id,
-        "runId": "post-fix",
-        "timestamp": timestamp,
-    });
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../debug-ec5e4e.log"))
-    {
-        let _ = writeln!(file, "{payload}");
-    }
-}
-// #endregion
 
 fn supervisor_worker_message(attempt: usize) -> String {
     format!(
@@ -1909,6 +1868,7 @@ async fn start_research_turn(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 3,
                 "method": "_devo/turn/start",
                 "params": {
@@ -1948,6 +1908,7 @@ async fn start_regular_turn_after_research(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 30,
                 "method": "_devo/turn/start",
                 "params": {
@@ -1987,6 +1948,7 @@ async fn queue_regular_turn_during_research(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 31,
                 "method": "_devo/turn/start",
                 "params": {
@@ -2391,6 +2353,7 @@ async fn respond_to_clarification_raw(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 4,
                 "method": "_devo/request_user_input/respond",
                 "params": {

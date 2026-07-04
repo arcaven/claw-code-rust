@@ -21,6 +21,20 @@ impl ServerRuntime {
         session_id: SessionId,
         user_input: &str,
     ) {
+        self.maybe_prepare_title_generation_from_user_input(session_id, user_input)
+            .await;
+        self.maybe_schedule_final_title_generation(session_id, None)
+            .await;
+    }
+
+    /// Assigns a provisional title and records the first user input without
+    /// calling the title model. Used at turn start while the session actor may
+    /// soon block on `ExecuteTurn`; final title generation runs post-turn.
+    pub(super) async fn maybe_prepare_title_generation_from_user_input(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        user_input: &str,
+    ) {
         self.maybe_assign_provisional_title(session_id, user_input)
             .await;
 
@@ -30,6 +44,16 @@ impl ServerRuntime {
         let _ = session_handle
             .set_first_user_input_if_unset(user_input.to_string())
             .await;
+    }
+
+    pub(super) async fn maybe_schedule_final_title_generation(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        first_input_override: Option<String>,
+    ) {
+        let Some(session_handle) = self.session(session_id).await else {
+            return;
+        };
         let Some(title_context) = session_handle.title_generation_context().await else {
             return;
         };
@@ -37,19 +61,27 @@ impl ServerRuntime {
             title_context.title_state,
             SessionTitleState::Unset | SessionTitleState::Provisional
         );
-        if needs_title {
-            let first_input = session_handle
+        if !needs_title {
+            return;
+        }
+        let first_input = if let Some(first_input) = first_input_override {
+            first_input
+        } else {
+            session_handle
                 .export_runtime_session()
                 .await
                 .and_then(|session| session.first_user_input)
-                .unwrap_or_else(|| user_input.to_string());
-            let runtime = Arc::clone(self);
-            tokio::spawn(async move {
-                runtime
-                    .maybe_generate_final_title(session_id, first_input)
-                    .await;
-            });
+                .unwrap_or_default()
+        };
+        if first_input.is_empty() {
+            return;
         }
+        let runtime = Arc::clone(self);
+        tokio::spawn(async move {
+            runtime
+                .maybe_generate_final_title(session_id, first_input)
+                .await;
+        });
     }
 
     pub(super) async fn maybe_assign_provisional_title(

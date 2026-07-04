@@ -555,10 +555,8 @@ impl ServerRuntime {
             .lock()
             .await
             .insert(session_id, cancel_token);
-        self.active_turn_ids
-            .lock()
-            .await
-            .insert(session_id, turn.turn_id);
+        self.register_runtime_active_turn(session_id, turn.clone())
+            .await;
         let task = tokio::spawn(async move {
             runtime
                 .execute_turn(ExecuteTurnRequest {

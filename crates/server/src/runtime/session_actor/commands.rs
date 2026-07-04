@@ -124,9 +124,6 @@ pub(crate) enum SessionCommand {
     SetSessionIdle {
         latest_turn: Option<TurnMetadata>,
     },
-    EnqueuePendingTurnInput {
-        item: PendingInputItem,
-    },
     ActivateQueuedTurn {
         turn: TurnMetadata,
         turn_config: TurnConfig,

@@ -13,17 +13,17 @@ impl ServerRuntime {
     pub(in crate::runtime) async fn spawn_next_turn_from_queue(
         self: &Arc<Self>,
         session_id: SessionId,
-    ) {
+    ) -> bool {
         let Some(queued) = self
             .pop_next_queued_turn_input(session_id, /*require_idle_session*/ false)
             .await
         else {
-            return;
+            return false;
         };
         self.broadcast_updated_queue(session_id).await;
         let Some((turn, turn_config)) = self.prepare_queued_turn_start(session_id, &queued).await
         else {
-            return;
+            return false;
         };
         if let Some((parent_session_id, parent_turn_id)) = queued.subagent_usage_owner {
             self.register_subagent_usage_owner(parent_session_id, session_id, parent_turn_id)
@@ -51,6 +51,7 @@ impl ServerRuntime {
                 })
                 .await;
         });
+        true
     }
 
     /// After a turn completes, chain directly into the next queued input when present.
@@ -59,7 +60,7 @@ impl ServerRuntime {
         session_id: SessionId,
     ) -> bool {
         let Some(queued) = self
-            .pop_next_queued_turn_input(session_id, /*require_idle_session*/ true)
+            .pop_next_queued_turn_input(session_id, /*require_idle_session*/ false)
             .await
         else {
             return false;

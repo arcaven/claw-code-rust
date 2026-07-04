@@ -517,6 +517,7 @@ impl ServerRuntime {
             cancellation.cancel();
         }
         self.active_turn_ids.lock().await.remove(&session_id);
+        self.active_turn_metadata.lock().await.remove(&session_id);
         self.active_turn_connections
             .lock()
             .await

@@ -33,9 +33,26 @@ pub(super) async fn run_session_actor(
             } => {
                 let session_id = request.session_id;
                 execute_turn_in_actor(&mut state, turn_runtime.clone(), request).await;
+                // Interrupted turns must not auto-start continuation here: that would
+                // re-block the actor mailbox before the interrupting handler finishes
+                // (goal replace/clear/cancel). Failed turns still enter maybe_start so
+                // `pause_goal_continuation_after_failed_turn` can suppress looping.
+                // Explicit restarts go through goal handlers' maybe_start calls.
+                let should_auto_continue_goal = state.latest_turn.as_ref().is_some_and(|turn| {
+                    matches!(turn.status, TurnStatus::Completed | TurnStatus::Failed)
+                });
                 let _ = reply.send(());
                 tokio::spawn(async move {
-                    if !turn_runtime.chain_queued_followup_turn(session_id).await {
+                    turn_runtime
+                        .maybe_schedule_final_title_generation(session_id, None)
+                        .await;
+                    if turn_runtime.chain_queued_followup_turn(session_id).await {
+                        return;
+                    }
+                    if turn_runtime.spawn_next_turn_from_queue(session_id).await {
+                        return;
+                    }
+                    if should_auto_continue_goal {
                         turn_runtime
                             .maybe_start_goal_continuation_turn(session_id)
                             .await;
@@ -267,13 +284,6 @@ pub(super) async fn run_session_actor(
                 Some(goal) => state.core.set_active_goal(goal),
                 None => state.core.clear_active_goal(),
             },
-            SessionCommand::EnqueuePendingTurnInput { item } => {
-                state
-                    .pending_turn_queue
-                    .lock()
-                    .expect("pending turn queue mutex should not be poisoned")
-                    .push_back(item);
-            }
             SessionCommand::ActivateQueuedTurn { turn, turn_config } => {
                 let now = Utc::now();
                 apply_turn_config_to_session_summary(&mut state.summary, &turn_config);

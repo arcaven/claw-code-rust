@@ -466,10 +466,8 @@ impl ServerRuntime {
             .lock()
             .await
             .insert(params.session_id, CancellationToken::new());
-        self.active_turn_ids
-            .lock()
-            .await
-            .insert(params.session_id, replacement_turn.turn_id);
+        self.register_runtime_active_turn(params.session_id, replacement_turn.clone())
+            .await;
         let runtime = Arc::clone(self);
         let replacement_turn_for_task = replacement_turn.clone();
         let turn_config_for_task = turn_config.clone();

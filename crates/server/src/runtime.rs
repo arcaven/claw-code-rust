@@ -227,6 +227,8 @@ pub struct ServerRuntime {
     active_turn_cancellations: Mutex<HashMap<SessionId, CancellationToken>>,
     /// Active turn ids tracked at runtime level so cancel/interrupt can avoid session-actor mailbox round-trips while a turn is blocked in permission wait.
     active_turn_ids: Mutex<HashMap<SessionId, TurnId>>,
+    /// Full active-turn metadata for reservation snapshots while the session actor is busy in `ExecuteTurn`.
+    active_turn_metadata: Mutex<HashMap<SessionId, TurnMetadata>>,
     active_turn_connections: Mutex<HashMap<SessionId, u64>>,
     terminal_turn_statuses: Mutex<VecDeque<(TurnId, TerminalTurnSnapshot)>>,
     acp_prompt_waiters: Mutex<HashMap<TurnId, Vec<oneshot::Sender<TerminalTurnSnapshot>>>>,
@@ -348,6 +350,7 @@ impl ServerRuntime {
             active_tasks: Mutex::new(HashMap::new()),
             active_turn_cancellations: Mutex::new(HashMap::new()),
             active_turn_ids: Mutex::new(HashMap::new()),
+            active_turn_metadata: Mutex::new(HashMap::new()),
             active_turn_connections: Mutex::new(HashMap::new()),
             terminal_turn_statuses: Mutex::new(VecDeque::new()),
             acp_prompt_waiters: Mutex::new(HashMap::new()),
