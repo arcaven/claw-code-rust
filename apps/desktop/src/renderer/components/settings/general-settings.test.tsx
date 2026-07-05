@@ -52,12 +52,16 @@ describe("GeneralSettings", () => {
 			hasDarkMode: markup.includes(">Dark</button>") || markup.includes(">Dark</"),
 			hasDisplayMode: markup.includes(">Display mode</label>"),
 			hasVerboseMode: markup.includes(">Verbose</div>") || markup.includes(">Verbose<"),
+			hasConversation: markup.includes(">Conversation</h3>"),
+			hasHideThinking: markup.includes(">Hide thinking while working</label>"),
 		}).toEqual({
 			hasAppearance: true,
 			hasTheme: true,
 			hasDarkMode: true,
 			hasDisplayMode: true,
 			hasVerboseMode: true,
+			hasConversation: true,
+			hasHideThinking: true,
 		})
 	})
 })

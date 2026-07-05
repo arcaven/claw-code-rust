@@ -8,7 +8,7 @@ import {
 	projectListAtom,
 	sessionNameFamily,
 } from "../atoms/derived/agents"
-import { type DisplayMode, displayModeAtom } from "../atoms/preferences"
+import { type DisplayMode, displayModeAtom, hideThinkingWhileWorkingAtom } from "../atoms/preferences"
 import { commandPaletteOpenAtom } from "../atoms/ui"
 import { persistAppearanceSettings } from "../lib/settings-sync"
 import type { Agent, SidebarProject } from "../lib/types"
@@ -60,5 +60,19 @@ export const useSetDisplayMode = () => {
 			void persistAppearanceSettings({ displayMode })
 		},
 		[setDisplayMode],
+	)
+}
+
+export const useHideThinkingWhileWorking = (): boolean =>
+	useAtomValue(hideThinkingWhileWorkingAtom)
+
+export const useSetHideThinkingWhileWorking = () => {
+	const setHideThinkingWhileWorking = useSetAtom(hideThinkingWhileWorkingAtom)
+	return useCallback(
+		(hideThinkingWhileWorking: boolean) => {
+			setHideThinkingWhileWorking(hideThinkingWhileWorking)
+			void persistAppearanceSettings({ hideThinkingWhileWorking })
+		},
+		[setHideThinkingWhileWorking],
 	)
 }

@@ -5,6 +5,18 @@ const source = readFileSync(
   new URL("./chat-turn.tsx", import.meta.url),
   "utf8",
 );
+const thoughtRowSource = readFileSync(
+  new URL("./thought-row.tsx", import.meta.url),
+  "utf8",
+);
+const transcriptDisclosureSource = readFileSync(
+  new URL("./transcript-disclosure.tsx", import.meta.url),
+  "utf8",
+);
+const processTimelineViewSource = readFileSync(
+  new URL("./process-timeline-view.tsx", import.meta.url),
+  "utf8",
+);
 const chatViewSource = readFileSync(
   new URL("./chat-view.tsx", import.meta.url),
   "utf8",
@@ -39,15 +51,7 @@ const footerMetadataSource =
   source.match(
     /\{\/\* Per-turn metadata[\s\S]*?\{\/\* Turn-level message actions/,
   )?.[0] ?? "";
-const stepToggleDurationCount =
-  source.match(/\{duration && `· \$\{duration\} `\}/g)?.length ?? 0;
-const stepsToggleIndex = source.indexOf(
-  "completedProcessExpanded && stepsToggle",
-);
-const defaultModeIndex = source.indexOf(
-  "Default mode: interleaved text + grouped tool summaries",
-);
-const verboseModeIndex = source.indexOf("Verbose mode: full tool cards");
+const processTimelineIndex = source.indexOf("<ProcessTimelineView");
 
 describe("ChatTurnComponent transcript controls", () => {
   test("keeps completed process collapsed, suppresses zero-second footer, and shows actions", () => {
@@ -55,54 +59,38 @@ describe("ChatTurnComponent transcript controls", () => {
       collapsesCompletedProcess:
         source.includes("const processSectionVisible =") &&
         source.includes("completedProcessExpanded"),
-      suppressesSubSecondDuration: source.includes(
-        'workTimeMs >= 1000 ? formatWorkDuration(workTimeMs) : ""',
-      ),
+      showsSubSecondDuration: source.includes(
+        'if (workTimeMs <= 0) return ""',
+      ) && source.includes("return formatWorkDuration(workTimeMs)"),
       usesActiveTurnDuration: source.includes(
         "computeTurnWorkTime(turn, { active: working })",
       ),
-      stepsToggleBeforeDefaultStream:
-        stepsToggleIndex !== -1 &&
-        defaultModeIndex !== -1 &&
-        stepsToggleIndex < defaultModeIndex,
-      expandedStepsRenderBeforeFinalText:
-        source.includes(
-          'const stepParts = processOrderedParts.filter((part) => part.kind !== "text")',
-        ) &&
-        source.includes(
-          'const textParts = processOrderedParts.filter((part) => part.kind === "text")',
-        ) &&
-        source.includes("{verboseOrderedParts.map((item) => {") &&
-        verboseModeIndex !== -1 &&
-        source.indexOf("{verboseOrderedParts.map((item) => {") >
-          verboseModeIndex,
-      stepsShareOneToggle:
-        source.match(/const stepsToggle =/g)?.length === 1 &&
-        !source.includes("Toggle to verbose view") &&
-        !source.includes("Collapse back to default view"),
+      usesInterleavedTimeline: source.includes("buildProcessTimeline"),
+      omitsStepsToggle: !source.includes("const stepsToggle ="),
       footerConditionOmitsDuration: footerMetadataSource.includes(
         "turn.assistantMessages.length > 0 && (turnModel || turnCostStr)",
       ),
       footerDoesNotRenderDuration: !footerMetadataSource.includes(
         "{duration && <span>{duration}</span>}",
       ),
-      stepsKeepDuration: stepToggleDurationCount === 1,
       usesAlwaysVisibleActions: responseActionsProps.trim() === "",
       usesHoverHiddenActions:
         responseActionsProps.includes("opacity-0") ||
         responseActionsProps.includes("group-hover/turn:opacity-100"),
+      rendersTimelineDirectlyUnderWorkedFor:
+        processTimelineIndex !== -1 &&
+        source.indexOf("<CompletedTurnProcessDisclosure") < processTimelineIndex,
     }).toEqual({
       collapsesCompletedProcess: true,
-      suppressesSubSecondDuration: true,
+      showsSubSecondDuration: true,
       usesActiveTurnDuration: true,
-      stepsToggleBeforeDefaultStream: true,
-      expandedStepsRenderBeforeFinalText: true,
-      stepsShareOneToggle: true,
+      usesInterleavedTimeline: true,
+      omitsStepsToggle: true,
       footerConditionOmitsDuration: true,
       footerDoesNotRenderDuration: true,
-      stepsKeepDuration: true,
       usesAlwaysVisibleActions: true,
       usesHoverHiddenActions: false,
+      rendersTimelineDirectlyUnderWorkedFor: true,
     });
   });
 
@@ -144,8 +132,8 @@ describe("ChatTurnComponent transcript controls", () => {
   test("renders the active turn working timer between user message and assistant content", () => {
     const userMessageIndex = source.indexOf("{/* User message */}");
     const workingStripIndex = source.indexOf("<WorkingTurnStatusStrip");
-    const assistantContentIndex = source.indexOf(
-      "{/* Tool calls + reasoning section */}",
+    const processTimelineSectionIndex = source.indexOf(
+      "Interleaved thought/tool process timeline",
     );
     const responseTextIndex = source.indexOf("{/* Streaming response");
 
@@ -159,11 +147,11 @@ describe("ChatTurnComponent transcript controls", () => {
         userMessageIndex !== -1 &&
         workingStripIndex !== -1 &&
         userMessageIndex < workingStripIndex,
-      placesStripBeforeAssistantContent:
+      placesStripBeforeProcessTimeline:
         workingStripIndex !== -1 &&
-        assistantContentIndex !== -1 &&
+        processTimelineSectionIndex !== -1 &&
         responseTextIndex !== -1 &&
-        workingStripIndex < assistantContentIndex &&
+        workingStripIndex < processTimelineSectionIndex &&
         workingStripIndex < responseTextIndex,
       removesOldWorkingShimmer: !source.includes("Working shimmer"),
       keepsCompletedDurationAffordance: source.includes('Worked for "'),
@@ -172,7 +160,7 @@ describe("ChatTurnComponent transcript controls", () => {
       usesWorkingForCopy: true,
       reusesTurnDuration: true,
       placesStripAfterUserMessage: true,
-      placesStripBeforeAssistantContent: true,
+      placesStripBeforeProcessTimeline: true,
       removesOldWorkingShimmer: true,
       keepsCompletedDurationAffordance: true,
     });
@@ -181,7 +169,7 @@ describe("ChatTurnComponent transcript controls", () => {
   test("folds completed process details under Worked for while keeping final answer visible", () => {
     const disclosureIndex = source.indexOf("<CompletedTurnProcessDisclosure");
     const processSectionIndex = source.indexOf(
-      "{/* Tool calls + reasoning section */}",
+      "Interleaved thought/tool process timeline",
     );
     const completedFinalResponseIndex = source.indexOf(
       "{/* Completed final response */}",
@@ -201,90 +189,87 @@ describe("ChatTurnComponent transcript controls", () => {
       processSectionCanBeCollapsed:
         source.includes("const processSectionVisible =") &&
         source.includes("completedProcessExpanded"),
-      stepsToggleHiddenWhenProcessCollapsed: source.includes(
-        "completedProcessExpanded && stepsToggle",
-      ),
       disclosureReplacesCompletedDurationRow:
         disclosureIndex !== -1 && !source.includes("<CompletedTurnDurationRow"),
       finalResponseOutsideProcess:
         processSectionIndex !== -1 &&
         completedFinalResponseIndex !== -1 &&
         processSectionIndex < completedFinalResponseIndex,
-      opensReasoningContentAfterExpandingWorkedFor: source.includes(
-        "<TranscriptReasoningBlock",
+      rendersThoughtRowsInTimeline: processTimelineViewSource.includes(
+        "<ThoughtRow",
       ),
     }).toEqual({
       definesProcessDisclosure: true,
       tracksCompletedProcessState: true,
       splitsFinalResponseFromProcess: true,
       processSectionCanBeCollapsed: true,
-      stepsToggleHiddenWhenProcessCollapsed: true,
       disclosureReplacesCompletedDurationRow: true,
       finalResponseOutsideProcess: true,
-      opensReasoningContentAfterExpandingWorkedFor: true,
+      rendersThoughtRowsInTimeline: true,
     });
   });
 
   test("keeps completed process disclosure reachable when duration is unavailable", () => {
     expect({
-      disclosureAllowsMissingDuration: source.includes(
+      disclosureAlwaysRendersWhenMounted: !source.includes(
         "if (!duration && !hasProcessDetails) return null",
       ),
       disclosureUsesWorkedFallback: source.includes(
         '{duration ? "Worked for " : "Worked"}',
       ),
-      renderConditionIncludesProcessDetails: source.includes(
-        "{!working && (duration || hasCompletedProcessDetails) && (",
+      renderConditionUsesWorkedForSummary: source.includes(
+        "!working && showWorkedForSummary",
+      ),
+      showsWorkedForOnAnyCompletedTurn: source.includes(
+        "return turn.assistantMessages.length > 0",
       ),
     }).toEqual({
-      disclosureAllowsMissingDuration: true,
+      disclosureAlwaysRendersWhenMounted: true,
       disclosureUsesWorkedFallback: true,
-      renderConditionIncludesProcessDetails: true,
+      renderConditionUsesWorkedForSummary: true,
+      showsWorkedForOnAnyCompletedTurn: true,
     });
   });
 
-  test("uses a subtle transcript-local reasoning indicator instead of the default Thought row", () => {
-    const chatTurnComponentSource =
-      source.match(
-        /export const ChatTurnComponent = memo\([\s\S]*?\n\)/,
-      )?.[0] ?? "";
-
+  test("uses transcript disclosure rows for thoughts and tools", () => {
     expect({
-      definesTranscriptReasoningBlock: source.includes(
-        "function TranscriptReasoningBlock",
+      definesThoughtRow: thoughtRowSource.includes("export const ThoughtRow"),
+      usesTranscriptDisclosureTrigger: transcriptDisclosureSource.includes(
+        "export const TranscriptDisclosureTrigger",
       ),
-      definesTranscriptReasoningLiveCue: source.includes(
-        "function TranscriptReasoningLiveCue",
-      ),
-      usesLeftRailReasoningStyle:
-        source.includes("border-l") &&
-        source.includes('aria-label="Reasoning details"'),
-      removesBareReasoningTrigger: !chatTurnComponentSource.includes(
-        "<ReasoningTrigger />",
-      ),
+      usesCollapsedThoughtChevron:
+        transcriptDisclosureSource.includes("ChevronRightIcon") &&
+        transcriptDisclosureSource.includes("ChevronDownIcon"),
+      removesBareReasoningTrigger: !source.includes("<ReasoningTrigger />"),
       keepsSharedReasoningTriggerUnchanged:
         sharedReasoningSource.includes("export const ReasoningTrigger") &&
         sharedReasoningSource.includes("Thought for a few seconds"),
       dropsVisibleThoughtCopyDependency: !source.includes(
         "Thought for a few seconds",
       ),
-      keepsActiveThinkingCue: source.includes("Thinking..."),
-      completedReasoningRendersDirectly: source.includes(
-        "<TranscriptReasoningBlock key={processItem.part.id} text={text} animated={isStreaming && i === item.items.length - 1} />",
+      keepsActiveThinkingCue: thoughtRowSource.includes("Thinking..."),
+      switchesToThoughtWhenComplete: thoughtRowSource.includes(
+        "<span>Thought</span>",
       ),
-      verboseReasoningRendersDirectly: source.includes(
-        "<TranscriptReasoningBlock text={reasoningText} animated={isReasoningStreaming} />",
+      toolsUseTranscriptDisclosure: chatToolCallSource.includes(
+        "<TranscriptDisclosure",
+      ),
+      toolsOmitDurationTrailing: !chatToolCallSource.includes("getToolDuration(part)"),
+      timelineRendersSeparateThoughtRows: processTimelineViewSource.includes(
+        'item.kind === "thought"',
       ),
     }).toEqual({
-      definesTranscriptReasoningBlock: true,
-      definesTranscriptReasoningLiveCue: true,
-      usesLeftRailReasoningStyle: true,
+      definesThoughtRow: true,
+      usesTranscriptDisclosureTrigger: true,
+      usesCollapsedThoughtChevron: true,
       removesBareReasoningTrigger: true,
       keepsSharedReasoningTriggerUnchanged: true,
       dropsVisibleThoughtCopyDependency: true,
       keepsActiveThinkingCue: true,
-      completedReasoningRendersDirectly: true,
-      verboseReasoningRendersDirectly: true,
+      switchesToThoughtWhenComplete: true,
+      toolsUseTranscriptDisclosure: true,
+      toolsOmitDurationTrailing: true,
+      timelineRendersSeparateThoughtRows: true,
     });
   });
 
@@ -329,6 +314,28 @@ describe("ChatTurnComponent transcript controls", () => {
       keepsIconStyleConsistent: true,
       handlesCompactionEvents: true,
       bridgesRuntimeCompactionEvents: true,
+    });
+  });
+
+  test("interleaves thoughts and tools inside the process timeline", () => {
+    expect({
+      noMergedTurnThinkingSection: !source.includes("function TurnThinkingSection"),
+      noReasoningProcessGroups: !source.includes('"reasoning-process"'),
+      usesPerRowExpansion: source.includes("expandedRowIds"),
+      endsThinkingWhenAssistantTextStarts: processTimelineViewSource.includes(
+        "isReasoningPartActivelyStreaming",
+      ),
+      keepsWorkedForOnReasoningOnlyTurns: source.includes("showWorkedForSummary"),
+      verboseUsesDisplayModeOnly: source.includes(
+        'const showVerboseTools = displayMode === "verbose"',
+      ),
+    }).toEqual({
+      noMergedTurnThinkingSection: true,
+      noReasoningProcessGroups: true,
+      usesPerRowExpansion: true,
+      endsThinkingWhenAssistantTextStarts: true,
+      keepsWorkedForOnReasoningOnlyTurns: true,
+      verboseUsesDisplayModeOnly: true,
     });
   });
 });

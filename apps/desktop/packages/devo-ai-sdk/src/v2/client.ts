@@ -536,6 +536,21 @@ function sortedMessages(messages: Message[]): Message[] {
 	return [...messages].sort(compareMessages)
 }
 
+const initializePromises = new WeakMap<DevoAcpTransport, Promise<void>>()
+
+const DESKTOP_INITIALIZE_PARAMS = {
+	protocolVersion: 1,
+	clientCapabilities: {
+		fs: { readTextFile: false, writeTextFile: false },
+		terminal: false,
+	},
+	clientInfo: {
+		name: "devo-desktop",
+		title: "Devo Desktop",
+		version: "0.1.0",
+	},
+} as const
+
 function recentMessages(messages: Message[], limit: number | undefined): Message[] {
 	const sorted = sortedMessages(messages)
 	if (limit === undefined || sorted.length <= limit) return sorted
@@ -1103,18 +1118,15 @@ class AcpClient {
 	private async ensureInitialized(): Promise<void> {
 		if (this.initialized) return
 		await this.open()
-		await this.request("initialize", {
-			protocolVersion: 1,
-			clientCapabilities: {
-				fs: { readTextFile: false, writeTextFile: false },
-				terminal: false,
-			},
-			clientInfo: {
-				name: "devo-desktop",
-				title: "Devo Desktop",
-				version: "0.1.0",
-			},
-		})
+		if (!this.transport) throw new Error("Devo ACP transport is not connected")
+		if (this.initialized) return
+
+		let promise = initializePromises.get(this.transport)
+		if (!promise) {
+			promise = this.request("initialize", DESKTOP_INITIALIZE_PARAMS).then(() => {})
+			initializePromises.set(this.transport, promise)
+		}
+		await promise
 		this.initialized = true
 	}
 
@@ -1150,6 +1162,10 @@ class AcpClient {
 
 	private handleTransportEvent(event: DevoAcpTransportEvent): void {
 		if (event.type === "closed") {
+			if (this.transport) {
+				initializePromises.delete(this.transport)
+			}
+			this.initialized = false
 			this.events.close()
 			return
 		}

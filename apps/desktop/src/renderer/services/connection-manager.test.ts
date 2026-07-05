@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { DevoClient } from "@devo-ai/sdk/v2/client"
 import type { Event, Session } from "../lib/types"
+import { partsFamily, partStorageKey } from "../atoms/parts"
 import { sessionFamily, upsertSessionAtom } from "../atoms/sessions"
 import { appStore } from "../atoms/store"
 
@@ -64,12 +65,13 @@ mock.module("./devo", () => ({
 	getSession: async () => null,
 	getSessionStatuses: async () => getSessionStatusesImpl(),
 	listProjects: async () => [],
+	projectsFromSessions: (sessions: Session[]) => sessions,
 	listSessions: async (client: DevoClient, options?: unknown) => listSessionsImpl(client, options),
 	subscribeToGlobalEvents: async (client: DevoClient) =>
 		streamFor(((client as unknown as { directory?: string }).directory) ?? "__base__"),
 }))
 
-describe("connection manager project status bridge", () => {
+describe("connection manager project event bridge", () => {
 	beforeEach(() => {
 		streams.clear()
 		listSessionsImpl = async () => []
@@ -117,6 +119,46 @@ describe("connection manager project status bridge", () => {
 		await new Promise((resolve) => setTimeout(resolve, 5))
 
 		expect(appStore.get(sessionFamily(session.id))?.status).toEqual({ type: "busy" })
+	})
+
+	test("forwards project-scoped message part events into renderer state", async () => {
+		const directory = "/repo/project-message-bridge"
+		const session: Session = {
+			id: "message-bridge-session",
+			directory,
+			title: "Message bridge",
+			time: { created: 1, updated: 1 },
+		}
+		appStore.set(upsertSessionAtom, { session, directory })
+
+		const manager = await import(`./connection-manager?case=${Date.now()}`)
+		activeManager = manager
+		await manager.connectToDevo("devo://stdio")
+		expect(manager.getProjectClient(directory)).not.toBeNull()
+
+		streamFor(directory).push({
+			type: "message.part.updated",
+			properties: {
+				part: {
+					id: "assistant-message-text",
+					sessionID: session.id,
+					messageID: "assistant-message",
+					type: "text",
+					text: "hello from project stream",
+				},
+			},
+		})
+		await new Promise((resolve) => setTimeout(resolve, 5))
+
+		expect(appStore.get(partsFamily(partStorageKey(session.id, "assistant-message")))).toEqual([
+			{
+				id: "assistant-message-text",
+				sessionID: session.id,
+				messageID: "assistant-message",
+				type: "text",
+				text: "hello from project stream",
+			},
+		])
 	})
 
 	test("loads project statuses after session list hydration", async () => {

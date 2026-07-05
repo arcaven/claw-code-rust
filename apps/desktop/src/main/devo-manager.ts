@@ -1,7 +1,9 @@
 import type { AcpTransport, AcpTransportEvent, AcpTransportListener, JsonRpcId } from "./acp-stdio-client"
 import { app } from "electron"
 import {
-	TRAFFIC_LOG_PATH_ENV,
+	DEVO_HOME_ENV,
+	PROTOCOL_TRACE_ENV,
+	PROTOCOL_TRACE_FILE_ENV,
 	createAcpTrafficLoggerFromEnv,
 	type AcpTrafficLogger,
 	type AcpTrafficLogState,
@@ -17,7 +19,9 @@ const log = createLogger("devo-manager")
 
 const STDIO_URL = "stdio://local"
 const acpTrafficLogStartupEnv = {
-	[TRAFFIC_LOG_PATH_ENV]: process.env[TRAFFIC_LOG_PATH_ENV],
+	[DEVO_HOME_ENV]: process.env[DEVO_HOME_ENV],
+	[PROTOCOL_TRACE_ENV]: process.env[PROTOCOL_TRACE_ENV],
+	[PROTOCOL_TRACE_FILE_ENV]: process.env[PROTOCOL_TRACE_FILE_ENV],
 }
 
 export interface DevoServer {
@@ -75,9 +79,13 @@ export async function restartServer(): Promise<DevoServer> {
 	return ensureServer()
 }
 
-export async function requestAcp(method: string, params?: unknown): Promise<unknown> {
+export async function requestAcp(
+	method: string,
+	params?: unknown,
+	directory?: string,
+): Promise<unknown> {
 	const client = await ensureClient()
-	return client.request(method, params)
+	return client.request(method, params, directory)
 }
 
 export async function respondAcp(id: JsonRpcId, result: unknown): Promise<void> {
@@ -94,15 +102,17 @@ export function isAcpConnected(): boolean {
 	return stdioClient?.connected() ?? false
 }
 
+const sharedAcpTransport: AcpTransport = {
+	request: requestAcp,
+	respond: respondAcp,
+	subscribe: subscribeAcp,
+	connected: isAcpConnected,
+	pid: () => stdioClient?.pid() ?? null,
+	stop: stopServer,
+}
+
 export function getAcpTransport(): AcpTransport {
-	return {
-		request: requestAcp,
-		respond: respondAcp,
-		subscribe: subscribeAcp,
-		connected: isAcpConnected,
-		pid: () => stdioClient?.pid() ?? null,
-		stop: stopServer,
-	}
+	return sharedAcpTransport
 }
 
 export function getAcpTrafficLogState(): AcpTrafficLogState {

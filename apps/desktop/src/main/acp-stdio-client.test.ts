@@ -1,3 +1,4 @@
+import path from "node:path"
 import { describe, expect, test } from "bun:test"
 import { StdioAcpClient, buildServerProcessEnv, routeAcpLine } from "./acp-stdio-client"
 
@@ -53,7 +54,7 @@ describe("StdioAcpClient", () => {
 		expect(env).toMatchObject({
 			CUSTOM_FLAG: "1",
 			KEEP: "base",
-			PATH: "/Users/tester/.devo/bin:/custom/bin",
+			PATH: `${path.join("/Users/tester", ".devo", "bin")}:/custom/bin`,
 		})
 	})
 
@@ -221,6 +222,128 @@ describe("StdioAcpClient", () => {
 				payload: { jsonrpc: "2.0", id: 1, result: { ok: true } },
 			},
 		])
+	})
+
+	test("reuses the first initialize result for later initialize calls", async () => {
+		const records: unknown[] = []
+		let writeCount = 0
+		const client = new StdioAcpClient({
+			trafficLogger: {
+				getState: () => ({ enabled: true, path: null }),
+				record: (entry) => records.push(entry),
+			},
+		})
+		;(client as unknown as { child: unknown }).child = {
+			killed: false,
+			pid: 123,
+			stdin: {
+				destroyed: false,
+				writable: true,
+				writableEnded: false,
+				write: (_line: string, callback: (error?: Error) => void) => {
+					writeCount += 1
+					callback()
+					return true
+				},
+			},
+		}
+
+		const first = client.request("initialize", { protocolVersion: 1 })
+		await Promise.resolve()
+		;(client as unknown as { handleLine: (line: string) => void }).handleLine(
+			JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }),
+		)
+		await expect(first).resolves.toEqual({ ok: true })
+
+		const second = client.request("initialize", { protocolVersion: 1 })
+		await expect(second).resolves.toEqual({ ok: true })
+
+		expect(writeCount).toBe(1)
+		expect(
+			records.filter(
+				(entry) =>
+					(entry as { kind?: string; method?: string }).kind === "request" &&
+					(entry as { method?: string }).method === "initialize",
+			),
+		).toHaveLength(1)
+	})
+
+	test("scopes outgoing requests with the project directory", async () => {
+		const records: unknown[] = []
+		const client = new StdioAcpClient({
+			trafficLogger: {
+				getState: () => ({ enabled: true, path: null }),
+				record: (entry) => records.push(entry),
+			},
+		})
+		;(client as unknown as { child: unknown }).child = {
+			killed: false,
+			pid: 123,
+			stdin: {
+				destroyed: false,
+				writable: true,
+				writableEnded: false,
+				write: (_line: string, callback: (error?: Error) => void) => {
+					callback()
+					return true
+				},
+			},
+		}
+
+		const response = client.request("session/list", {}, "/repo/project")
+		await Promise.resolve()
+		;(client as unknown as { handleLine: (line: string) => void }).handleLine(
+			JSON.stringify({ jsonrpc: "2.0", id: 1, result: { sessions: [] } }),
+		)
+
+		await expect(response).resolves.toEqual({ sessions: [] })
+		expect(records[0]).toMatchObject({
+			direction: "desktop-to-server",
+			kind: "request",
+			method: "session/list",
+			payload: {
+				params: { cwd: "/repo/project" },
+			},
+		})
+	})
+
+	test("does not add project directory to unscoped requests", async () => {
+		const records: unknown[] = []
+		const client = new StdioAcpClient({
+			trafficLogger: {
+				getState: () => ({ enabled: true, path: null }),
+				record: (entry) => records.push(entry),
+			},
+		})
+		;(client as unknown as { child: unknown }).child = {
+			killed: false,
+			pid: 123,
+			stdin: {
+				destroyed: false,
+				writable: true,
+				writableEnded: false,
+				write: (_line: string, callback: (error?: Error) => void) => {
+					callback()
+					return true
+				},
+			},
+		}
+
+		const response = client.request("session/prompt", { sessionId: "s1", prompt: [] }, "/repo/project")
+		await Promise.resolve()
+		;(client as unknown as { handleLine: (line: string) => void }).handleLine(
+			JSON.stringify({ jsonrpc: "2.0", id: 1, result: { stopReason: "end_turn" } }),
+		)
+
+		await expect(response).resolves.toEqual({ stopReason: "end_turn" })
+		expect(records[0]).toMatchObject({
+			direction: "desktop-to-server",
+			kind: "request",
+			method: "session/prompt",
+			payload: {
+				params: { sessionId: "s1", prompt: [] },
+			},
+		})
 	})
 
 	test("records server requests, notifications, invalid lines, and closed events", () => {

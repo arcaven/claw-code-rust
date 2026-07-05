@@ -51,15 +51,20 @@ export function defaultCwd(): string {
 	return process.env.HOME ?? process.cwd()
 }
 
+let sharedIpcTransport: DevoAcpTransport | null = null
+
 export function createIpcTransport(): DevoAcpTransport {
+	if (sharedIpcTransport) return sharedIpcTransport
+
 	const api = globalThis.window?.devo?.acp
 	if (!api) throw new Error("window.devo.acp is not available")
-	return {
+	sharedIpcTransport = {
 		request: (method, params, directory) => api.request({ method, params, directory }),
 		respond: (id, result) => api.respond({ id, result }),
 		subscribe: (listener) => api.subscribe(listener),
 		connected: () => api.connected(),
 	}
+	return sharedIpcTransport
 }
 
 export function providerDataFromConfigOptions(configOptions: AcpConfigOption[]): {

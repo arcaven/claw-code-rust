@@ -26,6 +26,7 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
 	colorScheme: "dark",
 	themeId: "default",
 	displayMode: "default",
+	hideThinkingWhileWorking: true,
 	rendererPreferencesMigrated: false,
 }
 

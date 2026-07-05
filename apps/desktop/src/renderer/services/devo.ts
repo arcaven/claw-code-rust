@@ -5,6 +5,7 @@ import type {
 	WorkspaceDiffDetail,
 } from "@devo-ai/sdk/v2/client"
 import { createDevoClient } from "@devo-ai/sdk/v2/client"
+import { stableId } from "@devo-ai/sdk/v2/acp-client-support"
 import type { Event, DevoProject, QuestionAnswer, Session, SessionStatus } from "../lib/types"
 import { createLogger } from "../lib/logger"
 import { workspacePatchFilesFromView } from "../lib/workspace-diff"
@@ -44,8 +45,51 @@ export function connectToServer(url: string, options?: ConnectOptions): DevoClie
  * Fetch all projects known to the server.
  */
 export async function listProjects(client: DevoClient): Promise<DevoProject[]> {
-	const result = await client.project.list()
-	return (result.data as DevoProject[]) ?? []
+	const sessions = await listSessions(client)
+	return projectsFromSessions(sessions, clientDirectory(client))
+}
+
+/**
+ * Derive project entries from a session list returned by `session/list`.
+ */
+export function projectsFromSessions(
+	sessions: Session[],
+	fallbackDirectory?: string,
+): DevoProject[] {
+	const byDirectory = new Map<string, DevoProject>()
+	for (const session of sessions) {
+		const directory = session.directory
+		if (!directory) continue
+		const previous = byDirectory.get(directory)
+		const updated = session.time.lastActivity ?? session.time.updated ?? session.time.created
+		if (previous) {
+			previous.time.updated = Math.max(previous.time.updated ?? 0, updated)
+			continue
+		}
+		byDirectory.set(directory, {
+			id: stableId(directory),
+			name: directory.split(/[\\/]/).filter(Boolean).at(-1) ?? directory,
+			worktree: directory,
+			path: { root: directory },
+			time: { created: session.time.created, updated },
+			sandboxes: [],
+		})
+	}
+	if (byDirectory.size === 0 && fallbackDirectory) {
+		byDirectory.set(fallbackDirectory, {
+			id: stableId(fallbackDirectory),
+			name: fallbackDirectory.split(/[\\/]/).filter(Boolean).at(-1) ?? fallbackDirectory,
+			worktree: fallbackDirectory,
+			path: { root: fallbackDirectory },
+			time: { created: Date.now(), updated: Date.now() },
+			sandboxes: [],
+		})
+	}
+	return [...byDirectory.values()]
+}
+
+function clientDirectory(client: DevoClient): string | undefined {
+	return (client as { directory?: string }).directory
 }
 
 /**

@@ -19,6 +19,7 @@ function readRendererAppearanceSnapshot(storage: Storage): AppearancePatch {
 	const colorScheme = readJsonStorageValue(storage, "devo:colorScheme")
 	const themeId = readJsonStorageValue(storage, "devo:theme")
 	const displayMode = readJsonStorageValue(storage, "devo:displayMode")
+	const hideThinkingWhileWorking = readJsonStorageValue(storage, "devo:hideThinkingWhileWorking")
 
 	const snapshot: AppearancePatch = {}
 	if (typeof colorScheme === "string" && COLOR_SCHEMES.has(colorScheme)) {
@@ -29,6 +30,9 @@ function readRendererAppearanceSnapshot(storage: Storage): AppearancePatch {
 	}
 	if (typeof displayMode === "string" && DISPLAY_MODES.has(displayMode)) {
 		snapshot.displayMode = displayMode as AppearanceSettings["displayMode"]
+	}
+	if (typeof hideThinkingWhileWorking === "boolean") {
+		snapshot.hideThinkingWhileWorking = hideThinkingWhileWorking
 	}
 	return snapshot
 }

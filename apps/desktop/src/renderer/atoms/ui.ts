@@ -11,6 +11,26 @@ export const commandPaletteOpenAtom = atom(false)
  */
 export const viewedSessionIdAtom = atom<string | null>(null)
 
+/**
+ * Last non-settings route visited before opening Settings.
+ * Used to restore navigation when leaving Settings.
+ */
+export const lastAppRouteAtom = atom<string | null>(null)
+
+/** Session kept mounted in the background while Settings is open. */
+export interface SettingsBackgroundSession {
+	sessionId: string
+	projectSlug: string
+}
+
+export const settingsBackgroundSessionAtom = atom<SettingsBackgroundSession | null>(null)
+
+/** Whether the Settings overlay is covering the main content (set by SidebarLayout). */
+export const settingsOverlayOpenAtom = atom(false)
+
+/** Last known scrollTop for a session's chat view (used when returning from Settings). */
+export const sessionScrollTopFamily = atomFamily((_sessionId: string) => atom<number | null>(null))
+
 // ============================================================
 // Review Panel State
 // ============================================================

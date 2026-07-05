@@ -40,7 +40,7 @@ describe("ServerSettings", () => {
 		})
 
 	test("shows a collapsed developer trigger without the log path when enabled", () => {
-		const logPath = "/Users/tester/Library/Application Support/Devo/logs/acp-traffic/traffic.jsonl"
+		const logPath = "/Users/tester/.devo/traces/protocol-12345-20260703T153000Z.ndjsonl"
 		const markup = renderToStaticMarkup(
 			<AcpTrafficLogStatus
 				state={{
@@ -53,7 +53,7 @@ describe("ServerSettings", () => {
 		expect({
 			hasDeveloperOptions: markup.includes("Developer options"),
 			hasTrigger: markup.includes("ACP traffic log"),
-			hasDescription: markup.includes("View the current JSONL log location"),
+			hasDescription: markup.includes("Protocol trace enabled via DEVO_PROTOCOL_TRACE"),
 			hasCollapsedState: markup.includes('aria-expanded="false"'),
 			hasPath: markup.includes(logPath),
 			hasSensitiveHint: markup.includes("prompts, paths, tool arguments, and provider details"),
@@ -70,7 +70,7 @@ describe("ServerSettings", () => {
 	})
 
 	test("shows log location details when the developer trigger is expanded", () => {
-		const logPath = "/Users/tester/Library/Application Support/Devo/logs/acp-traffic/traffic.jsonl"
+		const logPath = "/Users/tester/.devo/traces/protocol-12345-20260703T153000Z.ndjsonl"
 		const markup = renderToStaticMarkup(
 			<AcpTrafficLogStatus
 				initialExpanded

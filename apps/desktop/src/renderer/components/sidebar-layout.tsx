@@ -11,6 +11,7 @@ import {
 	useSidebar,
 } from "@devo/ui/components/sidebar"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@devo/ui/components/tooltip"
+import { cn } from "@devo/ui/lib/utils"
 import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
 import { type MouseEvent, useCallback, useEffect, useRef, useState } from "react"
@@ -21,6 +22,8 @@ import {
 	desktopFoldersAtom,
 } from "../atoms/desktop-folders"
 import { terminalPanelOpenAtom } from "../atoms/terminal"
+import { settingsBackgroundSessionAtom, settingsOverlayOpenAtom } from "../atoms/ui"
+import { useAppRoutePersistence } from "../hooks/use-app-route-persistence"
 import { useAgents, useProjectList, useSetCommandPaletteOpen } from "../hooks/use-agents"
 import { useAgentActions } from "../hooks/use-server"
 import {
@@ -31,6 +34,7 @@ import {
 	upsertDesktopFolder,
 } from "../lib/desktop-folders"
 import { formatShortcut } from "../lib/shortcut-display"
+import { isSettingsRoute } from "../lib/app-navigation"
 import type { Agent, SidebarProject } from "../lib/types"
 import { createDesktopFolder, pickDirectory, statDesktopFolders } from "../services/backend"
 import { loadProjectSessions } from "../services/connection-manager"
@@ -45,6 +49,7 @@ import {
 } from "./sidebar/sidebar-session-delete"
 import { CreateFolderDialog } from "./sidebar/sidebar-folder-dialogs"
 import { useSidebarSlot } from "./sidebar-slot-context"
+import { SessionView } from "./session-view"
 import { UpdateBanner } from "./update-banner"
 
 // ============================================================
@@ -199,6 +204,14 @@ export function SidebarLayout() {
 	const pathname = useRouterState({ select: (state) => state.location.pathname })
 	const { content: slotContent, footer: slotFooter } = useSidebarSlot()
 	const [terminalPanelOpen, setTerminalPanelOpen] = useAtom(terminalPanelOpenAtom)
+	const backgroundSession = useAtomValue(settingsBackgroundSessionAtom)
+	const [settingsOverlayOpen, setSettingsOverlayOpen] = useAtom(settingsOverlayOpenAtom)
+	useAppRoutePersistence()
+
+	const isSettingsOpen = isSettingsRoute(pathname)
+	if (settingsOverlayOpen !== isSettingsOpen) {
+		setSettingsOverlayOpen(isSettingsOpen)
+	}
 
 	// ---- Sidebar-specific data ----
 	const agents = useAgents()
@@ -223,8 +236,12 @@ export function SidebarLayout() {
 	const visibleAgents = agents
 	const activeAgent = sessionId ? visibleAgents.find((agent) => agent.id === sessionId) : null
 	const terminalDirectory = activeAgent?.worktreePath ?? activeAgent?.directory ?? null
+	const sessionToKeepAlive =
+		sessionId ?? (isSettingsOpen ? backgroundSession?.sessionId : null)
 	const isTranscriptRoute =
-		pathname.includes("/session/") || /^\/automations\/[^/]+\/runs\/[^/]+$/.test(pathname)
+		pathname.includes("/session/") ||
+		(isSettingsOpen && backgroundSession != null) ||
+		/^\/automations\/[^/]+\/runs\/[^/]+$/.test(pathname)
 	const transcriptFillsTitlebar = isMac && isTranscriptRoute
 	const transcriptTitlebarFillAttr = transcriptFillsTitlebar ? "true" : undefined
 
@@ -543,7 +560,24 @@ export function SidebarLayout() {
 							data-transcript-titlebar-fill={transcriptTitlebarFillAttr}
 							className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
 						>
-							<Outlet />
+							<div
+								className={cn(
+									"absolute inset-0 h-full",
+									isSettingsOpen && "pointer-events-none invisible",
+								)}
+								aria-hidden={isSettingsOpen}
+							>
+								{sessionToKeepAlive ? (
+									<SessionView sessionId={sessionToKeepAlive} />
+								) : (
+									!isSettingsOpen && <Outlet />
+								)}
+							</div>
+							{isSettingsOpen && (
+								<div className="absolute inset-0 z-10 h-full overflow-hidden bg-background">
+									<Outlet />
+								</div>
+							)}
 						</div>
 						<DesktopTerminalPanel
 							open={terminalPanelOpen}

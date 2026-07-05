@@ -10,7 +10,7 @@ import { useAtomValue, useSetAtom } from "jotai"
 import { MonitorIcon, MoonIcon, SunIcon } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { opaqueWindowsAtom } from "../../atoms/preferences"
-import { useDisplayMode, useSetDisplayMode } from "../../hooks/use-agents"
+import { useDisplayMode, useHideThinkingWhileWorking, useSetDisplayMode, useSetHideThinkingWhileWorking } from "../../hooks/use-agents"
 import { useColorScheme, useSetColorScheme } from "../../hooks/use-theme"
 import type { ColorScheme } from "../../lib/themes"
 import { fetchOpenInTargets, setOpenInPreferred } from "../../services/backend"
@@ -34,6 +34,10 @@ export function GeneralSettings() {
 				<ThemeRow />
 				<OpaqueWindowsRow />
 				<DisplayModeRow />
+			</SettingsSection>
+
+			<SettingsSection title="Conversation">
+				<HideThinkingWhileWorkingRow />
 			</SettingsSection>
 		</div>
 	)
@@ -171,6 +175,23 @@ function DisplayModeRow() {
 					<SelectItem value="verbose">Verbose</SelectItem>
 				</SelectContent>
 			</Select>
+		</SettingsRow>
+	)
+}
+
+function HideThinkingWhileWorkingRow() {
+	const hideThinkingWhileWorking = useHideThinkingWhileWorking()
+	const setHideThinkingWhileWorking = useSetHideThinkingWhileWorking()
+
+	return (
+		<SettingsRow
+			label="Hide thinking while working"
+			description="Hide model reasoning blocks until the turn completes"
+		>
+			<Switch
+				checked={hideThinkingWhileWorking}
+				onCheckedChange={setHideThinkingWhileWorking}
+			/>
 		</SettingsRow>
 	)
 }

@@ -179,6 +179,8 @@ export interface AppearanceSettings {
 	colorScheme: ColorScheme
 	themeId: string
 	displayMode: DisplayMode
+	/** Hide model reasoning/thinking blocks while the agent is still working. */
+	hideThinkingWhileWorking: boolean
 	rendererPreferencesMigrated: boolean
 }
 

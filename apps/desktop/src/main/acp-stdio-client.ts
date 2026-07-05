@@ -45,7 +45,7 @@ export type AcpTransportEvent =
 export type AcpTransportListener = (event: AcpTransportEvent) => void
 
 export interface AcpTransport {
-	request(method: string, params?: unknown): Promise<unknown>
+	request(method: string, params?: unknown, directory?: string): Promise<unknown>
 	respond(id: JsonRpcId, result: unknown): Promise<void>
 	subscribe(listener: AcpTransportListener): () => void
 	connected(): boolean
@@ -165,6 +165,23 @@ export function routeAcpLine(line: string): AcpIncomingMessage {
 	return { type: "invalid", error: "JSON-RPC message has no id or method", line }
 }
 
+const DIRECTORY_SCOPED_METHODS = new Set([
+	"session/list",
+	"model/config",
+	"model/config/set",
+	"skills/list",
+	"skills/changed",
+	"reference/search/start",
+	"command/exec",
+])
+
+function scopeRequestParams(method: string, params: unknown, directory?: string): unknown {
+	if (!directory || !DIRECTORY_SCOPED_METHODS.has(method)) return params
+	if (!params || typeof params !== "object" || Array.isArray(params)) return params
+	if ("cwd" in params) return params
+	return { ...params, cwd: directory }
+}
+
 export class StdioAcpClient implements AcpTransport {
 	private child: ChildProcessWithoutNullStreams | null = null
 	private nextId = 1
@@ -172,6 +189,8 @@ export class StdioAcpClient implements AcpTransport {
 	private pendingMethods = new Map<JsonRpcId, string>()
 	private events = new EventEmitter()
 	private stopped = false
+	private initializeResult: unknown | undefined
+	private initializeInFlight: Promise<unknown> | null = null
 
 	constructor(private readonly options: StdioAcpClientOptions = {}) {}
 
@@ -230,11 +249,39 @@ export class StdioAcpClient implements AcpTransport {
 		})
 	}
 
-	async request(method: string, params: unknown = {}): Promise<unknown> {
+	async request(method: string, params: unknown = {}, directory?: string): Promise<unknown> {
+		if (method === "initialize") {
+			return this.requestInitialize(params, directory)
+		}
+		return this.sendRequest(method, params, directory)
+	}
+
+	private async requestInitialize(params: unknown, directory?: string): Promise<unknown> {
+		if (this.initializeResult !== undefined) {
+			return this.initializeResult
+		}
+		if (this.initializeInFlight) {
+			return this.initializeInFlight
+		}
+		this.initializeInFlight = this.sendRequest("initialize", params, directory)
+			.then((result) => {
+				this.initializeResult = result
+				this.initializeInFlight = null
+				return result
+			})
+			.catch((error) => {
+				this.initializeInFlight = null
+				throw error
+			})
+		return this.initializeInFlight
+	}
+
+	private async sendRequest(method: string, params: unknown, directory?: string): Promise<unknown> {
 		this.start()
 		const id = this.nextId++
 		const child = this.requireChild()
-		const payload = { jsonrpc: "2.0", id, method, params }
+		const scopedParams = scopeRequestParams(method, params, directory)
+		const payload = { jsonrpc: "2.0", id, method, params: scopedParams }
 		const response = new Promise<unknown>((resolve, reject) => {
 			this.pending.set(id, { resolve, reject })
 		})
@@ -390,6 +437,8 @@ export class StdioAcpClient implements AcpTransport {
 
 	private close(error: Error): void {
 		this.child = null
+		this.initializeResult = undefined
+		this.initializeInFlight = null
 		this.recordTraffic({
 			direction: "system",
 			kind: "closed",

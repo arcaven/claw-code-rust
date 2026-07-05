@@ -46,6 +46,7 @@ const defaultSettings: AppSettings = {
 		colorScheme: "dark",
 		themeId: "default",
 		displayMode: "default",
+		hideThinkingWhileWorking: true,
 		rendererPreferencesMigrated: false,
 	},
 	openIn: {

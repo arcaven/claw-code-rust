@@ -167,6 +167,26 @@ function terminalPartTimestamp(part: Part): number | undefined {
 	return typeof end === "number" ? end : undefined
 }
 
+function completedTurnWorkEnd(turn: ChatTurn): number | undefined {
+	let end: number | undefined
+
+	for (const entry of turn.assistantMessages) {
+		const completed = entry.info.time.completed
+		if (typeof completed === "number") {
+			end = end === undefined ? completed : Math.max(end, completed)
+		}
+		for (const part of entry.parts) {
+			const timestamp = terminalPartTimestamp(part)
+			if (timestamp !== undefined) {
+				end = end === undefined ? timestamp : Math.max(end, timestamp)
+			}
+		}
+	}
+
+	if (end !== undefined) return end
+	return completedTurnEnd(turn)
+}
+
 function completedTurnStopTime(turn: ChatTurn): number | undefined {
 	for (let i = turn.assistantMessages.length - 1; i >= 0; i--) {
 		const completed = turn.assistantMessages[i].info.time.completed
@@ -196,7 +216,7 @@ export function computeTurnWorkTime(
 	options: { active?: boolean; now?: () => number } = {},
 ): number {
 	const start = turn.userMessage.info.time.created
-	const end = options.active ? (options.now?.() ?? Date.now()) : completedTurnEnd(turn)
+	const end = options.active ? (options.now?.() ?? Date.now()) : completedTurnWorkEnd(turn)
 	if (typeof start !== "number" || typeof end !== "number") return 0
 	const elapsed = Math.max(0, end - start)
 	if (!options.active && elapsed > MAX_COMPLETED_TURN_WORK_TIME_MS) return 0
@@ -734,10 +754,10 @@ export function estimateContextBreakdown(
 // Formatters
 // ============================================================
 
-/** Format milliseconds as a compact duration string: "12s", "1m 34s", "2h 5m". */
+/** Format milliseconds as a compact duration string: "1s", "12s", "1m 34s", "2h 5m". */
 export function formatWorkDuration(ms: number): string {
-	const seconds = Math.floor(ms / 1000)
-	if (seconds < 1) return "0s"
+	if (ms <= 0) return "0s"
+	const seconds = Math.ceil(ms / 1000)
 	if (seconds < 60) return `${seconds}s`
 	const minutes = Math.floor(seconds / 60)
 	const remainingSeconds = seconds % 60

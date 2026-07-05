@@ -66,6 +66,23 @@ describe("turn duration metrics", () => {
 		expect(computeTurnWorkTime(turn, { now: () => 99_000 })).toBe(8_000)
 	})
 
+	test("uses the latest persisted part end when assistant completion is recorded early", () => {
+		const turn = turnWith([
+			{
+				info: { id: "a1", role: "assistant", time: { created: 1_100, completed: 1_200 } },
+				parts: [
+					{
+						id: "tool-1",
+						type: "tool",
+						state: { status: "completed", time: { start: 2_000, end: 31_000 } },
+					},
+				],
+			},
+		] as ChatTurn["assistantMessages"])
+
+		expect(computeTurnWorkTime(turn)).toBe(30_000)
+	})
+
 	test("uses Date.now only for active turns", () => {
 		const turn = turnWith([
 			{
@@ -159,7 +176,7 @@ describe("top bar turn timer metrics", () => {
 
 		expect({ split, label: formatTimerSplit(split, now) }).toEqual({
 			split: { completedMs: 0, activeStartMs: start },
-			label: "0s",
+			label: "1s",
 		})
 	})
 

@@ -3,8 +3,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
-	TRAFFIC_LOG_PATH_ENV,
+	DEVO_HOME_ENV,
+	PROTOCOL_TRACE_ENV,
+	PROTOCOL_TRACE_FILE_ENV,
 	createAcpTrafficLoggerFromEnv,
+	findDevoHome,
+	formatProtocolTraceTimestamp,
+	isProtocolTraceEnabled,
+	resolveProtocolTracePath,
 } from "./acp-traffic-log"
 
 function withTempDir<T>(run: (dir: string) => T): T {
@@ -18,12 +24,31 @@ function withTempDir<T>(run: (dir: string) => T): T {
 
 const fixedClock = () => new Date("2026-06-27T01:02:03.004Z")
 
-describe("ACP traffic log env trigger", () => {
-	test("does not create or write a log when TRAFFIC_LOG_PATH is unset or empty", () => {
+describe("protocol trace env trigger", () => {
+	test("isProtocolTraceEnabled accepts 1 and true", () => {
+		expect({
+			unset: isProtocolTraceEnabled(undefined),
+			empty: isProtocolTraceEnabled(" "),
+			one: isProtocolTraceEnabled("1"),
+			trueValue: isProtocolTraceEnabled("true"),
+			TrueValue: isProtocolTraceEnabled("TRUE"),
+			zero: isProtocolTraceEnabled("0"),
+		}).toEqual({
+			unset: false,
+			empty: false,
+			one: true,
+			trueValue: true,
+			TrueValue: true,
+			zero: false,
+		})
+	})
+
+	test("does not create or write a log when DEVO_PROTOCOL_TRACE is unset or empty", () => {
 		withTempDir((dir) => {
 			const logger = createAcpTrafficLoggerFromEnv({
-				env: {},
+				env: { [DEVO_HOME_ENV]: dir },
 				clock: fixedClock,
+				pid: 42,
 			})
 
 			logger.record({
@@ -36,17 +61,21 @@ describe("ACP traffic log env trigger", () => {
 
 			expect({
 				state: logger.getState(),
-				logsDirExists: existsSync(path.join(dir, "logs")),
+				tracesDirExists: existsSync(path.join(dir, "traces")),
 			}).toEqual({
 				state: { enabled: false, path: null },
-				logsDirExists: false,
+				tracesDirExists: false,
 			})
 		})
 
 		withTempDir((dir) => {
 			const logger = createAcpTrafficLoggerFromEnv({
-				env: { [TRAFFIC_LOG_PATH_ENV]: " " },
+				env: {
+					[DEVO_HOME_ENV]: dir,
+					[PROTOCOL_TRACE_ENV]: " ",
+				},
 				clock: fixedClock,
+				pid: 42,
 			})
 
 			logger.record({
@@ -57,22 +86,25 @@ describe("ACP traffic log env trigger", () => {
 
 			expect({
 				state: logger.getState(),
-				logsDirExists: existsSync(path.join(dir, "logs")),
+				tracesDirExists: existsSync(path.join(dir, "traces")),
 			}).toEqual({
 				state: { enabled: false, path: null },
-				logsDirExists: false,
+				tracesDirExists: false,
 			})
 		})
 	})
 
-	test("ignores the removed DEVO_DESKTOP_ACP_TRAFFIC_LOG trigger", () => {
+	test("ignores removed desktop-specific triggers", () => {
 		withTempDir((dir) => {
 			const logger = createAcpTrafficLoggerFromEnv({
 				env: {
+					[DEVO_HOME_ENV]: dir,
 					DEVO_DESKTOP_ACP_TRAFFIC_LOG: "1",
 					DEVO_DESKTOP_ACP_TRAFFIC_LOG_PATH: path.join(dir, "old", "traffic.jsonl"),
+					TRAFFIC_LOG_PATH: path.join(dir, "old", "traffic.jsonl"),
 				},
 				clock: fixedClock,
+				pid: 42,
 			})
 
 			logger.record({
@@ -85,22 +117,59 @@ describe("ACP traffic log env trigger", () => {
 
 			expect({
 				state: logger.getState(),
-				logsDirExists: existsSync(path.join(dir, "old")),
+				oldDirExists: existsSync(path.join(dir, "old")),
 			}).toEqual({
 				state: { enabled: false, path: null },
-				logsDirExists: false,
+				oldDirExists: false,
 			})
 		})
 	})
 
-	test("writes JSONL when TRAFFIC_LOG_PATH is provided", () => {
+	test("writes JSONL to DEVO_HOME/traces when DEVO_PROTOCOL_TRACE is enabled", () => {
 		withTempDir((dir) => {
-			const logPath = path.join(dir, "custom", "traffic.jsonl")
+			const expectedPath = path.join(dir, "traces", "protocol-42-20260627T010203Z.ndjsonl")
 			const logger = createAcpTrafficLoggerFromEnv({
 				env: {
-					[TRAFFIC_LOG_PATH_ENV]: ` ${logPath} `,
+					[DEVO_HOME_ENV]: dir,
+					[PROTOCOL_TRACE_ENV]: "1",
 				},
 				clock: fixedClock,
+				pid: 42,
+			})
+
+			logger.record({
+				direction: "system",
+				kind: "closed",
+				payload: { error: "transport closed" },
+			})
+
+			const lines = readFileSync(expectedPath, "utf-8").trim().split("\n")
+			expect({
+				state: logger.getState(),
+				entry: JSON.parse(lines[0]),
+			}).toEqual({
+				state: { enabled: true, path: expectedPath },
+				entry: {
+					timestamp: "2026-06-27T01:02:03.004Z",
+					direction: "system",
+					kind: "closed",
+					payload: { error: "transport closed" },
+				},
+			})
+		})
+	})
+
+	test("writes JSONL to DEVO_PROTOCOL_TRACE_FILE when provided", () => {
+		withTempDir((dir) => {
+			const logPath = path.join(dir, "custom", "trace.ndjsonl")
+			const logger = createAcpTrafficLoggerFromEnv({
+				env: {
+					[DEVO_HOME_ENV]: dir,
+					[PROTOCOL_TRACE_ENV]: "true",
+					[PROTOCOL_TRACE_FILE_ENV]: ` ${logPath} `,
+				},
+				clock: fixedClock,
+				pid: 42,
 			})
 
 			logger.record({
@@ -123,5 +192,28 @@ describe("ACP traffic log env trigger", () => {
 				},
 			})
 		})
+	})
+
+	test("falls back to temp devo-traces when DEVO_HOME is invalid", () => {
+		const logPath = resolveProtocolTracePath({
+			env: {
+				[DEVO_HOME_ENV]: path.join(tmpdir(), "missing-devo-home-for-trace"),
+				[PROTOCOL_TRACE_ENV]: "1",
+			},
+			clock: fixedClock,
+			pid: 99,
+		})
+
+		expect(logPath).toMatch(/devo-traces[\\/]protocol-99-20260627T010203Z\.ndjsonl$/)
+	})
+
+	test("findDevoHome honors DEVO_HOME and defaults to ~/.devo", () => {
+		withTempDir((dir) => {
+			expect(findDevoHome({ [DEVO_HOME_ENV]: dir })).toBe(path.resolve(dir))
+		})
+	})
+
+	test("formatProtocolTraceTimestamp matches server naming", () => {
+		expect(formatProtocolTraceTimestamp(fixedClock())).toBe("20260627T010203Z")
 	})
 })

@@ -205,10 +205,8 @@ export function registerIpcHandlers(): void {
 		"acp:request",
 		withLogging(
 			"acp:request",
-			async (_, request: { method: string; params?: unknown; directory?: string }) => {
-				void request.directory
-				return await requestAcp(request.method, request.params)
-			},
+			async (_, request: { method: string; params?: unknown; directory?: string }) =>
+				await requestAcp(request.method, request.params, request.directory),
 		),
 	)
 
