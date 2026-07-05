@@ -5,12 +5,6 @@ import {
 	MessageContent,
 	MessageResponse,
 } from "@devo/ui/components/ai-elements/message"
-import {
-	Reasoning,
-	ReasoningContent,
-	ReasoningText,
-	useReasoning,
-} from "@devo/ui/components/ai-elements/reasoning"
 import { Shimmer } from "@devo/ui/components/ai-elements/shimmer"
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@devo/ui/components/dialog"
 
@@ -26,7 +20,7 @@ import {
 	Undo2Icon,
 	XIcon,
 } from "lucide-react"
-import { memo, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { useDisplayMode } from "../../hooks/use-agents"
 import type { SessionCompactionStatus } from "../../atoms/compaction"
 import type { ChatMessageEntry, ChatTurn as ChatTurnType } from "../../hooks/use-session-chat"
@@ -46,13 +40,13 @@ import type {
 	TextPart,
 	ToolPart,
 } from "../../lib/types"
-import { ChatToolCall, getToolInfo, getToolSubtitle } from "./chat-tool-call"
+import { buildProcessTimeline } from "./process-timeline"
+import { ProcessTimelineView } from "./process-timeline-view"
 import {
 	CompactionStatusDivider,
 	isCompactionStatusText,
 } from "./compaction-status-divider"
 import { PermissionItem } from "./chat-permission"
-import { getToolCategory, type ToolCategory } from "./tool-card"
 
 // ============================================================
 // Utility functions
@@ -398,40 +392,6 @@ function getError(assistantMessages: ChatMessageEntry[]): string | undefined {
 	return undefined
 }
 
-function LazyReasoningContent({
-	children,
-	animated,
-}: {
-	children: ReactNode
-	animated?: boolean
-}) {
-	const { isOpen, isStreaming } = useReasoning()
-	if (!isOpen && !isStreaming) return null
-	return <ReasoningContent animated={animated}>{children}</ReasoningContent>
-}
-
-function TranscriptReasoningLiveCue() {
-	return (
-		<div
-			aria-label="Reasoning details"
-			className="border-l border-border/70 pl-3 text-sm text-muted-foreground/70"
-		>
-			<Shimmer duration={1}>Thinking...</Shimmer>
-		</div>
-	)
-}
-
-function TranscriptReasoningBlock({ text, animated }: { text: string; animated?: boolean }) {
-	return (
-		<div
-			aria-label="Reasoning details"
-			className="border-l border-border/70 pl-3 text-sm text-muted-foreground/80"
-		>
-			<ReasoningText animated={animated}>{text}</ReasoningText>
-		</div>
-	)
-}
-
 // ============================================================
 // Turn comparison for memo
 // ============================================================
@@ -489,212 +449,6 @@ function areTurnsEqual(a: ChatTurnType, b: ChatTurnType): boolean {
 }
 
 // ============================================================
-// Default mode helpers — tool grouping
-// ============================================================
-
-/**
- * Groups consecutive tool parts of the same category into summary items.
- * Interleaves text and reasoning between groups to preserve natural order.
- *
- * Example output:
- *   text: "Let me look at the code..."
- *   tool-group: { category: "explore", tools: [read, grep, glob] }
- *   text: "I found the issue, let me fix it..."
- *   tool-group: { category: "edit", tools: [edit, write] }
- *   tool-group: { category: "run", tools: [bash] }
- */
-type StreamItem =
-	| { kind: "text"; id: string; text: string; metadata?: Record<string, unknown> }
-	| { kind: "reasoning-process"; items: (RenderablePart & { kind: "reasoning" | "tool" })[] }
-	| { kind: "tool-group"; category: ToolCategory; tools: ToolPart[] }
-
-function groupPartsForStream(ordered: RenderablePart[]): StreamItem[] {
-	const items: StreamItem[] = []
-	let currentGroup: { category: ToolCategory; tools: ToolPart[] } | null = null
-	let currentProcessGroup: (RenderablePart & { kind: "reasoning" | "tool" })[] = []
-
-	const hasReasoning = ordered.some((p) => p.kind === "reasoning")
-
-	const flushGroup = () => {
-		if (currentGroup) {
-			items.push({ kind: "tool-group", ...currentGroup })
-			currentGroup = null
-		}
-	}
-
-	const flushProcessGroup = () => {
-		if (currentProcessGroup.length > 0) {
-			items.push({ kind: "reasoning-process", items: currentProcessGroup })
-			currentProcessGroup = []
-		}
-	}
-
-	for (const part of ordered) {
-		if (hasReasoning && (part.kind === "reasoning" || part.kind === "tool")) {
-			currentProcessGroup.push(part)
-		} else if (!hasReasoning && part.kind === "tool") {
-			const category = getToolCategory(part.part.tool)
-			if (currentGroup && currentGroup.category === category) {
-				currentGroup.tools.push(part.part)
-			} else {
-				flushGroup()
-				currentGroup = { category, tools: [part.part] }
-			}
-		} else {
-			flushGroup()
-			flushProcessGroup()
-			if (part.kind === "text") {
-				items.push({ kind: "text", id: part.id, text: part.text, metadata: part.metadata })
-			}
-		}
-	}
-	flushGroup()
-	flushProcessGroup()
-	return items
-}
-
-/**
- * Generates a human-readable summary for a group of tools in the same category.
- * Returns text like "Read 3 files", "Edited foo.tsx, bar.tsx", "Ran 2 commands".
- */
-function describeToolGroup(
-	category: ToolCategory,
-	tools: ToolPart[],
-	projectRoot?: string | null,
-): string {
-	const count = tools.length
-
-	// For small groups, list specific targets
-	if (count <= 3) {
-		const details = tools
-			.map((t) => getToolSubtitle(t, { projectRoot }))
-			.filter(Boolean)
-			.map((s) => {
-				// Shorten file paths to just the filename
-				const parts = s!.split("/")
-				return parts.length > 1 ? parts[parts.length - 1] : s
-			})
-
-		if (details.length > 0) {
-			switch (category) {
-				case "explore":
-					return count === 1 ? `Read ${details[0]}` : `Read ${details.join(", ")}`
-				case "edit":
-					return count === 1 ? `Edited ${details[0]}` : `Edited ${details.join(", ")}`
-				case "run":
-					return count === 1
-						? `Ran ${details[0]}`
-						: `Ran ${count} commands`
-				case "delegate":
-					return count === 1 ? `Delegated: ${details[0]}` : `Delegated ${count} tasks`
-				case "fetch":
-					return count === 1 ? `Fetched ${details[0]}` : `Fetched ${count} URLs`
-				case "ask":
-					return "Asked a question"
-				case "plan":
-					return "Updated plan"
-				default:
-					return `Ran ${details.join(", ")}`
-			}
-		}
-	}
-
-	// For larger groups, use count-based summaries
-	switch (category) {
-		case "explore":
-			return `Explored ${count} files`
-		case "edit":
-			return `Edited ${count} files`
-		case "run":
-			return `Ran ${count} commands`
-		case "delegate":
-			return `Delegated ${count} tasks`
-		case "fetch":
-			return `Fetched ${count} URLs`
-		case "ask":
-			return `Asked ${count} questions`
-		case "plan":
-			return "Updated plan"
-		default:
-			return `Ran ${count} tools`
-	}
-}
-
-/**
- * Returns true if any tool in the group is still running/pending.
- */
-function isGroupRunning(tools: ToolPart[]): boolean {
-	return tools.some((t) => t.state.status === "running" || t.state.status === "pending")
-}
-
-/**
- * Returns true if any tool in the group has an error.
- */
-function isGroupError(tools: ToolPart[]): boolean {
-	return tools.some((t) => t.state.status === "error")
-}
-
-/** Renders a single tool group summary as a collapsible disclosure row */
-const ToolGroupSummary = memo(function ToolGroupSummary({
-	category,
-	tools,
-	isActiveTurn,
-	projectRoot,
-}: {
-	category: ToolCategory
-	tools: ToolPart[]
-	isActiveTurn: boolean
-	projectRoot?: string | null
-}) {
-	const [expanded, setExpanded] = useState(false)
-	const description = describeToolGroup(category, tools, projectRoot)
-	const running = isGroupRunning(tools)
-	const hasError = isGroupError(tools)
-	const { icon: GroupIcon } = getToolInfo(tools[0].tool)
-
-	return (
-		<div className="space-y-2">
-			<button
-				type="button"
-				onClick={() => setExpanded((v) => !v)}
-				className="flex w-full items-center gap-2 rounded-md bg-muted/20 px-3 py-1.5 text-[12px] transition-colors hover:bg-muted/40"
-			>
-				<GroupIcon
-					className={`size-3.5 shrink-0 ${
-						hasError
-							? "text-red-400"
-							: running
-								? "animate-pulse text-muted-foreground"
-								: "text-muted-foreground/50"
-					}`}
-				/>
-				<span className={`flex-1 text-left ${hasError ? "text-red-400" : "text-muted-foreground/70"}`}>
-					{description}
-				</span>
-				{running && !expanded && (
-					<Loader2Icon className="size-3 animate-spin text-muted-foreground/30" />
-				)}
-				<ChevronDownIcon
-					className={`size-3 shrink-0 text-muted-foreground/30 transition-transform ${expanded ? "" : "-rotate-90"}`}
-				/>
-			</button>
-			{expanded && (
-				<div className="space-y-2 pl-3">
-					{tools.map((tool) => (
-						<ChatToolCall
-							key={tool.id}
-							part={tool}
-							isActiveTurn={isActiveTurn}
-							projectRoot={projectRoot}
-						/>
-					))}
-				</div>
-			)}
-		</div>
-	)
-})
-
-// ============================================================
 // ChatTurnComponent
 // ============================================================
 
@@ -728,9 +482,6 @@ interface ChatTurnProps {
 	onForkFromTurn?: () => Promise<void>
 	/** Delete a specific part from a message (for error recovery) */
 	onDeletePart?: (sessionId: string, messageId: string, partId: string) => Promise<void>
-	/** Controlled verbose step expansion state, used by virtualized transcripts. */
-	stepsExpanded?: boolean
-	onStepsExpandedChange?: (turnId: string, expanded: boolean) => void
 }
 
 function pendingPermissionFingerprint(permission: PendingPermission | undefined): string {
@@ -780,8 +531,6 @@ function CompletedTurnProcessDisclosure({
 	hasProcessDetails: boolean
 	onToggle: () => void
 }) {
-	if (!duration && !hasProcessDetails) return null
-
 	const content = (
 		<>
 			<span>
@@ -799,7 +548,7 @@ function CompletedTurnProcessDisclosure({
 
 	if (!hasProcessDetails) {
 		return (
-			<div className="flex w-full items-center gap-1.5 border-b border-border/70 pb-2 text-sm tabular-nums text-muted-foreground/70">
+			<div className="flex w-fit max-w-full items-center gap-1.5 border-b border-border/70 pb-1 text-sm tabular-nums text-muted-foreground/70">
 				{content}
 			</div>
 		)
@@ -810,7 +559,7 @@ function CompletedTurnProcessDisclosure({
 			type="button"
 			onClick={onToggle}
 			aria-expanded={expanded}
-			className="flex w-full items-center gap-1.5 border-b border-border/70 pb-2 text-left text-sm tabular-nums text-muted-foreground/70 transition-colors hover:text-foreground"
+			className="flex w-fit max-w-full items-center gap-1.5 border-b border-border/70 pb-1 text-left text-sm tabular-nums text-muted-foreground/70 transition-colors hover:text-foreground"
 		>
 			{content}
 		</button>
@@ -827,10 +576,8 @@ function CompletedTurnProcessDisclosure({
  *   individual tools. Response text is always visible.
  *
  * Display mode preference (default/verbose) modifies behavior:
- * - default: interleaved text + grouped tool summaries as inline chips.
- *   Tool groups batch consecutive same-category calls (e.g., "Explored 3 files",
- *   "Edited foo.tsx, bar.tsx"). A "Show N steps" toggle reveals full tool cards.
- * - verbose: all turns show all tools expanded with full content (tool cards)
+ * - default: interleaved text + grouped tool summaries as collapsible rows.
+ * - verbose: all turns show all tools expanded with full content.
  */
 export const ChatTurnComponent = memo(
 	function ChatTurnComponent({
@@ -846,30 +593,17 @@ export const ChatTurnComponent = memo(
 		onRevertToMessage,
 		onForkFromTurn,
 		onDeletePart,
-		stepsExpanded: controlledStepsExpanded,
-		onStepsExpandedChange,
 	}: ChatTurnProps) {
-		const [uncontrolledStepsExpanded, setUncontrolledStepsExpanded] = useState(false)
 		const [completedProcessExpanded, setCompletedProcessExpanded] = useState(false)
+		const [expandedRowIds, setExpandedRowIds] = useState<Set<string>>(() => new Set())
 		const [copied, setCopied] = useState(false)
 		const displayMode = useDisplayMode()
 		const toolPathRoot = agent?.worktreePath ?? agent?.directory ?? agent?.projectDirectory
 		const turnRef = useRef<HTMLDivElement>(null)
-		const stepsExpanded = controlledStepsExpanded ?? uncontrolledStepsExpanded
 		useEffect(() => {
 			setCompletedProcessExpanded(false)
+			setExpandedRowIds(new Set())
 		}, [turn.id])
-
-		const setStepsExpanded = useCallback(
-			(expanded: boolean) => {
-				if (onStepsExpandedChange) {
-					onStepsExpandedChange(turn.id, expanded)
-				} else {
-					setUncontrolledStepsExpanded(expanded)
-				}
-			},
-			[onStepsExpandedChange, turn.id],
-		)
 
 		const isSynthetic = useMemo(() => isSyntheticMessage(turn.userMessage), [turn.userMessage])
 		const userText = useMemo(() => getUserText(turn.userMessage), [turn.userMessage])
@@ -916,21 +650,37 @@ export const ChatTurnComponent = memo(
 		}, [turn.assistantMessages])
 
 		const working = isLast && isWorking
+
 		// User requirement: queue state belongs in the composer status stack;
 		// this transcript must not infer queued state from an empty assistant response.
 		const processOrderedParts = working ? orderedParts : completedProcessParts
+		const processTimelineItems = useMemo(
+			() => buildProcessTimeline(processOrderedParts),
+			[processOrderedParts],
+		)
 		const processToolParts = useMemo(
 			() => processOrderedParts.flatMap((part) => (part.kind === "tool" ? [part.part] : [])),
 			[processOrderedParts],
 		)
 		const hasSteps = processToolParts.length > 0
-		const hasCompletedProcessDetails = !working && completedProcessParts.length > 0
-		const processSectionVisible = working || (hasCompletedProcessDetails && completedProcessExpanded)
+		const hasWorkToDisclose = !working && processTimelineItems.length > 0
+		const hasCompletedProcessDetails = hasWorkToDisclose
+		const workTimeMs = useMemo(
+			() => computeTurnWorkTime(turn, { active: working }),
+			[turn, working],
+		)
+		const showWorkedForSummary = useMemo(() => {
+			if (working) return false
+			return turn.assistantMessages.length > 0
+		}, [turn.assistantMessages.length, working])
+		const processSectionVisible =
+			(working && processTimelineItems.length > 0) ||
+			(!working && hasCompletedProcessDetails && completedProcessExpanded)
 
 		const duration = useMemo(() => {
-			const workTimeMs = computeTurnWorkTime(turn, { active: working })
-			return workTimeMs >= 1000 ? formatWorkDuration(workTimeMs) : ""
-		}, [turn, working])
+			if (workTimeMs <= 0) return ""
+			return formatWorkDuration(workTimeMs)
+		}, [workTimeMs])
 		const turnCostStr = useMemo(() => {
 			const cost = computeTurnCost(turn)
 			return cost > 0 ? formatCost(cost) : ""
@@ -947,32 +697,19 @@ export const ChatTurnComponent = memo(
 
 		// Determine if tools should be shown individually (active turn behavior)
 		const isActiveTurn = working
-		const isVerbose = displayMode === "verbose"
+		const showVerboseTools = displayMode === "verbose"
 
-		// In default mode, we render a "stream" of grouped tool summaries + text.
-		// In verbose mode, we render full tool cards.
-		// stepsExpanded forces verbose rendering on a per-turn basis.
-		const showVerboseTools = isVerbose || stepsExpanded
-
-		const verboseOrderedParts = useMemo(() => {
-			if (!stepsExpanded || isVerbose || working) return processOrderedParts
-			const stepParts = processOrderedParts.filter((part) => part.kind !== "text")
-			const textParts = processOrderedParts.filter((part) => part.kind === "text")
-			return [...stepParts, ...textParts]
-		}, [isVerbose, processOrderedParts, stepsExpanded, working])
-
-		// Grouped stream items for the default (non-verbose) rendering path
-		const defaultOrderedParts = processOrderedParts
-
-		const streamItems = useMemo(
-			() => (showVerboseTools ? [] : groupPartsForStream(defaultOrderedParts)),
-			[showVerboseTools, defaultOrderedParts],
-		)
-
-		// In default mode, process text is rendered inline within the stream.
-		// In verbose mode, process text is inline within the expanded ordered parts.
 		const textAlreadyInline =
 			processSectionVisible && processOrderedParts.some((p) => p.kind === "text")
+
+		const handleToggleTimelineRow = useCallback((rowId: string, open: boolean) => {
+			setExpandedRowIds((previous) => {
+				const next = new Set(previous)
+				if (open) next.add(rowId)
+				else next.delete(rowId)
+				return next
+			})
+		}, [])
 
 		const handleCopyResponse = useCallback(async () => {
 			if (!responseText) return
@@ -1021,26 +758,6 @@ export const ChatTurnComponent = memo(
 			[onDeletePart],
 		)
 
-		const stepsToggle =
-			!isVerbose && !isActiveTurn && hasSteps ? (
-				<button
-					type="button"
-					onClick={() => setStepsExpanded(!stepsExpanded)}
-					className="flex items-center gap-1.5 text-[11px] text-muted-foreground/40 transition-colors hover:text-foreground"
-				>
-					<ChevronDownIcon className={showVerboseTools ? "size-3" : "size-3 -rotate-90"} />
-					<span>
-						{showVerboseTools ? "Hide" : "Show"} {processToolParts.length}{" "}
-						{processToolParts.length === 1 ? "step" : "steps"}
-					</span>
-					<span>
-						{turnModel && `· ${turnModel} `}
-						{duration && `· ${duration} `}
-						{turnCostStr && `· ${turnCostStr}`}
-					</span>
-				</button>
-			) : null
-
 		return (
 			<div ref={turnRef} className="group/turn space-y-4">
 				{/* User message */}
@@ -1064,7 +781,8 @@ export const ChatTurnComponent = memo(
 				)}
 
 				{working && <WorkingTurnStatusStrip turn={turn} />}
-				{!working && (duration || hasCompletedProcessDetails) && (
+
+				{!working && showWorkedForSummary && (
 					<CompletedTurnProcessDisclosure
 						duration={duration}
 						expanded={completedProcessExpanded}
@@ -1073,145 +791,31 @@ export const ChatTurnComponent = memo(
 					/>
 				)}
 
-				{/* Tool calls + reasoning section */}
+				{/* Interleaved thought/tool process timeline */}
 				{processSectionVisible && (
 					<div className="space-y-2">
-						{!working && completedProcessExpanded && stepsToggle}
+						<ProcessTimelineView
+							defaultExpandAll={showVerboseTools}
+							expandedRowIds={showVerboseTools ? undefined : expandedRowIds}
+							isActiveTurn={isActiveTurn}
+							items={processTimelineItems}
+							onDeleteToolPart={onDeletePart ? handleDeleteToolPart : undefined}
+							onToggleRow={showVerboseTools ? undefined : handleToggleTimelineRow}
+							orderedParts={processOrderedParts}
+							projectRoot={toolPathRoot}
+							renderText={(item) => (
+								<div className="py-0.5">
+									<ResearchArtifactBlock item={item} />
+								</div>
+							)}
+							turnHasError={!!errorText}
+							working={working}
+						/>
 
-						{/* ── Default mode: interleaved text + grouped tool summaries ── */}
-						{!showVerboseTools && (
-							<div className="space-y-3">
-								{streamItems.map((item, idx) => {
-									if (item.kind === "text") {
-										return (
-											<div key={item.id} className="py-0.5">
-												<ResearchArtifactBlock item={item} />
-											</div>
-										)
-									}
-									if (item.kind === "reasoning-process") {
-										const firstReasoning = item.items.find((p) => p.kind === "reasoning") as { kind: "reasoning", part: ReasoningPart } | undefined
-										const lastItem = item.items[item.items.length - 1]
-
-										const durationSec = firstReasoning?.part.time.end
-											? Math.ceil((firstReasoning.part.time.end - firstReasoning.part.time.start) / 1000)
-											: undefined
-										const isStreaming = working && (!lastItem || (lastItem.kind === "reasoning" && !lastItem.part.time.end))
-
-										return (
-											<Reasoning
-												key={`process-${idx}`}
-												isStreaming={isStreaming}
-												duration={durationSec}
-												defaultOpen={isStreaming ? undefined : completedProcessExpanded}
-											>
-												{isStreaming && <TranscriptReasoningLiveCue />}
-												<LazyReasoningContent animated={isStreaming}>
-													<div className="flex flex-col gap-4">
-														{item.items.map((processItem, i) => {
-															if (processItem.kind === "reasoning") {
-																const text = processItem.part.text.replace("[REDACTED]", "").trim()
-																if (!text) return null
-																return (
-																	<TranscriptReasoningBlock key={processItem.part.id} text={text} animated={isStreaming && i === item.items.length - 1} />
-																)
-															}
-															if (processItem.kind === "tool") {
-																return (
-																	<div key={processItem.part.id} className="pl-3">
-																		<ChatToolCall
-																			part={processItem.part}
-																			isActiveTurn={isActiveTurn}
-																			projectRoot={toolPathRoot}
-																		/>
-																	</div>
-																)
-															}
-															return null
-														})}
-													</div>
-												</LazyReasoningContent>
-											</Reasoning>
-										)
-									}
-									if (item.kind === "tool-group") {
-										if (item.tools.length === 1) {
-											return (
-												<ChatToolCall
-													key={item.tools[0].id}
-													part={item.tools[0]}
-													isActiveTurn={isActiveTurn}
-													projectRoot={toolPathRoot}
-												/>
-											)
-										}
-										return (
-											<ToolGroupSummary
-												key={`group-${idx}-${item.tools[0].id}`}
-												category={item.category}
-												tools={item.tools}
-												isActiveTurn={isActiveTurn}
-												projectRoot={toolPathRoot}
-											/>
-										)
-									}
-									return null
-								})}
-								{/* Live status while the agent is still working */}
-								{working && hasSteps && (
-									<div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
-										<Loader2Icon className="size-3 animate-spin text-muted-foreground/30" />
-										<Shimmer className="text-[11px]">{statusText}</Shimmer>
-									</div>
-								)}
-							</div>
-						)}
-
-
-						{/* ── Verbose mode: full tool cards ──────────────────────── */}
-
-						{showVerboseTools && (
-							<div className="space-y-3.5">
-								{verboseOrderedParts.map((item) => {
-									if (item.kind === "tool") {
-										return (
-											<ChatToolCall
-												key={item.part.id}
-												part={item.part}
-												isActiveTurn={isActiveTurn}
-												turnHasError={!!errorText}
-												onDelete={onDeletePart ? handleDeleteToolPart : undefined}
-												projectRoot={toolPathRoot}
-											/>
-										)
-									}
-									if (item.kind === "reasoning") {
-										const reasoningText = item.part.text.replace("[REDACTED]", "").trim()
-										if (!reasoningText) return null
-										const durationSec = item.part.time.end
-											? Math.ceil((item.part.time.end - item.part.time.start) / 1000)
-											: undefined
-										const isReasoningStreaming = !item.part.time.end && working
-										return (
-											<Reasoning
-												key={item.part.id}
-												isStreaming={isReasoningStreaming}
-												duration={durationSec}
-												defaultOpen={isReasoningStreaming ? undefined : completedProcessExpanded}
-											>
-												{isReasoningStreaming && <TranscriptReasoningLiveCue />}
-												<LazyReasoningContent animated={isReasoningStreaming}>
-													<TranscriptReasoningBlock text={reasoningText} animated={isReasoningStreaming} />
-												</LazyReasoningContent>
-											</Reasoning>
-										)
-									}
-									return (
-										<div key={item.id} className="py-0.5">
-											<ResearchArtifactBlock item={item} />
-										</div>
-									)
-								})}
+						{working && hasSteps && (
+							<div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+								<Loader2Icon className="size-3 animate-spin text-muted-foreground/30" />
+								<Shimmer className="text-[11px]">{statusText}</Shimmer>
 							</div>
 						)}
 					</div>
@@ -1313,7 +917,6 @@ export const ChatTurnComponent = memo(
 		if (prev.agent?.worktreePath !== next.agent?.worktreePath) return false
 		if (prev.isConnected !== next.isConnected) return false
 		if (prev.compactionStatus !== next.compactionStatus) return false
-		if (prev.stepsExpanded !== next.stepsExpanded) return false
 		if (
 			pendingPermissionFingerprint(prev.pendingPermission) !==
 			pendingPermissionFingerprint(next.pendingPermission)

@@ -213,7 +213,7 @@ export function AcpTrafficLogStatus({
 		>
 			<SettingsRow
 				label="ACP traffic log"
-				description="View the current JSONL log location"
+				description="Protocol trace enabled via DEVO_PROTOCOL_TRACE"
 			>
 				<Button
 					type="button"
@@ -237,7 +237,8 @@ export function AcpTrafficLogStatus({
 						<p className="text-sm text-muted-foreground">No log file path is available.</p>
 					)}
 					<p className="text-xs text-muted-foreground">
-						The log may include prompts, paths, tool arguments, and provider details.
+						Traces are written under DEVO_HOME/traces/ (default ~/.devo/traces/). The log may
+						include prompts, paths, tool arguments, and provider details.
 					</p>
 				</div>
 			)}

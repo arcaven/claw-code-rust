@@ -5,6 +5,7 @@ import {
 	SidebarMenuItem,
 } from "@devo/ui/components/sidebar"
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router"
+import { useAtomValue } from "jotai"
 import {
 	ArrowLeftIcon,
 	BellIcon,
@@ -16,6 +17,8 @@ import {
 	WrenchIcon,
 } from "lucide-react"
 import { useEffect } from "react"
+import { lastAppRouteAtom } from "../../atoms/ui"
+import { resolveSettingsBackTarget } from "../../lib/app-navigation"
 import { useSetSidebarSlot } from "../sidebar-slot-context"
 
 // ============================================================
@@ -73,6 +76,7 @@ export function SettingsPage() {
 function SettingsSidebarContent() {
 	const navigate = useNavigate()
 	const pathname = useRouterState({ select: (s) => s.location.pathname })
+	const lastAppRoute = useAtomValue(lastAppRouteAtom)
 
 	// Derive active tab from the last path segment (e.g. "/settings/general" -> "general")
 	const activeTab = pathname.split("/").pop() || "general"
@@ -82,7 +86,7 @@ function SettingsSidebarContent() {
 			<div className="flex shrink-0 flex-col gap-1 px-3 pb-7">
 				<button
 					type="button"
-					onClick={() => navigate({ to: "/" })}
+					onClick={() => navigate(resolveSettingsBackTarget(lastAppRoute))}
 					className="flex h-8 w-full items-center gap-2.5 rounded-lg px-1.5 text-left text-sm font-normal text-muted-foreground transition-colors hover:bg-black/[0.04] hover:text-sidebar-foreground dark:hover:bg-white/[0.06]"
 				>
 					<span className="flex size-[18px] shrink-0 items-center justify-center text-sidebar-foreground/90">

@@ -21,7 +21,6 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { useAtomValue, useSetAtom } from "jotai"
 import {
 	ArrowUpToLineIcon,
-	ChevronUpIcon,
 	GitForkIcon,
 	GoalIcon,
 	ListTodoIcon,
@@ -35,6 +34,7 @@ import {
 import {
 	type CSSProperties,
 	type ReactNode,
+	type RefObject,
 	useCallback,
 	useEffect,
 	useImperativeHandle,
@@ -53,7 +53,17 @@ import {
 	effectiveQuestionFamily,
 } from "../../atoms/derived/session-requests"
 import { appStore } from "../../atoms/store"
+import { sessionScrollTopFamily, settingsOverlayOpenAtom } from "../../atoms/ui"
 import { useDraftActions, useDraftSnapshot } from "../../hooks/use-draft"
+import {
+	freezeSessionScroll,
+	getFrozenSessionScroll,
+	getPendingRestoreScrollTop,
+	getRestoredScrollTop,
+	markScrollRestored,
+	setPendingRestoreScrollTop,
+	trackSettingsOverlayOpen,
+} from "../../lib/settings-scroll-freeze"
 import type {
 	ConfigData,
 	ModelRef,
@@ -91,7 +101,6 @@ import {
 	ComposerStatusStack,
 	type ComposerGoal,
 	type ComposerGoalStatus,
-	type ComposerQueueItem,
 } from "./composer-status-stack"
 import { ContextItems } from "./context-items"
 import type { MentionOption } from "./mention-popover"
@@ -111,9 +120,6 @@ import { SlashCommandPopover, type SlashCommandPopoverHandle } from "./slash-com
 
 type ComposerTrigger = "goal" | "plan"
 type ComposerGoalAction = "edit" | "pause" | "resume" | "clear"
-type ComposerPromptPart =
-	| { type: "text"; text: string }
-	| { type: "file"; mime: string; filename?: string; url: string }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
 	return value && typeof value === "object" ? (value as Record<string, unknown>) : null
@@ -137,32 +143,6 @@ function normalizeComposerGoal(value: unknown): ComposerGoal | null {
 		timeUsedSeconds: (record.timeUsedSeconds ?? record.time_used_seconds) as ComposerGoal["timeUsedSeconds"],
 		observedAtMs: Date.now(),
 	}
-}
-
-function promptPartsFromTextAndFiles(text: string, files?: FileAttachment[]): ComposerPromptPart[] {
-	const parts: ComposerPromptPart[] = [{ type: "text", text }]
-	for (const file of files ?? []) {
-		parts.push({
-			type: "file",
-			mime: file.mediaType ?? "application/octet-stream",
-			filename: file.filename,
-			url: file.url,
-		})
-	}
-	return parts
-}
-
-function chatTurnUserText(turn: ChatTurn): string {
-	return turn.userMessage.parts
-		.filter((part) => part.type === "text")
-		.map((part) => part.text)
-		.join("\n")
-		.trim()
-}
-
-function chatTurnUserCreatedAt(turn: ChatTurn): number {
-	const created = turn.userMessage.info.time?.created
-	return typeof created === "number" && Number.isFinite(created) ? created : 0
 }
 
 /**
@@ -242,6 +222,7 @@ function ComposerTriggerChip({
  */
 function ScrollOnLoad({ loading, sessionId }: { loading: boolean; sessionId: string }) {
 	const { scrollToBottom } = useStickToBottomContext()
+	const settingsOverlayOpen = useAtomValue(settingsOverlayOpenAtom)
 	const prevLoadingRef = useRef(loading)
 	const prevSessionRef = useRef(sessionId)
 
@@ -251,12 +232,84 @@ function ScrollOnLoad({ loading, sessionId }: { loading: boolean; sessionId: str
 		prevLoadingRef.current = loading
 		prevSessionRef.current = sessionId
 
+		if (settingsOverlayOpen || getPendingRestoreScrollTop() != null) return
+
 		// Instant scroll when: loading just finished, or session changed while not loading
 		// (e.g. messages were already cached in the Jotai store)
 		if ((wasLoading && !loading) || (sessionChanged && !loading)) {
 			scrollToBottom("instant")
 		}
-	}, [loading, sessionId, scrollToBottom])
+	}, [loading, sessionId, scrollToBottom, settingsOverlayOpen])
+
+	return null
+}
+
+/**
+ * Tracks scroll position while the session is visible so it can be restored
+ * after returning from Settings (StickToBottom may reset on layout changes).
+ */
+function ScrollPositionTracker({ sessionId }: { sessionId: string }) {
+	const { scrollRef } = useStickToBottomContext()
+	const setScrollTop = useSetAtom(sessionScrollTopFamily(sessionId))
+	const settingsOverlayOpen = useAtomValue(settingsOverlayOpenAtom)
+
+	useEffect(() => {
+		const element = scrollRef.current
+		if (!element) return
+
+		const onScroll = () => {
+			if (settingsOverlayOpen) return
+			setScrollTop(element.scrollTop)
+		}
+
+		element.addEventListener("scroll", onScroll, { passive: true })
+		return () => element.removeEventListener("scroll", onScroll)
+	}, [scrollRef, sessionId, setScrollTop, settingsOverlayOpen])
+
+	return null
+}
+
+/**
+ * Handles scroll freeze/restore around the Settings overlay with StickToBottom context.
+ */
+function SettingsScrollGuard({ sessionId }: { sessionId: string }) {
+	const { scrollRef, stopScroll } = useStickToBottomContext()
+	const settingsOverlayOpen = useAtomValue(settingsOverlayOpenAtom)
+
+	useLayoutEffect(() => {
+		const wasOverlayOpen = trackSettingsOverlayOpen(settingsOverlayOpen)
+
+		if (!wasOverlayOpen && settingsOverlayOpen) {
+			const top = scrollRef.current?.scrollTop ?? getFrozenSessionScroll(sessionId) ?? null
+			if (top != null) {
+				freezeSessionScroll(sessionId, top)
+			}
+			stopScroll()
+			return
+		}
+
+		if (!wasOverlayOpen || settingsOverlayOpen) return
+
+		const frozen = getFrozenSessionScroll(sessionId)
+		if (frozen == null) return
+
+		setPendingRestoreScrollTop(frozen)
+		markScrollRestored(frozen)
+
+		const applyRestore = () => {
+			if (!scrollRef.current) return
+			scrollRef.current.scrollTop = frozen
+			stopScroll()
+		}
+		applyRestore()
+		requestAnimationFrame(() => {
+			applyRestore()
+			requestAnimationFrame(() => {
+				applyRestore()
+				setPendingRestoreScrollTop(null)
+			})
+		})
+	}, [sessionId, settingsOverlayOpen, scrollRef, stopScroll])
 
 	return null
 }
@@ -265,8 +318,10 @@ interface ScrollHandle {
 	scrollToBottom: (behavior?: "instant" | "smooth") => void
 	/** Returns the current scrollHeight of the scroll container */
 	getScrollHeight: () => number
-	/** Smoothly scrolls the container to a specific scrollTop value */
-	scrollToPosition: (top: number) => void
+	/** Returns the current scrollTop of the scroll container */
+	getScrollTop: () => number
+	/** Scrolls the container to a specific scrollTop value */
+	scrollToPosition: (top: number, behavior?: ScrollBehavior) => void
 }
 
 /**
@@ -286,14 +341,87 @@ function ScrollBridge({ scrollRef }: { scrollRef: React.RefObject<ScrollHandle |
 			getScrollHeight: () => {
 				return ctx.scrollRef.current?.scrollHeight ?? 0
 			},
-			scrollToPosition: (top: number) => {
-				ctx.scrollRef.current?.scrollTo({ top, behavior: "smooth" })
+			getScrollTop: () => {
+				return ctx.scrollRef.current?.scrollTop ?? 0
+			},
+			scrollToPosition: (top: number, behavior: ScrollBehavior = "smooth") => {
+				ctx.scrollRef.current?.scrollTo({ top, behavior })
 			},
 		}),
 		[ctx],
 	)
 	return null
 }
+
+/** Prefetch older messages when the user scrolls toward the top of the thread. */
+function LoadEarlierOnScroll({
+	hasEarlierMessages,
+	loadingEarlier,
+	onLoadEarlier,
+	scrollRef,
+}: {
+	hasEarlierMessages: boolean
+	loadingEarlier: boolean
+	onLoadEarlier?: () => Promise<void>
+	scrollRef: RefObject<ScrollHandle | null>
+}) {
+	const { scrollRef: containerRef, stopScroll } = useStickToBottomContext()
+	const sentinelRef = useRef<HTMLDivElement>(null)
+	const loadingRef = useRef(loadingEarlier)
+	loadingRef.current = loadingEarlier
+	const hasEarlierRef = useRef(hasEarlierMessages)
+	hasEarlierRef.current = hasEarlierMessages
+
+	const loadWithScrollPreserve = useCallback(async () => {
+		if (!onLoadEarlier || loadingRef.current || !hasEarlierRef.current) return
+		stopScroll()
+		const beforeHeight = scrollRef.current?.getScrollHeight() ?? 0
+		const beforeTop = scrollRef.current?.getScrollTop() ?? 0
+		await onLoadEarlier()
+		requestAnimationFrame(() => {
+			stopScroll()
+			const afterHeight = scrollRef.current?.getScrollHeight() ?? 0
+			scrollRef.current?.scrollToPosition(afterHeight - beforeHeight + beforeTop, "auto")
+			requestAnimationFrame(() => stopScroll())
+		})
+	}, [onLoadEarlier, scrollRef, stopScroll])
+
+	useEffect(() => {
+		const root = containerRef.current
+		const target = sentinelRef.current
+		if (!root || !target || !hasEarlierMessages || !onLoadEarlier) return
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (!entries[0]?.isIntersecting) return
+				void loadWithScrollPreserve()
+			},
+			{ root, rootMargin: "160px 0px 0px 0px", threshold: 0 },
+		)
+		observer.observe(target)
+		return () => observer.disconnect()
+	}, [containerRef, hasEarlierMessages, loadWithScrollPreserve, onLoadEarlier])
+
+	if (!hasEarlierMessages && !loadingEarlier) return null
+
+	return (
+		<div
+			ref={sentinelRef}
+			className="flex min-h-8 justify-center py-2"
+			aria-busy={loadingEarlier}
+			aria-live="polite"
+		>
+			{loadingEarlier ? (
+				<Loader2Icon className="size-4 animate-spin text-muted-foreground/70" />
+			) : (
+				<span className="sr-only">Scroll up to load earlier messages</span>
+			)}
+		</div>
+	)
+}
+
+const TURN_ESTIMATE_MIN = 120
+const TURN_ESTIMATE_MAX = 12_000
 
 function estimateTurnSize(turn: ChatTurn): number {
 	let partCount = turn.userMessage.parts.length
@@ -308,7 +436,38 @@ function estimateTurnSize(turn: ChatTurn): number {
 			}, 0)
 		)
 	}, 0)
-	return Math.min(960, 180 + turn.assistantMessages.length * 72 + partCount * 36 + assistantTextLength / 12)
+	const toolCount = turn.assistantMessages.reduce((total, message) => {
+		return total + message.parts.filter((part) => part.type === "tool").length
+	}, 0)
+	const reasoningCount = turn.assistantMessages.reduce((total, message) => {
+		return total + message.parts.filter((part) => part.type === "reasoning").length
+	}, 0)
+	const estimated =
+		180 +
+		turn.assistantMessages.length * 72 +
+		partCount * 36 +
+		toolCount * 96 +
+		reasoningCount * 48 +
+		assistantTextLength / 10
+	return Math.max(TURN_ESTIMATE_MIN, Math.min(TURN_ESTIMATE_MAX, estimated))
+}
+
+function turnListRevision(turns: ChatTurn[]): string {
+	return turns
+		.map((turn) => {
+			let partCount = turn.userMessage.parts.length
+			let textLength = 0
+			for (const message of turn.assistantMessages) {
+				partCount += message.parts.length
+				for (const part of message.parts) {
+					if (part.type === "text" || part.type === "reasoning") {
+						textLength += part.text.length
+					}
+				}
+			}
+			return `${turn.id}:${partCount}:${textLength}`
+		})
+		.join("|")
 }
 
 interface VirtualizedTurnListProps {
@@ -318,13 +477,18 @@ interface VirtualizedTurnListProps {
 
 function VirtualizedTurnList({ turns, renderTurn }: VirtualizedTurnListProps) {
 	const { scrollRef } = useStickToBottomContext()
+	const turnsRevision = useMemo(() => turnListRevision(turns), [turns])
 	const virtualizer = useVirtualizer({
 		count: turns.length,
 		getScrollElement: () => scrollRef.current,
 		getItemKey: (index) => turns[index]?.id ?? index,
 		estimateSize: (index) => estimateTurnSize(turns[index]),
-		overscan: 5,
+		overscan: 8,
 	})
+
+	useLayoutEffect(() => {
+		virtualizer.measure()
+	}, [turnsRevision, virtualizer])
 
 	return (
 		<div
@@ -648,13 +812,28 @@ export function ChatView({
 	reviewPanelOpen,
 }: ChatViewProps) {
 	const isWorking = agent.status === "running"
+	const settingsOverlayOpen = useAtomValue(settingsOverlayOpenAtom)
+
+	const conversationTargetScrollTop = useCallback(
+		(defaultTarget: number) => {
+			const restored = getRestoredScrollTop()
+			if (restored != null) return restored
+			const pendingRestore = getPendingRestoreScrollTop()
+			if (pendingRestore != null) return pendingRestore
+			if (settingsOverlayOpen) {
+				const frozen = getFrozenSessionScroll(agent.sessionId)
+				if (frozen != null) return frozen
+			}
+			return defaultTarget
+		},
+		[agent.sessionId, settingsOverlayOpen],
+	)
 
 	// Ref to imperatively scroll the conversation to bottom from outside the
 	// <Conversation> tree (e.g. after sending a message or answering a question).
 	const scrollRef = useRef<ScrollHandle | null>(null)
 	const composerRef = useRef<HTMLDivElement | null>(null)
 	const [composerInset, setComposerInset] = useState(0)
-	const [expandedStepTurnIds, setExpandedStepTurnIds] = useState<Set<string>>(() => new Set())
 
 	// Session-level error and setup phase from the session atom
 	const sessionEntry = useAtomValue(sessionFamily(agent.sessionId))
@@ -707,9 +886,6 @@ export function ChatView({
 	const effectivePermission = useAtomValue(effectivePermissionFamily(agent.sessionId))
 	const removePermission = useSetAtom(removePermissionAtom)
 
-	useEffect(() => {
-		setExpandedStepTurnIds(new Set())
-	}, [agent.sessionId])
 	// Format the session-level error for display. Only shown when the last
 	// turn doesn't already carry an assistant-level error (the server emits
 	// both session.error and message.updated for the same failure, so showing
@@ -800,18 +976,6 @@ export function ChatView({
 		? "mx-auto w-full min-w-0"
 		: "mx-auto w-full min-w-0 max-w-3xl"
 
-	const handleStepsExpandedChange = useCallback((turnId: string, expanded: boolean) => {
-		setExpandedStepTurnIds((current) => {
-			const next = new Set(current)
-			if (expanded) {
-				next.add(turnId)
-			} else {
-				next.delete(turnId)
-			}
-			return next
-		})
-	}, [])
-
 	const renderTurn = useCallback(
 		(turn: ChatTurn, index: number) => (
 			<ChatTurnComponent
@@ -823,8 +987,6 @@ export function ChatView({
 				pendingPermission={index === turns.length - 1 ? effectivePermission : undefined}
 				isConnected={isConnected}
 				compactionStatus={compactionStatus}
-				stepsExpanded={expandedStepTurnIds.has(turn.id)}
-				onStepsExpandedChange={handleStepsExpandedChange}
 				onApprovePermission={handleApprovePermission}
 				onDenyPermission={handleDenyPermission}
 				onRevertToMessage={onRevertToMessage}
@@ -843,10 +1005,8 @@ export function ChatView({
 			agent,
 			effectivePermission,
 			compactionStatus,
-			expandedStepTurnIds,
 			handleApprovePermission,
 			handleDenyPermission,
-			handleStepsExpandedChange,
 			isConnected,
 			isWorking,
 			onDeletePart,
@@ -867,32 +1027,26 @@ export function ChatView({
 		>
 			{/* Chat messages -- constrained width for readability */}
 			<div className="relative min-h-0 min-w-0 flex-1">
-				<Conversation key={agent.sessionId} className="h-full">
+				<Conversation
+					key={agent.sessionId}
+					className="h-full"
+					targetScrollTop={conversationTargetScrollTop}
+				>
 					<ScrollOnLoad loading={loading} sessionId={agent.sessionId} />
+					<SettingsScrollGuard sessionId={agent.sessionId} />
+					<ScrollPositionTracker sessionId={agent.sessionId} />
 					<ScrollBridge scrollRef={scrollRef} />
 					<ConversationContent
 						scrollClassName="scrollbar-comfort"
 						className="gap-10 px-6 pt-2 pb-[calc(var(--chat-composer-inset)+1rem)] sm:px-8 sm:pt-6 sm:pb-[calc(var(--chat-composer-inset)+1.5rem)] lg:px-10"
 					>
 						<div className={cn(contentWidthClass, "space-y-10")}>
-							{/* Load earlier messages button */}
-							{hasEarlierMessages && (
-								<div className="flex justify-center pb-4">
-									<button
-										type="button"
-										onClick={onLoadEarlier}
-										disabled={loadingEarlier}
-										className="flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-									>
-										{loadingEarlier ? (
-											<Loader2Icon className="size-3 animate-spin" />
-										) : (
-											<ChevronUpIcon className="size-3" />
-										)}
-										{loadingEarlier ? "Loading..." : "Load earlier messages"}
-									</button>
-								</div>
-							)}
+							<LoadEarlierOnScroll
+								hasEarlierMessages={hasEarlierMessages}
+								loadingEarlier={loadingEarlier}
+								onLoadEarlier={onLoadEarlier}
+								scrollRef={scrollRef}
+							/>
 
 							{loading ? (
 								<div className="flex items-center justify-center py-8">
@@ -1028,7 +1182,6 @@ function ChatInputSection({
 	const [activeTrigger, setActiveTrigger] = useState<ComposerTrigger | null>(null)
 	const [activeGoal, setActiveGoal] = useState<ComposerGoal | null>(null)
 	const [goalAction, setGoalAction] = useState<ComposerGoalAction | null>(null)
-	const [queueItems, setQueueItems] = useState<ComposerQueueItem[]>([])
 
 	// User requirement: the /goal footer chip is only an input trigger;
 	// the composer-adjacent status row reflects the real session goal state.
@@ -1036,21 +1189,7 @@ function ChatInputSection({
 		setActiveTrigger(null)
 		setActiveGoal(null)
 		setGoalAction(null)
-		setQueueItems([])
 	}, [agent.sessionId])
-
-	useEffect(() => {
-		setQueueItems((current) =>
-			current.filter((item) => {
-				if (item.status !== "queued") return true
-				const createdAt = item.createdAtMs ?? 0
-				return !turns.some(
-					(turn) =>
-						chatTurnUserText(turn) === item.text && chatTurnUserCreatedAt(turn) >= createdAt - 1_000,
-				)
-			}),
-		)
-	}, [turns])
 
 	const loadGoalStatus = useCallback(async (): Promise<ComposerGoal | null> => {
 		if (!agent.directory) return null
@@ -1365,108 +1504,6 @@ function ChatInputSection({
 			setGoalAction(null)
 		}
 	}, [agent.directory, agent.sessionId, goalAction])
-
-	const handleSteerQueueItem = useCallback(
-		async (item: ComposerQueueItem) => {
-			if (!agent.directory || !item.queuedInputId || !item.activeTurnId) return
-			const client = getProjectClient(agent.directory)
-			if (!client?.turn?.steerQueued) return
-			setQueueItems((current) =>
-				current.map((entry) => (entry.id === item.id ? { ...entry, status: "steering" } : entry)),
-			)
-			try {
-				await client.turn.steerQueued({
-					sessionID: agent.sessionId,
-					expectedTurnID: item.activeTurnId,
-					queuedInputID: item.queuedInputId,
-				})
-				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
-			} catch (err) {
-				log.error("turn.queue.steer failed", { sessionId: agent.sessionId }, err)
-				setQueueItems((current) =>
-					current.map((entry) =>
-						entry.id === item.id
-							? { ...entry, status: "error", error: err instanceof Error ? err.message : "Steer failed" }
-							: entry,
-					),
-				)
-			}
-		},
-		[agent.directory, agent.sessionId],
-	)
-
-	const handleRemoveQueueItem = useCallback(
-		async (item: ComposerQueueItem) => {
-			if (!agent.directory || !item.queuedInputId) {
-				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
-				return
-			}
-			const client = getProjectClient(agent.directory)
-			if (!client?.turn?.removeQueued) return
-			setQueueItems((current) =>
-				current.map((entry) => (entry.id === item.id ? { ...entry, status: "removing" } : entry)),
-			)
-			try {
-				await client.turn.removeQueued({
-					sessionID: agent.sessionId,
-					queuedInputID: item.queuedInputId,
-				})
-				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
-			} catch (err) {
-				log.error("turn.queue.remove failed", { sessionId: agent.sessionId }, err)
-				setQueueItems((current) =>
-					current.map((entry) =>
-						entry.id === item.id
-							? { ...entry, status: "error", error: err instanceof Error ? err.message : "Remove failed" }
-							: entry,
-					),
-				)
-			}
-		},
-		[agent.directory, agent.sessionId],
-	)
-
-	const handleEditQueueItem = useCallback(
-		async (item: ComposerQueueItem) => {
-			if ((item.fileCount ?? 0) > 0) return
-			if (item.queuedInputId) {
-				if (!agent.directory) return
-				const client = getProjectClient(agent.directory)
-				if (!client?.turn?.removeQueued) return
-				setQueueItems((current) =>
-					current.map((entry) =>
-						entry.id === item.id ? { ...entry, status: "removing" } : entry,
-					),
-				)
-				try {
-					await client.turn.removeQueued({
-						sessionID: agent.sessionId,
-						queuedInputID: item.queuedInputId,
-					})
-				} catch (err) {
-					log.error("turn.queue.edit remove failed", { sessionId: agent.sessionId }, err)
-					setQueueItems((current) =>
-						current.map((entry) =>
-							entry.id === item.id
-								? {
-										...entry,
-										status: "error",
-										error: err instanceof Error ? err.message : "Edit failed",
-									}
-								: entry,
-						),
-					)
-					return
-				}
-				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
-			} else {
-				setQueueItems((current) => current.filter((entry) => entry.id !== item.id))
-			}
-			slashCommandRef.current?.setText(item.text)
-			focusComposer()
-		},
-		[agent.directory, agent.sessionId, focusComposer],
-	)
 
 	const handleSlashCommand = useCallback(
 		async (text: string): Promise<boolean> => {

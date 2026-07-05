@@ -293,44 +293,30 @@ export const SubAgentCard = memo(function SubAgentCard({ part: propPart }: SubAg
 	const showSummary = collapseState === "summary" || collapseState === "expanded"
 	const showExpanded = collapseState === "expanded"
 
+	const ChevronIcon = collapseState !== "closed" ? ChevronDownIcon : ChevronRightIcon
+
 	return (
-		<div
-			className={cn(
-				"overflow-hidden rounded-lg border",
-				isRunning
-					? "border-violet-500/30 bg-violet-500/[0.02]"
-					: isError
-						? "border-red-500/30 bg-red-500/[0.02]"
-						: "border-border bg-card/50",
-			)}
-		>
-			{/* Header — always visible */}
-			<div className="flex items-center gap-2.5 px-3.5 py-2.5">
-				{/* Clickable area toggles collapse */}
+		<div className="not-prose space-y-0">
+			<div className="flex w-fit max-w-full items-center gap-2">
 				<button
 					type="button"
 					onClick={handleHeaderToggle}
-					className="flex min-w-0 flex-1 items-center gap-2.5 text-left transition-colors hover:opacity-80"
+					className="flex w-fit max-w-full items-center gap-1.5 text-left text-sm text-muted-foreground/70 transition-colors hover:text-foreground"
 				>
-					<ChevronRightIcon
-						className={cn(
-							"size-3 shrink-0 text-muted-foreground/50 transition-transform",
-							collapseState !== "closed" && "rotate-90",
-						)}
-					/>
 					<ZapIcon
 						className={cn(
-							"size-3.5 shrink-0",
-							isRunning ? "text-violet-400 animate-pulse" : "text-muted-foreground",
+							"size-4 shrink-0",
+							isRunning ? "animate-pulse text-violet-400" : "text-muted-foreground/50",
 						)}
 					/>
-					<span className="text-xs font-medium text-foreground/80">Agent</span>
-					<span className="shrink-0 text-xs text-muted-foreground/60">({agentType})</span>
-					{/* Truncated task title in header */}
-					<span className="min-w-0 truncate text-xs text-muted-foreground/50">{taskTitle}</span>
+					<span className="min-w-0 truncate">
+						<span className={isError ? "text-red-400" : undefined}>Agent</span>
+						<span className="text-muted-foreground/60"> ({agentType})</span>
+						<span className="text-muted-foreground/60"> · {taskTitle}</span>
+					</span>
+					<ChevronIcon aria-hidden="true" className="size-4 shrink-0 transition-transform" />
 				</button>
-				{/* Right side: status / duration / open button — outside trigger */}
-				<div className="flex shrink-0 items-center gap-2.5">
+				<div className="flex shrink-0 items-center gap-2 pb-1">
 				{/* Waiting indicator: shown when sub-agent has a pending permission or question */}
 				{childIsWaiting && childHasPendingPermission && (
 					<span className="flex items-center gap-1 text-[11px] font-medium text-amber-400">
@@ -370,28 +356,28 @@ export const SubAgentCard = memo(function SubAgentCard({ part: propPart }: SubAg
 				</div>
 			</div>
 
-			{/* ── Summary state: single-line teaser ────────────────── */}
-			{showSummary && !showExpanded && firstLine && (
-				<div className="flex items-baseline gap-2 border-t border-border/30 px-3.5 py-2">
-					<p className="min-w-0 flex-1 truncate text-[11px] leading-relaxed text-muted-foreground/70 italic">
-						{firstLine}
-					</p>
-					{hasMore && (
-						<button
-							type="button"
-							onClick={handleShowMore}
-							className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-primary/70 transition-colors hover:text-primary"
-						>
-							Show more
-							<ChevronDownIcon className="size-3" />
-						</button>
+			{showSummary && (
+				<div className="mt-1.5 mb-4 overflow-hidden rounded-md border border-border/50">
+					{!showExpanded && firstLine && (
+						<div className="flex items-baseline gap-2 px-3.5 py-2">
+							<p className="min-w-0 flex-1 truncate text-[11px] leading-relaxed text-muted-foreground/70 italic">
+								{firstLine}
+							</p>
+							{hasMore && (
+								<button
+									type="button"
+									onClick={handleShowMore}
+									className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-primary/70 transition-colors hover:text-primary"
+								>
+									Show more
+									<ChevronDownIcon className="size-3" />
+								</button>
+							)}
+						</div>
 					)}
-				</div>
-			)}
 
-			{/* ── Expanded state: full content ────────────────────── */}
-			{showExpanded && (
-				<>
+					{showExpanded && (
+						<>
 					{/* Live activity: latest tool calls */}
 					{latestToolParts.length > 0 && (
 						<div className="border-t border-border/30 px-3.5 py-2">
@@ -476,15 +462,16 @@ export const SubAgentCard = memo(function SubAgentCard({ part: propPart }: SubAg
 							</span>
 						</div>
 					)}
-				</>
-			)}
+						</>
+					)}
 
-			{/* Error shown in summary state too (not just expanded) */}
-			{showSummary && !showExpanded && isError && (
-				<div className="border-t border-red-500/20 bg-red-500/5 px-3.5 py-2">
-					<span className="text-[11px] text-red-400">
-						{part.state.status === "error" ? part.state.error : "Sub-agent failed"}
-					</span>
+					{!showExpanded && isError && (
+						<div className="border-t border-red-500/20 bg-red-500/5 px-3.5 py-2">
+							<span className="text-[11px] text-red-400">
+								{part.state.status === "error" ? part.state.error : "Sub-agent failed"}
+							</span>
+						</div>
+					)}
 				</div>
 			)}
 		</div>

@@ -40,13 +40,17 @@ import {
 } from "lucide-react"
 import type { ReactNode } from "react"
 import { memo, useCallback, useMemo } from "react"
-import { useToolElapsedTime } from "../../hooks/use-elapsed-time"
 import type { BundledLanguage } from "shiki"
 import { viewFileInDiffPanelAtom } from "../../atoms/ui"
 import { detectContentLanguage, detectLanguage, prettyPrintJson } from "../../lib/language"
 import type { FilePart, ToolPart, ToolStateCompleted } from "../../lib/types"
 import { SubAgentCard } from "./sub-agent-card"
-import { getToolCategory, ToolCard } from "./tool-card"
+import type { ToolCategory } from "./tool-card"
+import {
+	TranscriptDisclosure,
+	TranscriptDisclosureContent,
+	TranscriptDisclosureTrigger,
+} from "./transcript-disclosure"
 import {
 	formatToolPathForDisplay,
 	getFirstApplyPatchPath,
@@ -445,10 +449,7 @@ function BashContent({ part }: { part: ToolPart }) {
 				<Terminal
 					output={displayOutput}
 					isStreaming={isStreaming}
-					className={cn(
-						"max-h-64 border-0 shadow-none rounded-none text-[11px]",
-						error && "border-red-500/30",
-					)}
+					className="max-h-64 border-0 shadow-none rounded-none text-[11px]"
 				>
 					<TerminalHeader className="py-1.5 px-3">
 						<TerminalTitle className="text-[11px]">Output</TerminalTitle>
@@ -761,7 +762,7 @@ function TodoContent({ part }: { part: ToolPart }) {
 /** Error content for any tool */
 function ErrorContent({ error }: { error: string }) {
 	return (
-		<div className="flex items-start gap-2 rounded bg-red-500/5 mx-3.5 my-2.5 px-2 py-1.5 text-xs text-red-400">
+		<div className="mx-3.5 my-2.5 flex items-start gap-2 rounded bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
 			<AlertTriangleIcon className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
 			<pre className="max-h-32 overflow-auto font-mono">
 				<code>{error.length > 500 ? `${error.slice(0, 500)}...` : error}</code>
@@ -818,15 +819,84 @@ function GenericContent({ part }: { part: ToolPart }) {
 }
 
 // ============================================================
+// Tool group summaries
+// ============================================================
+
+export function describeToolGroup(
+	category: ToolCategory,
+	tools: ToolPart[],
+	projectRoot?: string | null,
+): string {
+	const count = tools.length
+
+	if (count <= 3) {
+		const details = tools
+			.map((t) => getToolSubtitle(t, { projectRoot }))
+			.filter(Boolean)
+			.map((s) => {
+				const parts = s!.split("/")
+				return parts.length > 1 ? parts[parts.length - 1] : s
+			})
+
+		if (details.length > 0) {
+			switch (category) {
+				case "explore":
+					return count === 1 ? `Read ${details[0]}` : `Read ${details.join(", ")}`
+				case "edit":
+					return count === 1 ? `Edited ${details[0]}` : `Edited ${details.join(", ")}`
+				case "run":
+					return count === 1 ? `Ran ${details[0]}` : `Ran ${count} commands`
+				case "delegate":
+					return count === 1 ? `Delegated: ${details[0]}` : `Delegated ${count} tasks`
+				case "fetch":
+					return count === 1 ? `Fetched ${details[0]}` : `Fetched ${count} URLs`
+				case "ask":
+					return "Asked a question"
+				case "plan":
+					return "Updated plan"
+				default:
+					return `Ran ${details.join(", ")}`
+			}
+		}
+	}
+
+	switch (category) {
+		case "explore":
+			return `Explored ${count} files`
+		case "edit":
+			return `Edited ${count} files`
+		case "run":
+			return `Ran ${count} commands`
+		case "delegate":
+			return `Delegated ${count} tasks`
+		case "fetch":
+			return `Fetched ${count} URLs`
+		case "ask":
+			return `Asked ${count} questions`
+		case "plan":
+			return "Updated plan"
+		default:
+			return `Ran ${count} tools`
+	}
+}
+
+export function isGroupRunning(tools: ToolPart[]): boolean {
+	return tools.some((t) => t.state.status === "running" || t.state.status === "pending")
+}
+
+export function isGroupError(tools: ToolPart[]): boolean {
+	return tools.some((t) => t.state.status === "error")
+}
+
+// ============================================================
 // Smart defaults: which tools should be open by default
 // ============================================================
 
 /**
  * Returns whether a tool should default to expanded in the active turn.
  */
-export function shouldDefaultOpen(_tool: string, status: string): boolean {
-	// Errors stay expanded so failure output remains visible for recovery.
-	return status === "error"
+export function shouldDefaultOpen(_tool: string, _status: string): boolean {
+	return false
 }
 /**
  * Returns whether a tool has expandable content.
@@ -914,6 +984,9 @@ interface ChatToolCallProps {
 	onDelete?: (part: ToolPart) => void
 	/** Project root used only for display-only path labels. */
 	projectRoot?: string | null
+	open?: boolean
+	defaultOpen?: boolean
+	onOpenChange?: (open: boolean) => void
 }
 
 /**
@@ -959,6 +1032,9 @@ export const ChatToolCall = memo(
 		turnHasError = false,
 		onDelete,
 		projectRoot,
+		open,
+		defaultOpen: defaultOpenProp,
+		onOpenChange,
 	}: ChatToolCallProps) {
 		const viewFileInDiff = useSetAtom(viewFileInDiffPanelAtom)
 
@@ -988,16 +1064,12 @@ export const ChatToolCall = memo(
 			[editFilePath, viewFileInDiff],
 		)
 
-		const duration = getToolDuration(part)
-		const elapsedTime = useToolElapsedTime(part)
 		const status = part.state.status as "running" | "error" | "completed" | "pending"
 
-		// Build trailing element: diff stats + "view diff" button + duration/spinner
-		// Must be called before early returns to satisfy hooks rules.
+		// Build trailing element: diff stats + "view diff" button, or a running spinner.
 		const trailingElement = useMemo(() => {
 			const parts: ReactNode[] = []
 
-			// Diff stats for edit tools
 			if (diffStats) {
 				parts.push(
 					<span key="stats" className="flex items-center gap-1.5 text-[11px]">
@@ -1013,30 +1085,19 @@ export const ChatToolCall = memo(
 				)
 			}
 
-			// Duration, elapsed time + spinner, or just spinner
-			if (duration) {
+			if (status === "running" || status === "pending") {
 				parts.push(
-					<span key="duration" className="text-[11px]">
-						{duration}
-					</span>,
-				)
-			} else if (status === "running" || status === "pending") {
-				parts.push(
-					<span key="running" className="flex items-center gap-1.5">
-						{elapsedTime && (
-							<span className="text-[11px] tabular-nums text-muted-foreground/50">
-								{elapsedTime}
-							</span>
-						)}
-						<Loader2Icon className="size-3 animate-spin text-muted-foreground/40" />
-					</span>,
+					<Loader2Icon
+						key="running"
+						className="size-3 animate-spin text-muted-foreground/40"
+					/>,
 				)
 			}
 
 			if (parts.length === 0) return undefined
 			if (parts.length === 1) return parts[0]
 			return <span className="flex items-center gap-2.5">{parts}</span>
-		}, [diffStats, duration, elapsedTime, status])
+		}, [diffStats, status])
 
 		// Combine trailing element with "View diff" button for edit-category tools
 		const combinedTrailing = useMemo(() => {
@@ -1104,9 +1165,10 @@ export const ChatToolCall = memo(
 		// --- All other tools (including todos): ToolCard ---
 		const { icon: Icon, title } = getToolInfo(part.tool)
 		const subtitle = getToolSubtitle(part, { projectRoot })
-		const category = getToolCategory(part.tool)
 		const hasContent = hasExpandableContent(part)
-		const defaultOpen = isActiveTurn ? shouldDefaultOpen(part.tool, status) : false
+		const defaultOpen =
+			defaultOpenProp ?? (isActiveTurn ? shouldDefaultOpen(part.tool, status) : false)
+		const isRunning = status === "running" || status === "pending"
 
 		// Extract attachments
 		const attachments: FilePart[] =
@@ -1114,22 +1176,44 @@ export const ChatToolCall = memo(
 				? ((part.state as ToolStateCompleted).attachments ?? [])
 				: []
 
+		const label = subtitle ? (
+			<>
+				<span>{title}</span>
+				<span className="text-muted-foreground/60"> · {subtitle}</span>
+			</>
+		) : (
+			<span>{title}</span>
+		)
+
 		return (
 			<div className="space-y-1.5">
-				<ToolCard
-					icon={<Icon className="size-3.5" />}
-					title={title}
-					subtitle={subtitle}
-					trailing={finalTrailing}
-					category={category}
+				<TranscriptDisclosure
+					className="mb-0"
 					defaultOpen={defaultOpen}
-					forceOpen={status === "error"}
-					hasContent={hasContent}
-					status={status}
-					renderContent={hasContent ? () => getToolContent(part) : undefined}
-				/>
+					expandable={hasContent}
+					open={open}
+					onOpenChange={onOpenChange}
+				>
+					<TranscriptDisclosureTrigger
+						leading={
+							<Icon
+								className={`size-4 shrink-0 ${
+									isRunning
+										? "animate-pulse text-muted-foreground"
+										: "text-muted-foreground/50"
+								}`}
+							/>
+						}
+						label={label}
+						trailing={finalTrailing}
+					/>
+					{hasContent && (
+						<TranscriptDisclosureContent className="overflow-hidden rounded-md border border-border/50">
+							{getToolContent(part)}
+						</TranscriptDisclosureContent>
+					)}
+				</TranscriptDisclosure>
 
-				{/* Tool attachments (images, etc.) */}
 				{attachments.length > 0 && <ToolAttachments attachments={attachments} />}
 			</div>
 		)

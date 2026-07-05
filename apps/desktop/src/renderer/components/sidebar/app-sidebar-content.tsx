@@ -15,7 +15,10 @@ import { activeServerConfigAtom } from "../../atoms/connection"
 import { sandboxMappingsAtom } from "../../atoms/derived/agents"
 import { automationsEnabledAtom } from "../../atoms/feature-flags"
 import { projectPaginationFamily } from "../../atoms/sessions"
+import { appStore } from "../../atoms/store"
+import { sessionScrollTopFamily } from "../../atoms/ui"
 import type { Agent, SidebarProject } from "../../lib/types"
+import { freezeSessionScroll } from "../../lib/settings-scroll-freeze"
 import { openInTarget } from "../../services/backend"
 import { loadMoreProjectSessions, loadProjectSessions } from "../../services/connection-manager"
 import {
@@ -465,7 +468,15 @@ export function AppSidebarContent({
 			<SidebarFooter className="gap-1 px-3 pt-0 pb-3">
 				<button
 					type="button"
-					onClick={() => navigate({ to: "/settings" })}
+					onClick={() => {
+						if (selectedSessionId) {
+							const scrollTop = appStore.get(sessionScrollTopFamily(selectedSessionId))
+							if (scrollTop != null) {
+								freezeSessionScroll(selectedSessionId, scrollTop)
+							}
+						}
+						navigate({ to: "/settings" })
+					}}
 					className={cn(
 						"flex h-8 w-full items-center gap-2.5 rounded-lg px-1.5 text-left text-sm font-normal text-muted-foreground transition-colors hover:bg-black/[0.04] hover:text-sidebar-foreground dark:hover:bg-white/[0.06]",
 					)}

@@ -7,30 +7,19 @@ const chatToolCallSource = readFileSync(new URL("./chat-tool-call.tsx", import.m
 const rendererCssSource = readFileSync(new URL("../../index.css", import.meta.url), "utf8")
 
 describe("shouldDefaultOpen", () => {
-	test("collapses tool output by default", () => {
-		const tools = ["bash", "read", "edit", "write", "apply_patch", "glob", "grep", "list"]
-
-		expect(Object.fromEntries(tools.map((tool) => [tool, shouldDefaultOpen(tool, "completed")]))).toEqual({
-			bash: false,
-			read: false,
-			edit: false,
-			write: false,
-			apply_patch: false,
-			glob: false,
-			grep: false,
-			list: false,
-		})
-	})
-
-	test("keeps error output expanded", () => {
+	test("keeps all tool output collapsed by default", () => {
 		expect({
-			bash: shouldDefaultOpen("bash", "error"),
-			read: shouldDefaultOpen("read", "error"),
+			bash: shouldDefaultOpen("bash", "completed"),
+			read: shouldDefaultOpen("read", "completed"),
+			bashError: shouldDefaultOpen("bash", "error"),
+			readError: shouldDefaultOpen("read", "error"),
 			unknown: shouldDefaultOpen("unknown", "error"),
 		}).toEqual({
-			bash: true,
-			read: true,
-			unknown: true,
+			bash: false,
+			read: false,
+			bashError: false,
+			readError: false,
+			unknown: false,
 		})
 	})
 })

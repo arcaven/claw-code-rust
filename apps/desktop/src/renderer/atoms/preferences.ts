@@ -65,6 +65,11 @@ export const displayModeAtom = atomWithStorage<DisplayMode>(
 	DEFAULT_APPEARANCE_SETTINGS.displayMode,
 )
 
+export const hideThinkingWhileWorkingAtom = atomWithStorage<boolean>(
+	"devo:hideThinkingWhileWorking",
+	DEFAULT_APPEARANCE_SETTINGS.hideThinkingWhileWorking,
+)
+
 export const themeAtom = atomWithStorage<string>("devo:theme", DEFAULT_APPEARANCE_SETTINGS.themeId)
 
 export const colorSchemeAtom = atomWithStorage<ColorScheme>(

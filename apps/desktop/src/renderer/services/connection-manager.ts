@@ -18,14 +18,14 @@ import {
 	updateStreamingPart,
 } from "../atoms/streaming"
 import { createLogger } from "../lib/logger"
-import type { Event } from "../lib/types"
+import type { Event, Session } from "../lib/types"
 import {
 	connectToServer,
 	disposeAllInstances,
 	getSession,
 	getSessionStatuses,
-	listProjects,
 	listSessions,
+	projectsFromSessions,
 	subscribeToGlobalEvents,
 } from "./devo"
 
@@ -63,8 +63,11 @@ let connection: {
 /** Per-project SDK clients, keyed by directory path */
 const projectClients = new Map<string, DevoClient>()
 
-/** Project clients whose local session.status stream is bridged into the UI store. */
-const projectStatusBridgeDirs = new Set<string>()
+/** Unscoped `session/list` snapshot from the latest discovery pass. */
+let discoveredSessions: Session[] | null = null
+
+/** Project clients whose local event stream is bridged into the UI store. */
+const projectEventBridgeDirs = new Set<string>()
 
 /**
  * Monotonically increasing ID for event loop instances.
@@ -92,7 +95,65 @@ function setGlobalAbort(controller: AbortController | null) {
 
 function clearProjectClients(): void {
 	projectClients.clear()
-	projectStatusBridgeDirs.clear()
+	projectEventBridgeDirs.clear()
+}
+
+function clearDiscoverySessionCache(): void {
+	discoveredSessions = null
+}
+
+function normalizeDirectoryPath(value: string): string {
+	return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+}
+
+function filterDiscoveredSessions(
+	sessions: Session[],
+	directory: string,
+	options?: { limit?: number; roots?: boolean; search?: string },
+): Session[] {
+	const target = normalizeDirectoryPath(directory)
+	let filtered = sessions.filter((session) => {
+		if (!session.directory) return false
+		return normalizeDirectoryPath(session.directory) === target
+	})
+	if (options?.roots) {
+		filtered = filtered.filter((session) => !session.parentID)
+	}
+	if (options?.search) {
+		const query = options.search.toLowerCase()
+		filtered = filtered.filter((session) =>
+			(session.title ?? session.id).toLowerCase().includes(query),
+		)
+	}
+	if (options?.limit !== undefined) {
+		filtered = filtered.slice(0, options.limit)
+	}
+	return filtered
+}
+
+async function hydrateProjectSessionsFromCache(
+	directory: string,
+	sandboxDirs: Set<string> | undefined,
+	options: { limit?: number; roots?: boolean; search?: string } | undefined,
+): Promise<boolean> {
+	if (!discoveredSessions) return false
+
+	const baseClient = getBaseClient()
+	if (!baseClient) return false
+
+	const sessions = filterDiscoveredSessions(discoveredSessions, directory, options)
+	const statuses = await getSessionStatuses(baseClient)
+	appStore.set(setSessionsAtom, { sessions, statuses, directory, sandboxDirs })
+
+	if (options?.limit !== undefined) {
+		appStore.set(updateProjectPaginationAtom, {
+			directory,
+			fetchedCount: sessions.length,
+			limit: options.limit,
+		})
+	}
+
+	return true
 }
 
 // ============================================================
@@ -112,6 +173,7 @@ export async function connectToDevo(url: string, authHeader?: string | null): Pr
 		log.info("Disconnecting previous connection", { url: connection.url })
 		connection.abortController.abort()
 		clearProjectClients()
+		clearDiscoverySessionCache()
 	}
 
 	// Also abort any stale ACP event loop from a previous HMR module that we can't
@@ -165,7 +227,9 @@ export async function loadAllProjects() {
 		return []
 	}
 	try {
-		const projects = await listProjects(client)
+		const sessions = await listSessions(client)
+		discoveredSessions = sessions
+		const projects = projectsFromSessions(sessions)
 		log.info("Loaded projects from API", { count: projects.length })
 		return projects
 	} catch (err) {
@@ -188,13 +252,21 @@ export async function loadProjectSessions(
 	sandboxDirs?: Set<string>,
 	options?: { limit?: number; roots?: boolean; search?: string },
 ): Promise<void> {
-	const client = getProjectClient(directory)
-	if (!client) return
-
-	// Set loading state so the sidebar shows a spinner
 	if (options?.limit) {
 		appStore.set(setProjectPaginationLoadingAtom, directory)
 	}
+
+	if (await hydrateProjectSessionsFromCache(directory, sandboxDirs, options)) {
+		log.info("Loaded sessions for project from discovery cache", {
+			directory,
+			limit: options?.limit,
+			roots: options?.roots,
+		})
+		return
+	}
+
+	const client = getProjectClient(directory)
+	if (!client) return
 
 	try {
 		const sessions = await listSessions(client, options)
@@ -242,6 +314,19 @@ export async function loadMoreProjectSessions(
 	const nextLimit = currentLimit + SESSIONS_PAGE_SIZE
 	log.info("Loading more sessions", { directory, currentLimit, nextLimit })
 	appStore.set(setProjectPaginationLoadingAtom, directory)
+
+	if (
+		await hydrateProjectSessionsFromCache(directory, undefined, {
+			limit: nextLimit,
+			roots: true,
+		})
+	) {
+		log.info("Loaded more sessions for project from discovery cache", {
+			directory,
+			limit: nextLimit,
+		})
+		return
+	}
 
 	const client = getProjectClient(directory)
 	if (!client) {
@@ -314,7 +399,7 @@ export function getProjectClient(directory: string): DevoClient | null {
 			authHeader: connection.authHeader ?? undefined,
 		})
 		projectClients.set(directory, client)
-		startProjectStatusBridge(client, directory, connection.abortController.signal)
+		startProjectEventBridge(client, directory, connection.abortController.signal)
 	}
 	return client
 }
@@ -647,9 +732,9 @@ async function startEventLoop(
 	log.info("ACP event loop exited", { generation, stale: generation !== eventLoopGeneration })
 }
 
-function startProjectStatusBridge(client: DevoClient, directory: string, signal: AbortSignal): void {
-	if (projectStatusBridgeDirs.has(directory)) return
-	projectStatusBridgeDirs.add(directory)
+function startProjectEventBridge(client: DevoClient, directory: string, signal: AbortSignal): void {
+	if (projectEventBridgeDirs.has(directory)) return
+	projectEventBridgeDirs.add(directory)
 
 	void (async () => {
 		const batcher = createEventBatcher()
@@ -658,17 +743,17 @@ function startProjectStatusBridge(client: DevoClient, directory: string, signal:
 			for await (const globalEvent of stream) {
 				if (signal.aborted) break
 				const event = globalEvent.payload
-				if (event?.type === "session.status") {
+				if (event) {
 					batcher.enqueue(event)
 				}
 			}
 		} catch (err) {
 			if (!signal.aborted) {
-				log.warn("Project status bridge stopped", { directory }, err)
+				log.warn("Project event bridge stopped", { directory }, err)
 			}
 		} finally {
 			batcher.dispose(signal.aborted)
-			projectStatusBridgeDirs.delete(directory)
+			projectEventBridgeDirs.delete(directory)
 		}
 	})()
 }

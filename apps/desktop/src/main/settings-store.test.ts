@@ -31,6 +31,7 @@ function expectedSettings() {
 			colorScheme: "dark",
 			themeId: "default",
 			displayMode: "default",
+			hideThinkingWhileWorking: true,
 			rendererPreferencesMigrated: false,
 		},
 		openIn: {
@@ -106,6 +107,7 @@ describe("settings-store", () => {
 				colorScheme: "system",
 				themeId: "default",
 				displayMode: "default",
+				hideThinkingWhileWorking: true,
 				rendererPreferencesMigrated: false,
 			},
 			openIn: {
@@ -162,6 +164,7 @@ describe("settings-store", () => {
 				colorScheme: "system",
 				themeId: "cortex",
 				displayMode: "verbose",
+				hideThinkingWhileWorking: true,
 				rendererPreferencesMigrated: false,
 			},
 		})
