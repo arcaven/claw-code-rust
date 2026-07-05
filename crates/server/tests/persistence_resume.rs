@@ -386,8 +386,8 @@ async fn runtime_generates_final_title_and_persists_explicit_rename() -> Result<
         .await
         .context("turn/start response")?;
 
-    wait_for_title_update(&mut notifications_rx, "Generated rollout title").await?;
     wait_for_turn_completed(&mut notifications_rx).await?;
+    wait_for_title_update(&mut notifications_rx, "Generated rollout title").await?;
 
     let resume_after_completion = runtime
         .handle_incoming(
@@ -1354,7 +1354,7 @@ fn build_runtime_with_provider(
 async fn initialize_connection(
     runtime: &Arc<ServerRuntime>,
 ) -> Result<(u64, mpsc::Receiver<serde_json::Value>)> {
-    let (notifications_tx, notifications_rx) = mpsc::channel(/*buffer*/ 4096);
+    let (notifications_tx, notifications_rx) = devo_server::test_outbound_channel(4096);
     let connection_id = runtime
         .register_connection(ClientTransportKind::Stdio, notifications_tx)
         .await;

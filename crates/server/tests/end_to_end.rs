@@ -245,6 +245,7 @@ async fn stdio_server_process_supports_handshake_and_session_start() -> Result<(
             format!(
                 "{}\n",
                 serde_json::json!({
+                    "jsonrpc": "2.0",
                     "id": 2,
                     "method": "session/new",
                     "params": {
@@ -377,6 +378,7 @@ async fn second_stdio_server_process_proxies_to_singleton() -> Result<()> {
             format!(
                 "{}\n",
                 serde_json::json!({
+                    "jsonrpc": "2.0",
                     "id": 2,
                     "method": "session/new",
                     "params": {
@@ -484,6 +486,7 @@ async fn websocket_listener_supports_handshake_subscription_and_turn_lifecycle()
     socket
         .send(Message::Text(
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 2,
                 "method": "session/new",
                 "params": {
@@ -523,6 +526,7 @@ async fn websocket_listener_supports_handshake_subscription_and_turn_lifecycle()
     socket
         .send(Message::Text(
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 3,
                 "method": "_devo/turn/start",
                 "params": {
@@ -573,6 +577,7 @@ async fn websocket_listener_supports_handshake_subscription_and_turn_lifecycle()
     socket
         .send(Message::Text(
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 4,
                 "method": "_devo/turn/interrupt",
                 "params": {
@@ -693,6 +698,7 @@ async fn websocket_turn_streams_final_tool_metadata_for_read_and_glob() -> Resul
     socket
         .send(Message::Text(
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 2,
                 "method": "session/new",
                 "params": {
@@ -728,6 +734,7 @@ async fn websocket_turn_streams_final_tool_metadata_for_read_and_glob() -> Resul
     socket
         .send(Message::Text(
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 3,
                 "method": "_devo/turn/start",
                 "params": {

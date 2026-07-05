@@ -46,6 +46,7 @@ async fn goal_clear_interrupts_active_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 120,
                 "method": "_devo/goal/clear",
                 "params": {
@@ -86,6 +87,7 @@ async fn goal_complete_interrupts_active_hidden_continuation_turn() -> Result<()
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 121,
                 "method": "_devo/goal/complete",
                 "params": {
@@ -128,6 +130,7 @@ async fn goal_cancel_interrupts_active_hidden_continuation_turn() -> Result<()> 
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 126,
                 "method": "goal/cancel",
                 "params": {
@@ -185,6 +188,7 @@ async fn replacing_goal_interrupts_old_hidden_turn_and_starts_new_goal_cleanly()
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 122,
                 "method": "_devo/goal/status",
                 "params": {
@@ -239,6 +243,7 @@ async fn pausing_budget_limited_wrapup_preserves_budget_limited_status() -> Resu
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 123,
                 "method": "_devo/goal/set",
                 "params": {
@@ -262,6 +267,7 @@ async fn pausing_budget_limited_wrapup_preserves_budget_limited_status() -> Resu
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 124,
                 "method": "_devo/goal/set",
                 "params": {
@@ -295,6 +301,7 @@ async fn start_created_goal(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 125,
                 "method": "_devo/goal/create",
                 "params": {

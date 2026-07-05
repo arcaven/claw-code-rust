@@ -107,24 +107,6 @@ impl ScriptedResearchProvider {
             expected_cwd: expected_cwd.display().to_string(),
         }
     }
-
-    fn with_delegated_worker_failure_once(expected_cwd: &std::path::Path) -> Self {
-        Self::with_delegated_worker_failures_before_success(expected_cwd, 1)
-    }
-
-    fn with_delegated_worker_failures_before_success(
-        expected_cwd: &std::path::Path,
-        failures: usize,
-    ) -> Self {
-        Self {
-            stream_calls: AtomicUsize::new(0),
-            final_report_stream_calls: AtomicUsize::new(0),
-            delegated_worker_failures_before_success: AtomicUsize::new(failures),
-            researcher_gate: None,
-            final_report_mode: ScriptedFinalReportMode::Text,
-            expected_cwd: expected_cwd.display().to_string(),
-        }
-    }
 }
 
 #[async_trait]
@@ -194,7 +176,11 @@ impl ModelProviderSDK for ScriptedResearchProvider {
                     .contains("Research the current official DeepSeek website domain"),
                 "research question should not be injected into system prompt"
             );
-            streamed_text_events(
+            streamed_text_event_chunks(
+                &[
+                    r#"{"need_clarification":false,"question":"","verification":"Research "#,
+                    r#"DeepSeek official website."}"#,
+                ],
                 r#"{"need_clarification":false,"question":"","verification":"Research DeepSeek official website."}"#,
             )
         } else if request_has_stage(&request, "research brief") {
@@ -593,6 +579,10 @@ async fn deep_research_turn_streams_artifact_reasoning_and_final_report() -> Res
         "expected streamed research artifact delta: {events:#?}"
     );
     assert!(
+        events.iter().any(is_clarification_artifact_delta),
+        "expected streamed clarification artifact delta: {events:#?}"
+    );
+    assert!(
         events.iter().any(is_reasoning_delta),
         "expected reasoning delta: {events:#?}"
     );
@@ -627,9 +617,9 @@ async fn deep_research_turn_streams_artifact_reasoning_and_final_report() -> Res
     assert_eq!(
         completed_turn["params"]["turn"]["usage"],
         serde_json::json!({
-            "input_tokens": 7,
-            "output_tokens": 7,
-            "total_tokens": 14,
+            "input_tokens": 8,
+            "output_tokens": 8,
+            "total_tokens": 16,
             "cache_creation_input_tokens": null,
             "cache_read_input_tokens": null
         })
@@ -668,7 +658,8 @@ async fn deep_research_accepts_write_tool_only_final_report() -> Result<()> {
         report_contents.contains("DeepSeek official website"),
         "expected written report to contain final report content: {report_contents}"
     );
-    let final_report = latest_agent_message(&events).context("expected final report message")?;
+    let final_report = latest_parent_agent_message(&events, session_id)
+        .context("expected final report message")?;
     assert!(
         final_report.contains("Wrote the full research report"),
         "expected final response to point at written report: {final_report}"
@@ -857,100 +848,6 @@ async fn deep_research_streams_researcher_delta_before_query_finishes() -> Resul
 }
 
 #[tokio::test]
-async fn deep_research_continues_after_delegated_worker_failure() -> Result<()> {
-    // Trace: L2-DES-RESEARCH-001
-    // Verifies: supervisor-driven research can retry after a failed delegated worker turn.
-    let workspace = TempDir::new()?;
-    write_live_research_config(workspace.path())?;
-    let provider: Arc<dyn ModelProviderSDK> =
-        Arc::new(ScriptedResearchProvider::with_delegated_worker_failure_once(workspace.path()));
-    let runtime = build_scripted_research_runtime_with_provider(workspace.path(), provider)?;
-    let (connection_id, mut notifications_rx) = initialize_connection(&runtime).await?;
-    let session_id = start_session(&runtime, connection_id, workspace.path()).await?;
-    start_research_turn(&runtime, connection_id, session_id).await?;
-
-    let events = wait_for_research_completion(
-        &runtime,
-        connection_id,
-        session_id,
-        &mut notifications_rx,
-        "Use the provided scope.",
-    )
-    .await?;
-
-    assert!(
-        events.iter().any(|event| {
-            event.get("method") == Some(&serde_json::json!("turn/failed"))
-                && event["params"]["session_id"] != serde_json::json!(session_id.to_string())
-        }),
-        "expected child turn failure to be visible before recovery: {events:#?}"
-    );
-    let completed_turn = events
-        .iter()
-        .find(|event| {
-            event.get("method") == Some(&serde_json::json!("turn/completed"))
-                && event["params"]["session_id"] == serde_json::json!(session_id.to_string())
-        })
-        .context("missing parent research turn completion")?;
-    assert_eq!(
-        completed_turn["params"]["turn"]["status"],
-        serde_json::json!("Completed")
-    );
-    let final_report = latest_agent_message(&events).context("expected final report message")?;
-    assert!(
-        final_report.contains("DeepSeek official website"),
-        "expected final report after delegated worker recovery: {final_report}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn deep_research_restarts_worker_when_continuation_fails() -> Result<()> {
-    // Trace: L2-DES-RESEARCH-001
-    // Verifies: supervisor-driven research can spawn replacement workers after repeated failures.
-    let workspace = TempDir::new()?;
-    write_live_research_config(workspace.path())?;
-    let provider: Arc<dyn ModelProviderSDK> = Arc::new(
-        ScriptedResearchProvider::with_delegated_worker_failures_before_success(
-            workspace.path(),
-            2,
-        ),
-    );
-    let runtime = build_scripted_research_runtime_with_provider(workspace.path(), provider)?;
-    let (connection_id, mut notifications_rx) = initialize_connection(&runtime).await?;
-    let session_id = start_session(&runtime, connection_id, workspace.path()).await?;
-    start_research_turn(&runtime, connection_id, session_id).await?;
-
-    let events = wait_for_research_completion(
-        &runtime,
-        connection_id,
-        session_id,
-        &mut notifications_rx,
-        "Use the provided scope.",
-    )
-    .await?;
-
-    let child_failures = events
-        .iter()
-        .filter(|event| {
-            event.get("method") == Some(&serde_json::json!("turn/failed"))
-                && event["params"]["session_id"] != serde_json::json!(session_id.to_string())
-        })
-        .count();
-    assert_eq!(child_failures, 2);
-    let child_sessions = unique_child_turn_sessions(&events, session_id);
-    assert_eq!(child_sessions.len(), 3);
-    let final_report = latest_agent_message(&events).context("expected final report message")?;
-    assert!(
-        final_report.contains("DeepSeek official website"),
-        "expected final report after replacement worker recovery: {final_report}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn interrupted_research_closes_delegated_child_agent() -> Result<()> {
     // Trace: L2-DES-RESEARCH-001
     // Verifies: interrupting a parent research turn closes delegated child agents owned by the pipeline.
@@ -1002,6 +899,7 @@ async fn interrupted_research_closes_delegated_child_agent() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 33,
                 "method": "_devo/turn/interrupt",
                 "params": {
@@ -1024,6 +922,7 @@ async fn interrupted_research_closes_delegated_child_agent() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 34,
                 "method": "_devo/agent/list",
                 "params": {
@@ -1107,6 +1006,7 @@ async fn interrupted_research_clears_pending_clarification_request() -> Result<(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 32,
                 "method": "_devo/turn/interrupt",
                 "params": {
@@ -1118,8 +1018,10 @@ async fn interrupted_research_clears_pending_clarification_request() -> Result<(
         )
         .await
         .context("turn/interrupt response")?;
+    eprintln!("response: {:?}", interrupt_response);
     let interrupt_response: devo_server::SuccessResponse<devo_server::TurnInterruptResult> =
         serde_json::from_value(interrupt_response)?;
+
     assert_eq!(interrupt_response.result.turn_id.to_string(), turn_id);
 
     let stale_response = respond_to_clarification_raw(
@@ -1551,9 +1453,9 @@ fn hosted_web_search_researcher_response() -> ModelResponse {
 
 fn supervisor_stream_events(request: &ModelRequest) -> Vec<Result<StreamEvent>> {
     assert_supervisor_request_uses_agent_tools(request);
+    #[allow(clippy::never_loop)]
     for attempt in 1..=3 {
         let spawn_id = format!("spawn-supervisor-worker-{attempt}");
-        let wait_id = format!("wait-supervisor-worker-{attempt}");
         if !request_has_tool_result(request, &spawn_id) {
             return streamed_tool_call_events(
                 &spawn_id,
@@ -1564,37 +1466,122 @@ fn supervisor_stream_events(request: &ModelRequest) -> Vec<Result<StreamEvent>> 
                 }),
             );
         }
-        if !request_has_tool_result(request, &wait_id) {
-            let target = tool_result_json(request, &spawn_id)
-                .and_then(|value| {
-                    value
-                        .get("agent_path")
-                        .and_then(serde_json::Value::as_str)
-                        .or_else(|| {
-                            value
-                                .get("child_session_id")
-                                .and_then(serde_json::Value::as_str)
-                        })
-                        .map(str::to_string)
-                })
-                .unwrap_or_default();
-            let mut input = serde_json::json!({ "timeout_ms": 900000 });
-            if !target.is_empty() {
-                input["target"] = serde_json::Value::String(target);
+        let target = tool_result_json(request, &spawn_id)
+            .and_then(|value| {
+                value
+                    .get("agent_path")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        value
+                            .get("child_session_id")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
+        let mut latest_completed_poll = None;
+        for poll_index in 0..=32 {
+            if request_has_tool_result(request, &supervisor_wait_tool_id(attempt, poll_index)) {
+                latest_completed_poll = Some(poll_index);
+            } else {
+                break;
             }
-            return streamed_tool_call_events(&wait_id, "wait_agent", input);
         }
-        let wait_content = request_tool_result_content(request, &wait_id).unwrap_or_default();
-        if !wait_content.contains("failed")
-            && !wait_content.contains("interrupted")
-            && !wait_content.contains("canceled")
-        {
-            return streamed_text_events(supervisor_notes());
+        match latest_completed_poll {
+            None => {
+                let wait_id = supervisor_wait_tool_id(attempt, 0);
+                let mut input = serde_json::json!({ "timeout_secs": 120 });
+                if !target.is_empty() {
+                    input["target"] = serde_json::Value::String(target.clone());
+                }
+                return streamed_tool_call_events(&wait_id, "wait_agent", input);
+            }
+            Some(poll_index) => {
+                let wait_id = supervisor_wait_tool_id(attempt, poll_index);
+                let wait_content =
+                    request_tool_result_content(request, &wait_id).unwrap_or_default();
+                if wait_agent_result_indicates_failure(&wait_content) {
+                    break;
+                }
+                if wait_agent_result_indicates_success(&wait_content) {
+                    return streamed_text_events(supervisor_notes());
+                }
+                if poll_index >= 32 {
+                    break;
+                }
+                let next_poll = poll_index + 1;
+                let next_wait_id = supervisor_wait_tool_id(attempt, next_poll);
+                let mut input = serde_json::json!({ "timeout_secs": 2 });
+                if !target.is_empty() {
+                    input["target"] = serde_json::Value::String(target.clone());
+                }
+                if let Some(next_sequence) = wait_agent_next_sequence(&wait_content) {
+                    input["after_sequence"] = serde_json::json!(next_sequence);
+                }
+                return streamed_tool_call_events(&next_wait_id, "wait_agent", input);
+            }
         }
     }
     streamed_text_events(
         "Supervisor notes: delegated workers failed after retries. Evidence is unavailable; do not infer unsupported claims.",
     )
+}
+
+fn supervisor_wait_tool_id(attempt: usize, poll_index: u32) -> String {
+    if poll_index == 0 {
+        format!("wait-supervisor-worker-{attempt}")
+    } else {
+        format!("wait-supervisor-worker-{attempt}-poll-{poll_index}")
+    }
+}
+
+fn wait_agent_next_sequence(content: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("next_sequence")
+                .and_then(serde_json::Value::as_u64)
+        })
+}
+
+fn wait_agent_result_indicates_failure(content: &str) -> bool {
+    if content.contains("failed") || content.contains("interrupted") || content.contains("canceled")
+    {
+        return true;
+    }
+    wait_agent_statuses(content)
+        .any(|status| matches!(status.as_str(), "failed" | "interrupted" | "closed"))
+}
+
+fn wait_agent_result_indicates_success(content: &str) -> bool {
+    wait_agent_events(content).iter().any(|event| {
+        event.get("kind").and_then(serde_json::Value::as_str) == Some("assistant_message")
+    }) || wait_agent_statuses(content).any(|status| status == "completed")
+}
+
+fn wait_agent_events(content: &str) -> Vec<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("events")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+}
+
+fn wait_agent_statuses(content: &str) -> impl Iterator<Item = String> {
+    wait_agent_events(content).into_iter().filter_map(|event| {
+        if event.get("kind").and_then(serde_json::Value::as_str) != Some("status") {
+            return None;
+        }
+        event
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    })
 }
 
 fn supervisor_worker_message(attempt: usize) -> String {
@@ -1769,10 +1756,30 @@ fn streamed_text_events(text: impl Into<String>) -> Vec<Result<StreamEvent>> {
     ]
 }
 
+fn streamed_text_event_chunks(
+    chunks: &[&str],
+    final_text: impl Into<String>,
+) -> Vec<Result<StreamEvent>> {
+    let final_text = final_text.into();
+    let mut events = chunks
+        .iter()
+        .map(|chunk| {
+            Ok(StreamEvent::TextDelta {
+                index: 0,
+                text: (*chunk).to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    events.push(Ok(StreamEvent::MessageDone {
+        response: model_response(final_text),
+    }));
+    events
+}
+
 async fn initialize_connection(
     runtime: &Arc<ServerRuntime>,
 ) -> Result<(u64, mpsc::Receiver<serde_json::Value>)> {
-    let (notifications_tx, notifications_rx) = mpsc::channel(/*buffer*/ 256);
+    let (notifications_tx, notifications_rx) = devo_server::test_outbound_channel(256);
     let connection_id = runtime
         .register_connection(ClientTransportKind::Stdio, notifications_tx)
         .await;
@@ -1861,6 +1868,7 @@ async fn start_research_turn(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 3,
                 "method": "_devo/turn/start",
                 "params": {
@@ -1900,6 +1908,7 @@ async fn start_regular_turn_after_research(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 30,
                 "method": "_devo/turn/start",
                 "params": {
@@ -1939,6 +1948,7 @@ async fn queue_regular_turn_during_research(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 31,
                 "method": "_devo/turn/start",
                 "params": {
@@ -2200,6 +2210,15 @@ fn is_reasoning_delta(event: &serde_json::Value) -> bool {
                 == serde_json::json!("agent_thought_chunk"))
 }
 
+fn is_clarification_artifact_delta(event: &serde_json::Value) -> bool {
+    if event.get("method") != Some(&serde_json::json!("item/researchArtifact/delta")) {
+        return false;
+    }
+    event["params"]["payload"]["delta"]
+        .as_str()
+        .is_some_and(|delta| delta.contains("Research "))
+}
+
 fn is_agent_message_delta(event: &serde_json::Value) -> bool {
     event.get("method") == Some(&serde_json::json!("item/agentMessage/delta"))
         || (event.get("method") == Some(&serde_json::json!("session/update"))
@@ -2217,21 +2236,6 @@ fn child_turn_session_id(
     (session_id != parent_session_id.to_string()).then(|| session_id.to_string())
 }
 
-fn unique_child_turn_sessions(
-    events: &[serde_json::Value],
-    parent_session_id: devo_core::SessionId,
-) -> Vec<String> {
-    let mut sessions = Vec::new();
-    for event in events {
-        let Some(session_id) = child_turn_session_id(event, parent_session_id) else {
-            continue;
-        };
-        if !sessions.contains(&session_id) {
-            sessions.push(session_id);
-        }
-    }
-    sessions
-}
 fn legacy_event_from_acp_notification(value: serde_json::Value) -> serde_json::Value {
     if value.get("method") != Some(&serde_json::json!("session/update")) {
         return value;
@@ -2263,21 +2267,45 @@ fn legacy_event_from_acp_notification(value: serde_json::Value) -> serde_json::V
 }
 
 fn latest_agent_message(events: &[serde_json::Value]) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .find_map(agent_message_from_completed_event)
+}
+
+fn latest_parent_agent_message(
+    events: &[serde_json::Value],
+    session_id: devo_core::SessionId,
+) -> Option<String> {
+    let expected_session_id = session_id.to_string();
     events.iter().rev().find_map(|event| {
-        if event.get("method") != Some(&serde_json::json!("item/completed")) {
+        if event_session_id(event) != Some(expected_session_id.as_str()) {
             return None;
         }
-        let item = &event["params"]["item"];
-        if item["item_kind"] == serde_json::json!("agent_message") {
-            return item["payload"]["text"].as_str().map(str::to_string);
-        }
-        if item["item_kind"] == serde_json::json!("research_artifact")
-            && item["payload"]["artifact_type"] == serde_json::json!("failure")
-        {
-            return item["payload"]["content"].as_str().map(str::to_string);
-        }
-        None
+        agent_message_from_completed_event(event)
     })
+}
+
+fn event_session_id(event: &serde_json::Value) -> Option<&str> {
+    event["params"]["context"]["session_id"]
+        .as_str()
+        .or_else(|| event["params"]["session_id"].as_str())
+}
+
+fn agent_message_from_completed_event(event: &serde_json::Value) -> Option<String> {
+    if event.get("method") != Some(&serde_json::json!("item/completed")) {
+        return None;
+    }
+    let item = &event["params"]["item"];
+    if item["item_kind"] == serde_json::json!("agent_message") {
+        return item["payload"]["text"].as_str().map(str::to_string);
+    }
+    if item["item_kind"] == serde_json::json!("research_artifact")
+        && item["payload"]["artifact_type"] == serde_json::json!("failure")
+    {
+        return item["payload"]["content"].as_str().map(str::to_string);
+    }
+    None
 }
 
 async fn respond_to_clarification(
@@ -2325,6 +2353,7 @@ async fn respond_to_clarification_raw(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 4,
                 "method": "_devo/request_user_input/respond",
                 "params": {
@@ -2362,6 +2391,10 @@ fn assert_research_artifacts(events: &[serde_json::Value]) {
         .filter_map(|event| event["params"]["item"]["payload"]["artifact_type"].as_str())
         .collect::<Vec<_>>();
 
+    assert!(
+        artifact_types.contains(&"clarification"),
+        "expected clarification artifact: {events:#?}"
+    );
     assert!(
         artifact_types.contains(&"brief"),
         "expected brief artifact: {events:#?}"

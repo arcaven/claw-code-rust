@@ -19,6 +19,28 @@ impl ServerRuntime {
         let Some(context) = self.hook_context_for_session(child_session_id).await else {
             return;
         };
+        Self::run_subagent_stop_hook_with_context(context).await;
+    }
+
+    /// Same as `run_subagent_stop_hook`, but reads hook context directly from
+    /// `state` instead of round-tripping through the session actor mailbox.
+    ///
+    /// Must be used when `child_session_id` is the session actor currently
+    /// executing this code: that actor's mailbox is not being polled until
+    /// the in-flight turn finishes, so a mailbox round-trip here would
+    /// deadlock forever waiting on itself.
+    pub(super) async fn run_subagent_stop_hook_for_actor_state(
+        &self,
+        state: &SessionActorState,
+        child_session_id: SessionId,
+    ) {
+        let Some(context) = Self::hook_context_from_actor_state(state, child_session_id) else {
+            return;
+        };
+        Self::run_subagent_stop_hook_with_context(context).await;
+    }
+
+    async fn run_subagent_stop_hook_with_context(context: devo_core::HookRuntimeContext) {
         context
             .runner
             .run(devo_core::HookInput::new(
@@ -37,11 +59,8 @@ impl ServerRuntime {
     ) {
         self.set_agent_status(parent_session_id, child_session_id, SubagentStatus::Failed)
             .await;
-        if let Some(session_arc) = self.sessions.lock().await.get(&child_session_id).cloned() {
-            let mut session = session_arc.lock().await;
-            session.summary.status = SessionRuntimeStatus::Idle;
-            session.summary.updated_at = Utc::now();
-            session.summary.last_activity_at = session.summary.updated_at;
+        if let Some(session_handle) = self.sessions.lock().await.get(&child_session_id).cloned() {
+            session_handle.set_session_idle(None).await;
         }
         self.broadcast_event(ServerEvent::SessionStatusChanged(
             SessionStatusChangedPayload {
@@ -65,28 +84,17 @@ impl ServerRuntime {
         self: &Arc<Self>,
         child_session_id: SessionId,
     ) -> Option<TurnMetadata> {
-        if let Some(cancel_token) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .remove(&child_session_id)
-        {
+        // Cancel via a clone rather than `remove` so a concurrent read of the
+        // same token (e.g. `run_turn_model_query` fetching it to race against
+        // the in-flight query) cannot lose the signal by finding the map entry
+        // already gone and falling back to a fresh, disconnected token. The
+        // entry itself is cleaned up later by `finalize_executed_turn`.
+        if let Some(cancel_token) = self.active_turns.cancel_token(child_session_id).await {
             cancel_token.cancel();
         }
-        if let Some(task) = self.active_tasks.lock().await.remove(&child_session_id) {
-            task.abort();
-        }
-        let session_arc = self.sessions.lock().await.get(&child_session_id).cloned()?;
-        let mut session = session_arc.lock().await;
-        session.summary.status = SessionRuntimeStatus::Idle;
-        session.summary.updated_at = Utc::now();
-        session.summary.last_activity_at = session.summary.updated_at;
-        session.active_turn.take().map(|mut turn| {
-            turn.status = TurnStatus::Interrupted;
-            turn.completed_at = Some(Utc::now());
-            session.latest_turn = Some(turn.clone());
-            turn
-        })
+        self.active_turns.abort_task(child_session_id).await;
+        let session_handle = self.sessions.lock().await.get(&child_session_id).cloned()?;
+        session_handle.interrupt_active_turn().await?
     }
 }
 
@@ -263,20 +271,18 @@ mod tests {
                 session_id: parent_session_id,
                 target: None,
                 after_sequence: None,
-                timeout_ms: Some(1),
+                timeout_secs: Some(0),
             })
             .await?;
         assert_eq!(
             wait_result.events,
-            vec![devo_protocol::AgentOutputEvent {
+            vec![devo_protocol::ParentAgentOutputEvent {
                 sequence: 1,
-                child_session_id,
                 agent_path: "root/review".to_string(),
-                turn_id: wait_result.events[0].turn_id,
-                kind: "status".to_string(),
+                agent_nickname: "review".to_string(),
+                kind: devo_protocol::AgentOutputEventKind::Status,
                 text: Some("failed to start child agent: rollout append failed".to_string()),
                 status: Some("failed".to_string()),
-                created_at: wait_result.events[0].created_at,
             }]
         );
 
@@ -307,21 +313,10 @@ mod tests {
         let session_id = response.result.session.session_id;
         let bad_rollout_path = data_root.path().join("rollout-dir");
         std::fs::create_dir(&bad_rollout_path)?;
-        let session_arc = runtime
-            .sessions
-            .lock()
-            .await
-            .get(&session_id)
-            .cloned()
-            .expect("session");
-        {
-            let mut session = session_arc.lock().await;
-            session
-                .record
-                .as_mut()
-                .expect("durable record")
-                .rollout_path = bad_rollout_path;
-        }
+        let session_handle = runtime.session(session_id).await.expect("session");
+        session_handle
+            .update_record_rollout_path(bad_rollout_path)
+            .await;
 
         let error = runtime
             .start_runtime_turn(
@@ -332,12 +327,16 @@ mod tests {
             )
             .await
             .expect_err("append failure");
-        let session = session_arc.lock().await;
+        let reservation = session_handle
+            .turn_reservation_snapshot()
+            .await
+            .expect("turn reservation snapshot");
+        let summary = session_handle.summary().await.expect("summary");
 
         assert!(matches!(error, ToolCallError::InternalError(_)));
-        assert_eq!(session.active_turn, None);
-        assert_eq!(session.summary.status, SessionRuntimeStatus::Idle);
-        assert_eq!(session.latest_turn, None);
+        assert_eq!(reservation.active_turn, None);
+        assert_eq!(summary.status, SessionRuntimeStatus::Idle);
+        assert_eq!(reservation.latest_turn, None);
 
         Ok(())
     }

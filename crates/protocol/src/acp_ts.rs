@@ -333,7 +333,11 @@ pub fn generate_protocol_typescript() -> String {
     push_decl::<WaitAgentParams>(&cfg, &mut output);
     push_decl::<AgentMailboxMessage>(&cfg, &mut output);
     push_decl::<WaitAgentResult>(&cfg, &mut output);
-    push_decl::<AgentOutputEvent>(&cfg, &mut output);
+    push_decl::<AgentOutputEventKind>(&cfg, &mut output);
+    push_decl::<ParentAgentOutputEvent>(&cfg, &mut output);
+    push_decl::<ParentSpawnAgentResult>(&cfg, &mut output);
+    push_decl::<ParentAgentInfo>(&cfg, &mut output);
+    push_decl::<ParentAgentListResult>(&cfg, &mut output);
     push_decl::<AgentInfo>(&cfg, &mut output);
     push_decl::<AgentListParams>(&cfg, &mut output);
     push_decl::<AgentListResult>(&cfg, &mut output);

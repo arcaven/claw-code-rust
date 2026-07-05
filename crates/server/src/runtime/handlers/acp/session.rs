@@ -410,16 +410,8 @@ impl ServerRuntime {
     ) -> Result<Vec<SessionId>, String> {
         let session_ids = self.collect_session_delete_tree(root_session_id).await;
         for session_id in &session_ids {
-            if self.sessions.lock().await.contains_key(session_id) {
-                self.handle_acp_session_cancel(
-                    serde_json::to_value(AcpCancelParams {
-                        session_id: *session_id,
-                        meta: None,
-                    })
-                    .expect("serialize ACP cancel params"),
-                )
+            self.await_session_turn_interrupt_before_delete(*session_id)
                 .await;
-            }
         }
 
         let mut deleted_session_ids = Vec::new();
@@ -457,19 +449,16 @@ impl ServerRuntime {
     }
 
     async fn collect_session_delete_tree(&self, root_session_id: SessionId) -> Vec<SessionId> {
-        let session_entries = {
+        let session_ids_in_runtime: Vec<SessionId> = {
             let sessions = self.sessions.lock().await;
-            sessions
-                .iter()
-                .map(|(session_id, session_arc)| (*session_id, Arc::clone(session_arc)))
-                .collect::<Vec<_>>()
+            sessions.keys().copied().collect()
         };
         let mut parent_by_session = Vec::new();
-        for (session_id, session_arc) in session_entries {
-            let session = session_arc.lock().await;
-            parent_by_session.push((session_id, session.summary.parent_session_id));
+        for session_id in session_ids_in_runtime {
+            let parent_id = self.session_parent_id_snapshot(session_id).await.flatten();
+            parent_by_session.push((session_id, parent_id));
         }
-        parent_by_session.sort_by_key(|(session_id, _)| session_id.to_string());
+        parent_by_session.sort_by_key(|(session_id, _parent_id)| session_id.to_string());
 
         let mut seen = std::collections::HashSet::new();
         let mut session_ids = Vec::new();
@@ -488,22 +477,21 @@ impl ServerRuntime {
         session_ids
     }
 
+    async fn await_session_turn_interrupt_before_delete(self: &Arc<Self>, session_id: SessionId) {
+        let Some(turn_id) = self.runtime_active_turn_id(session_id).await else {
+            return;
+        };
+        let receiver = self.subscribe_terminal_turn_status(turn_id).await;
+        if self.recent_terminal_turn_status(turn_id).await.is_some() {
+            return;
+        }
+        self.signal_active_turn_interrupt(session_id).await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), receiver).await;
+    }
+
     async fn clear_deleted_session_runtime_state(&self, session_id: SessionId) {
-        if let Some(task) = self.active_tasks.lock().await.remove(&session_id) {
-            task.abort();
-        }
-        if let Some(cancellation) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .remove(&session_id)
-        {
-            cancellation.cancel();
-        }
-        self.active_turn_connections
-            .lock()
-            .await
-            .remove(&session_id);
+        self.signal_active_turn_interrupt(session_id).await;
+        self.active_turns.clear_runtime_handles(session_id).await;
         if let Some(turn_id) = self
             .active_goal_continuation_turns
             .lock()
@@ -518,6 +506,7 @@ impl ServerRuntime {
         self.goal_stores.lock().await.remove(&session_id);
         self.agent_mailboxes.lock().await.remove(&session_id);
         self.agent_output_buffers.lock().await.remove(&session_id);
+        self.agent_wait_cursors.lock().await.remove(&session_id);
         {
             let mut registries = self.agent_registries.lock().await;
             registries.remove(&session_id);

@@ -8,7 +8,7 @@ use super::research_capture::{
 use super::research_parsing::{
     is_request_user_input_tool_name, is_spawn_agent_tool_name,
     request_user_input_exchanges_from_response, request_user_input_questions_from_input,
-    spawn_agent_child_session_id, tool_content_to_json,
+    spawn_agent_child_session_id, spawn_agent_child_target, tool_content_to_json,
 };
 use super::research_stages::ResearchStageKind;
 use super::research_stages::StreamedResearchArtifact;
@@ -37,7 +37,13 @@ impl ServerRuntime {
     ) -> anyhow::Result<()> {
         match capture {
             ResearchStageCapture::Clarification(capture) => {
-                self.handle_clarification_query_event(context, capture, event)
+                let artifact = artifact
+                    .ok_or_else(|| anyhow::anyhow!("research {stage:?} missing artifact"))?;
+                let artifact_context = ResearchArtifactEventContext {
+                    query: context,
+                    artifact,
+                };
+                self.handle_clarification_query_event(artifact_context, capture, event)
                     .await;
             }
             ResearchStageCapture::Artifact(capture) => {
@@ -200,13 +206,23 @@ impl ServerRuntime {
                 summary,
             } => {
                 let output = tool_content_to_json(content);
-                if is_spawn_agent_tool_name(&tool_name)
-                    && !is_error
-                    && let Some(child_session_id) = spawn_agent_child_session_id(&output)
-                {
-                    self.remember_research_child_agent(session_id, child_session_id)
-                        .await;
-                    capture.spawned_worker_count += 1;
+                if is_spawn_agent_tool_name(&tool_name) && !is_error {
+                    let child_session_id =
+                        if let Some(child_session_id) = spawn_agent_child_session_id(&output) {
+                            Some(child_session_id)
+                        } else if let Some(target) = spawn_agent_child_target(&output) {
+                            self.resolve_child_agent(session_id, &target)
+                                .await
+                                .ok()
+                                .map(|metadata| metadata.session_id)
+                        } else {
+                            None
+                        };
+                    if let Some(child_session_id) = child_session_id {
+                        self.remember_research_child_agent(session_id, child_session_id)
+                            .await;
+                        capture.spawned_worker_count += 1;
+                    }
                 }
                 if let Some(pending) = capture.pending_tools.remove(&tool_use_id) {
                     self.complete_item(
@@ -444,17 +460,25 @@ impl ServerRuntime {
 
     async fn handle_clarification_query_event(
         &self,
-        context: ResearchQueryEventContext<'_>,
+        context: ResearchArtifactEventContext<'_>,
         capture: &mut ClarificationQueryCapture,
         event: QueryEvent,
     ) {
-        let session_id = context.session_id;
-        let turn_id = context.turn_id;
-        let usage_ledger = context.usage_ledger;
-        let context_window = context.context_window;
+        let session_id = context.query.session_id;
+        let turn_id = context.query.turn_id;
+        let usage_ledger = context.query.usage_ledger;
+        let context_window = context.query.context_window;
         match event {
             QueryEvent::TextDelta(text) => {
                 capture.text.push_str(&text);
+                self.push_research_artifact_delta(
+                    session_id,
+                    turn_id,
+                    &mut capture.artifact,
+                    context.artifact,
+                    text,
+                )
+                .await;
             }
             QueryEvent::ToolUseStart {
                 id, name, input, ..

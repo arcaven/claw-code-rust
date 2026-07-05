@@ -1,6 +1,36 @@
 use super::*;
 
 impl ServerRuntime {
+    fn wait_agent_cursor_key(target: Option<&str>) -> String {
+        devo_protocol::wait_agent_cursor_key(target)
+    }
+
+    async fn wait_agent_cursor(&self, parent_session_id: SessionId, target_key: &str) -> u64 {
+        self.agent_wait_cursors
+            .lock()
+            .await
+            .get(&parent_session_id)
+            .and_then(|cursors| cursors.get(target_key).copied())
+            .unwrap_or_default()
+    }
+
+    async fn update_wait_agent_cursor(
+        &self,
+        parent_session_id: SessionId,
+        target_key: &str,
+        consumed_sequence: u64,
+    ) {
+        if consumed_sequence == 0 {
+            return;
+        }
+        self.agent_wait_cursors
+            .lock()
+            .await
+            .entry(parent_session_id)
+            .or_default()
+            .insert(target_key.to_string(), consumed_sequence);
+    }
+
     async fn send_message_inner(
         self: &Arc<Self>,
         params: devo_protocol::AgentMessageParams,
@@ -8,8 +38,14 @@ impl ServerRuntime {
         let route = self
             .queue_agent_message(params.session_id, &params.target, params.message)
             .await?;
-        self.drain_child_mailbox_into_user_turns(route.to_session_id)
-            .await?;
+        if self
+            .active_turn_id_for_session(route.to_session_id)
+            .await
+            .is_none()
+        {
+            self.drain_child_mailbox_into_user_turns(route.to_session_id)
+                .await?;
+        }
         Ok(devo_protocol::AgentMessageResult { delivered: true })
     }
 
@@ -17,24 +53,38 @@ impl ServerRuntime {
         &self,
         params: devo_protocol::WaitAgentParams,
     ) -> Result<devo_protocol::WaitAgentResult, ToolCallError> {
-        let timeout = params
-            .timeout_ms
-            .map(Duration::from_millis)
-            .unwrap_or(DEFAULT_WAIT_AGENT_TIMEOUT)
-            .min(MAX_WAIT_AGENT_TIMEOUT);
+        let timeout = Duration::from_secs(devo_protocol::resolve_wait_agent_timeout(
+            params.timeout_secs,
+        ));
         let target_session_ids = self
             .resolve_wait_agent_targets(params.session_id, params.target.as_deref())
             .await?;
+        let cursor_key = Self::wait_agent_cursor_key(params.target.as_deref());
+        let effective_after_sequence = match params.after_sequence {
+            Some(after_sequence) => after_sequence,
+            None => self.wait_agent_cursor(params.session_id, &cursor_key).await,
+        };
         let output_buffer = self.output_buffer(params.session_id).await;
+        let cancel = self.active_turns.cancel_token(params.session_id).await;
         let (events, next_sequence, timed_out) = output_buffer
             .wait_after(
-                params.after_sequence.unwrap_or_default(),
+                effective_after_sequence,
                 &target_session_ids,
                 timeout,
+                cancel,
             )
             .await;
+        if let Some(consumed_sequence) = events.iter().map(|event| event.sequence).max()
+            && params.after_sequence.is_none()
+        {
+            self.update_wait_agent_cursor(params.session_id, &cursor_key, consumed_sequence)
+                .await;
+        }
         Ok(devo_protocol::WaitAgentResult {
-            events,
+            events: events
+                .into_iter()
+                .map(devo_protocol::ParentAgentOutputEvent::from)
+                .collect(),
             next_sequence,
             timed_out,
         })

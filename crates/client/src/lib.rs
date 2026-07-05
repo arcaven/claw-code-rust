@@ -1,15 +1,19 @@
 //! Client-side transport API for talking to a Devo server.
 //!
-//! The crate currently exposes the stdio client used by local frontends. It
-//! keeps request/notification framing here so UI crates can call typed protocol
-//! methods without owning process I/O or response demultiplexing.
+//! Protocol logic (JSON-RPC routing, pending response maps, ACP client handlers)
+//! lives in [`client_core`]. [`stdio::StdioServerClient`] and
+//! [`websocket::WebSocketServerClient`] are thin transport adapters.
 
 mod acp_fs;
 mod acp_permissions;
 mod acp_terminal;
 mod client_core;
+mod protocol_trace;
 mod stdio;
 mod websocket;
 
+pub use client_core::ACP_PROMPT_COMPLETED_NOTIFICATION_METHOD;
+pub use client_core::ACP_PROMPT_STARTED_NOTIFICATION_METHOD;
+pub use client_core::ServerNotificationMessage;
 pub use stdio::*;
 pub use websocket::*;

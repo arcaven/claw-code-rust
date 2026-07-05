@@ -55,6 +55,7 @@ async fn goal_token_budget_reached_after_turn_enters_budget_limited() -> Result<
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 9,
                 "method": "_devo/goal/set",
                 "params": {
@@ -75,6 +76,7 @@ async fn goal_token_budget_reached_after_turn_enters_budget_limited() -> Result<
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 10,
                 "method": "_devo/goal/status",
                 "params": {
@@ -124,6 +126,7 @@ async fn budget_limited_goal_pause_interrupts_pending_wrapup_turn() -> Result<()
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 110,
                 "method": "_devo/goal/set",
                 "params": {
@@ -152,6 +155,7 @@ async fn budget_limited_goal_pause_interrupts_pending_wrapup_turn() -> Result<()
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 111,
                 "method": "_devo/goal/set",
                 "params": {
@@ -209,6 +213,7 @@ async fn persisted_paused_goal_replays_without_continuation() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 11,
                 "method": "_devo/goal/set",
                 "params": {
@@ -232,6 +237,7 @@ async fn persisted_paused_goal_replays_without_continuation() -> Result<()> {
         .handle_incoming(
             replayed_connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 12,
                 "method": "_devo/goal/status",
                 "params": {
@@ -266,6 +272,7 @@ async fn persisted_active_goal_pauses_on_restart_without_continuation() -> Resul
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 13,
                 "method": "_devo/turn/start",
                 "params": {
@@ -287,6 +294,7 @@ async fn persisted_active_goal_pauses_on_restart_without_continuation() -> Resul
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 14,
                 "method": "_devo/goal/set",
                 "params": {
@@ -310,6 +318,7 @@ async fn persisted_active_goal_pauses_on_restart_without_continuation() -> Resul
         .handle_incoming(
             replayed_connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 15,
                 "method": "_devo/goal/status",
                 "params": {
@@ -344,6 +353,7 @@ async fn goal_pause_interrupts_active_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 16,
                 "method": "_devo/goal/set",
                 "params": {
@@ -368,6 +378,7 @@ async fn goal_pause_interrupts_active_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 17,
                 "method": "_devo/goal/set",
                 "params": {
@@ -411,6 +422,7 @@ async fn provider_400_tool_call_adjacency_failure_pauses_goal_without_looping() 
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 13,
                 "method": "_devo/goal/set",
                 "params": {
@@ -429,6 +441,7 @@ async fn provider_400_tool_call_adjacency_failure_pauses_goal_without_looping() 
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 14,
                 "method": "_devo/goal/status",
                 "params": {
@@ -462,6 +475,7 @@ async fn goal_set_starts_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 19,
                 "method": "_devo/turn/start",
                 "params": {
@@ -482,6 +496,7 @@ async fn goal_set_starts_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 20,
                 "method": "_devo/goal/set",
                 "params": {
@@ -511,6 +526,7 @@ async fn goal_set_starts_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 21,
                 "method": "_devo/goal/set",
                 "params": {
@@ -561,6 +577,7 @@ async fn goal_set_does_not_start_continuation_while_turn_is_active() -> Result<(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 30,
                 "method": "_devo/turn/start",
                 "params": {
@@ -582,6 +599,7 @@ async fn goal_set_does_not_start_continuation_while_turn_is_active() -> Result<(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 31,
                 "method": "_devo/goal/set",
                 "params": {
@@ -600,6 +618,7 @@ async fn goal_set_does_not_start_continuation_while_turn_is_active() -> Result<(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 32,
                 "method": "_devo/goal/set",
                 "params": {
@@ -617,6 +636,7 @@ async fn goal_set_does_not_start_continuation_while_turn_is_active() -> Result<(
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 33,
                 "method": "_devo/turn/interrupt",
                 "params": {
@@ -644,6 +664,7 @@ async fn goal_create_starts_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 34,
                 "method": "_devo/goal/create",
                 "params": {
@@ -676,6 +697,7 @@ async fn goal_resume_starts_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 35,
                 "method": "_devo/goal/set",
                 "params": {
@@ -693,6 +715,7 @@ async fn goal_resume_starts_hidden_continuation_turn() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 36,
                 "method": "_devo/goal/resume",
                 "params": {
@@ -728,6 +751,7 @@ async fn queued_user_turn_runs_before_goal_continuation() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 40,
                 "method": "_devo/turn/start",
                 "params": {
@@ -755,6 +779,7 @@ async fn queued_user_turn_runs_before_goal_continuation() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 41,
                 "method": "_devo/turn/start",
                 "params": {
@@ -788,6 +813,7 @@ async fn queued_user_turn_runs_before_goal_continuation() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 42,
                 "method": "_devo/goal/set",
                 "params": {
@@ -817,6 +843,7 @@ async fn queued_user_turn_runs_before_goal_continuation() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 43,
                 "method": "_devo/goal/set",
                 "params": {
@@ -831,6 +858,7 @@ async fn queued_user_turn_runs_before_goal_continuation() -> Result<()> {
         .handle_incoming(
             connection_id,
             serde_json::json!({
+                "jsonrpc": "2.0",
                 "id": 44,
                 "method": "_devo/turn/interrupt",
                 "params": {

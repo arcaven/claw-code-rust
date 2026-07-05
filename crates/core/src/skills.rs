@@ -1,6 +1,5 @@
 //! Core-facing skill catalog wrapper backed by `devo-skills`.
 
-use devo_util_paths;
 use std::path::Path;
 use std::path::PathBuf;
 

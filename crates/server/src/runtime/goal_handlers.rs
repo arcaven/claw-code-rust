@@ -50,16 +50,15 @@ impl ServerRuntime {
                 {
                     tracing::warn!(session_id = %session_id, error = %error, "failed to persist goal create record");
                 }
-                self.sync_core_session_goal(session_id, session_goal).await;
-                self.maybe_start_title_generation_from_user_input(session_id, &title_input)
-                    .await;
+                // Interrupt before any session-actor mailbox round-trip: the actor
+                // may be blocked inside an in-flight continuation turn.
                 if replace_existing {
                     self.interrupt_active_goal_continuation_turn(session_id, "goal replaced")
                         .await;
                 }
-                if should_continue {
-                    self.maybe_start_goal_continuation_turn(session_id).await;
-                }
+                self.sync_core_session_goal(session_id, session_goal).await;
+                self.schedule_goal_followup_work(session_id, Some(title_input), should_continue)
+                    .await;
                 result
             }
             Err(e) => self.error_response(
@@ -119,12 +118,12 @@ impl ServerRuntime {
             })
             .expect("serialize budget-limited goal pause result");
             drop(stores);
-            self.sync_core_session_goal(session_id, None).await;
             self.interrupt_active_goal_continuation_turn(
                 session_id,
                 "budget-limited goal wrap-up stopped",
             )
             .await;
+            self.sync_core_session_goal(session_id, None).await;
             return result;
         }
         match store.set(params) {
@@ -161,7 +160,6 @@ impl ServerRuntime {
                 {
                     tracing::warn!(session_id = %session_id, error = %error, "failed to persist goal status record");
                 }
-                self.sync_core_session_goal(session_id, session_goal).await;
                 if should_interrupt_continuation {
                     self.interrupt_active_goal_continuation_turn(
                         session_id,
@@ -169,13 +167,9 @@ impl ServerRuntime {
                     )
                     .await;
                 }
-                if let Some(title_input) = title_input {
-                    self.maybe_start_title_generation_from_user_input(session_id, &title_input)
-                        .await;
-                }
-                if should_continue {
-                    self.maybe_start_goal_continuation_turn(session_id).await;
-                }
+                self.sync_core_session_goal(session_id, session_goal).await;
+                self.schedule_goal_followup_work(session_id, title_input, should_continue)
+                    .await;
                 result
             }
             Err(e) => self.error_response(
@@ -229,12 +223,12 @@ impl ServerRuntime {
             .expect("serialize budget-limited goal pause result");
             let session_id = params.session_id;
             drop(stores);
-            self.sync_core_session_goal(session_id, None).await;
             self.interrupt_active_goal_continuation_turn(
                 session_id,
                 "budget-limited goal wrap-up stopped",
             )
             .await;
+            self.sync_core_session_goal(session_id, None).await;
             return result;
         }
         match store.set_status(devo_protocol::ThreadGoalStatus::Paused) {
@@ -256,11 +250,11 @@ impl ServerRuntime {
                 {
                     tracing::warn!(session_id = %session_id, error = %error, "failed to persist goal pause record");
                 }
-                self.sync_core_session_goal(session_id, None).await;
                 if should_interrupt_continuation {
                     self.interrupt_active_goal_continuation_turn(session_id, "goal paused")
                         .await;
                 }
+                self.sync_core_session_goal(session_id, None).await;
                 result
             }
             Err(e) => self.error_response(
@@ -318,9 +312,12 @@ impl ServerRuntime {
                     tracing::warn!(session_id = %session_id, error = %error, "failed to persist goal resume record");
                 }
                 self.sync_core_session_goal(session_id, session_goal).await;
-                if should_continue {
-                    self.maybe_start_goal_continuation_turn(session_id).await;
-                }
+                self.schedule_goal_followup_work(
+                    session_id,
+                    /*title_input*/ None,
+                    should_continue,
+                )
+                .await;
                 result
             }
             Err(e) => self.error_response(
@@ -376,9 +373,9 @@ impl ServerRuntime {
                 {
                     tracing::warn!(session_id = %session_id, error = %error, "failed to persist goal complete record");
                 }
-                self.sync_core_session_goal(session_id, None).await;
                 self.interrupt_active_goal_continuation_turn(session_id, "goal completed")
                     .await;
+                self.sync_core_session_goal(session_id, None).await;
                 result
             }
             Err(e) => self.error_response(
@@ -436,9 +433,9 @@ impl ServerRuntime {
                 {
                     tracing::warn!(session_id = %session_id, error = %error, "failed to persist goal cancel record");
                 }
-                self.sync_core_session_goal(session_id, None).await;
                 self.interrupt_active_goal_continuation_turn(session_id, "goal canceled")
                     .await;
+                self.sync_core_session_goal(session_id, None).await;
                 result
             }
             Err(e) => self.error_response(
@@ -484,9 +481,9 @@ impl ServerRuntime {
             {
                 tracing::warn!(session_id = %params.session_id, error = %error, "failed to persist goal clear record");
             }
-            self.sync_core_session_goal(params.session_id, None).await;
             self.interrupt_active_goal_continuation_turn(params.session_id, "goal cleared")
                 .await;
+            self.sync_core_session_goal(params.session_id, None).await;
         }
 
         serde_json::to_value(SuccessResponse {
@@ -530,19 +527,48 @@ impl ServerRuntime {
         session_id: SessionId,
         goal: Option<devo_protocol::ThreadGoal>,
     ) {
-        let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() else {
+        let Some(session_handle) = self.session(session_id).await else {
             return;
         };
-        let core_session = {
-            let session = session_arc.lock().await;
-            Arc::clone(&session.core_session)
-        };
-        if let Ok(mut core_session) = core_session.try_lock() {
-            if let Some(goal) = goal {
-                core_session.set_active_goal(goal);
+        if self.runtime_active_turn_id(session_id).await.is_some() {
+            // Queue without blocking the goal handler; the actor applies this once
+            // the in-flight turn releases the mailbox.
+            let _ = session_handle.try_set_active_goal(goal);
+            return;
+        }
+        session_handle.set_active_goal(goal).await;
+    }
+
+    /// Title generation and continuation startup both need session-actor mailbox
+    /// replies. When a turn is already running inline on that actor, awaiting
+    /// those replies deadlocks the goal handler. Defer title work to a task and
+    /// rely on the post-turn hook for continuation while a turn is active.
+    async fn schedule_goal_followup_work(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        title_input: Option<String>,
+        should_continue: bool,
+    ) {
+        let turn_active = self.runtime_active_turn_id(session_id).await.is_some();
+        if let Some(title_input) = title_input {
+            if turn_active {
+                let runtime = Arc::clone(self);
+                tokio::spawn(async move {
+                    runtime
+                        .maybe_prepare_title_generation_from_user_input(session_id, &title_input)
+                        .await;
+                });
             } else {
-                core_session.clear_active_goal();
+                self.maybe_start_title_generation_from_user_input(session_id, &title_input)
+                    .await;
             }
         }
+        if !should_continue {
+            return;
+        }
+        if turn_active {
+            return;
+        }
+        self.maybe_start_goal_continuation_turn(session_id).await;
     }
 }

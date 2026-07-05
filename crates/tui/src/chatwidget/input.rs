@@ -5,6 +5,8 @@
 
 use std::path::Path;
 
+use std::time::Instant;
+
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -213,6 +215,7 @@ impl ChatWidget {
     pub(crate) fn pre_draw_tick(&mut self) {
         self.advance_startup_header_animation();
         self.run_stream_commit_tick();
+        self.tick_subagent_monitor(Instant::now());
         self.bottom_pane.pre_draw_tick();
     }
 

@@ -121,8 +121,59 @@ impl ScriptedProvider {
         ])
     }
 
-    pub fn wait_agent_tool_call(timeout_ms: u64) -> StreamScript {
-        let input = serde_json::json!({ "timeout_ms": timeout_ms });
+    pub fn dual_spawn_agent_tool_calls(
+        first_message: &str,
+        second_message: &str,
+        fork_turns: &str,
+    ) -> StreamScript {
+        let first_input = serde_json::json!({
+            "message": first_message,
+            "fork_turns": fork_turns,
+        });
+        let second_input = serde_json::json!({
+            "message": second_message,
+            "fork_turns": fork_turns,
+        });
+        let first_id = "spawn-agent-call-1".to_string();
+        let second_id = "spawn-agent-call-2".to_string();
+        StreamScript::Events(vec![
+            StreamEvent::ToolCallStart {
+                index: 0,
+                id: first_id.clone(),
+                name: "spawn_agent".to_string(),
+                input: first_input.clone(),
+            },
+            StreamEvent::ToolCallStart {
+                index: 1,
+                id: second_id.clone(),
+                name: "spawn_agent".to_string(),
+                input: second_input.clone(),
+            },
+            StreamEvent::MessageDone {
+                response: ModelResponse {
+                    id: "dual-spawn-agent-response".to_string(),
+                    content: vec![
+                        ResponseContent::ToolUse {
+                            id: first_id,
+                            name: "spawn_agent".to_string(),
+                            input: first_input,
+                        },
+                        ResponseContent::ToolUse {
+                            id: second_id,
+                            name: "spawn_agent".to_string(),
+                            input: second_input,
+                        },
+                    ],
+                    stop_reason: Some(StopReason::ToolUse),
+                    usage: Usage::default(),
+                    metadata: ResponseMetadata::default(),
+                },
+            },
+        ])
+    }
+
+    pub fn wait_agent_tool_call(timeout_secs: u64) -> StreamScript {
+        let input = serde_json::json!({ "timeout_secs": timeout_secs });
         let tool_call_id = "wait-agent-call".to_string();
         StreamScript::Events(vec![
             StreamEvent::ToolCallStart {
@@ -238,7 +289,7 @@ pub fn build_runtime(
 pub async fn initialize_connection(
     runtime: &Arc<ServerRuntime>,
 ) -> Result<(u64, mpsc::Receiver<serde_json::Value>)> {
-    let (notifications_tx, notifications_rx) = mpsc::channel(/*buffer*/ 4096);
+    let (notifications_tx, notifications_rx) = devo_server::test_outbound_channel(4096);
     let connection_id = runtime
         .register_connection(ClientTransportKind::Stdio, notifications_tx)
         .await;
@@ -407,7 +458,7 @@ pub async fn request_agent_wait(
     runtime: &Arc<ServerRuntime>,
     connection_id: u64,
     session_id: devo_protocol::SessionId,
-    timeout_ms: u64,
+    timeout_secs: u64,
 ) -> Result<WaitAgentResult> {
     request_agent_wait_with(
         runtime,
@@ -415,7 +466,7 @@ pub async fn request_agent_wait(
         session_id,
         None::<String>,
         None,
-        timeout_ms,
+        timeout_secs,
     )
     .await
 }
@@ -426,7 +477,7 @@ pub async fn request_agent_wait_with<T: serde::Serialize>(
     session_id: devo_protocol::SessionId,
     target: Option<T>,
     after_sequence: Option<u64>,
-    timeout_ms: u64,
+    timeout_secs: u64,
 ) -> Result<WaitAgentResult> {
     let target = target
         .map(serde_json::to_value)
@@ -442,7 +493,7 @@ pub async fn request_agent_wait_with<T: serde::Serialize>(
                     "session_id": session_id,
                     "target": target,
                     "after_sequence": after_sequence,
-                    "timeout_ms": timeout_ms
+                    "timeout_secs": timeout_secs
                 }
             }),
         )

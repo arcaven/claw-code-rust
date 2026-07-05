@@ -14,14 +14,27 @@ use chrono::{DateTime, Utc};
 use devo_protocol::AgentInfo;
 use devo_protocol::AgentMailboxMessage;
 use devo_protocol::AgentOutputEvent;
+use devo_protocol::AgentOutputEventKind;
 use devo_protocol::SessionId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 // ── Agent Registry ──────────────────────────────────────────────────
 
 /// Per-root-session registry of all spawned subagents.
+///
+/// The registry models a parent/child tree: any registered agent may in principle
+/// spawn further children, and [`parent_to_children`](Self::parent_to_children) /
+/// [`child_to_parent`](Self::child_to_parent) track that hierarchy for arbitrary depth.
+///
+/// In current product usage, only the root session agent is expected to coordinate
+/// subagents; child sessions do not receive agent coordination tools and must not
+/// spawn nested subagents. That restriction is enforced at runtime (tool policy and
+/// prompts), not by flattening this data structure. The tree-shaped registry is kept
+/// intentionally so deeper nesting can be enabled later without redesigning storage
+/// or lookup.
 #[derive(Debug, Clone, Default)]
 pub struct AgentRegistry {
     pub agents: HashMap<SessionId, SubagentMetadata>,
@@ -295,6 +308,27 @@ impl SubagentOutputBuffer {
 
     pub async fn push(&self, mut event: AgentOutputEvent) -> AgentOutputEvent {
         let mut inner = self.inner.lock().await;
+        if event.kind.is_assistant_text() {
+            event.kind = AgentOutputEventKind::AssistantMessage;
+            if let Some(last) = inner.events.back_mut()
+                && last.kind == AgentOutputEventKind::AssistantMessage
+                && last.child_session_id == event.child_session_id
+                && last.turn_id == event.turn_id
+                && last.status.is_none()
+            {
+                if let Some(delta) = event.text.take() {
+                    last.text.get_or_insert_with(String::new).push_str(&delta);
+                }
+                last.created_at = event.created_at;
+                // Release the lock before any clone/notify work. Callers currently
+                // discard the return value; avoid cloning the full accumulated
+                // assistant text on every token while holding the buffer mutex
+                // (multiple child event streams contend on this lock).
+                drop(inner);
+                self.notify.notify_waiters();
+                return event;
+            }
+        }
         event.sequence = inner.next_sequence;
         inner.next_sequence = inner.next_sequence.saturating_add(1);
         inner.events.push_back(event.clone());
@@ -303,15 +337,54 @@ impl SubagentOutputBuffer {
         event
     }
 
+    /// Non-blocking variant for streaming text. Returns `false` when the buffer
+    /// lock is busy so token broadcast is never stalled behind `wait_agent`.
+    pub fn try_push_text_delta(&self, mut event: AgentOutputEvent) -> bool {
+        let Ok(mut inner) = self.inner.try_lock() else {
+            return false;
+        };
+        event.kind = AgentOutputEventKind::AssistantMessage;
+        if let Some(last) = inner.events.back_mut()
+            && last.kind == AgentOutputEventKind::AssistantMessage
+            && last.child_session_id == event.child_session_id
+            && last.turn_id == event.turn_id
+            && last.status.is_none()
+        {
+            if let Some(delta) = event.text.take() {
+                last.text.get_or_insert_with(String::new).push_str(&delta);
+            }
+            last.created_at = event.created_at;
+            drop(inner);
+            self.notify.notify_waiters();
+            return true;
+        }
+        event.sequence = inner.next_sequence;
+        inner.next_sequence = inner.next_sequence.saturating_add(1);
+        inner.events.push_back(event);
+        drop(inner);
+        self.notify.notify_waiters();
+        true
+    }
+
     pub async fn wait_after(
         &self,
         after_sequence: u64,
         target_session_ids: &[SessionId],
         timeout: Duration,
+        cancel: Option<CancellationToken>,
     ) -> (Vec<AgentOutputEvent>, u64, bool) {
+        if target_session_ids.is_empty() {
+            let inner = self.inner.lock().await;
+            return (Vec::new(), inner.next_sequence, true);
+        }
         let target_session_ids = target_session_ids.iter().copied().collect::<HashSet<_>>();
         let start = Instant::now();
         loop {
+            if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
+                let (_, next_sequence) =
+                    self.events_after(after_sequence, &target_session_ids).await;
+                return (Vec::new(), next_sequence, true);
+            }
             let notified = self.notify.notified();
             let (events, next_sequence) =
                 self.events_after(after_sequence, &target_session_ids).await;
@@ -322,13 +395,27 @@ impl SubagentOutputBuffer {
             if elapsed >= timeout {
                 return (Vec::new(), next_sequence, true);
             }
-            if tokio::time::timeout(timeout.saturating_sub(elapsed), notified)
-                .await
-                .is_err()
-            {
-                let (_, next_sequence) =
-                    self.events_after(after_sequence, &target_session_ids).await;
-                return (Vec::new(), next_sequence, true);
+            let remaining = timeout.saturating_sub(elapsed);
+            let sleep = tokio::time::sleep(remaining);
+            tokio::pin!(sleep);
+            tokio::select! {
+                _ = &mut sleep => {
+                    let (_, next_sequence) =
+                        self.events_after(after_sequence, &target_session_ids).await;
+                    return (Vec::new(), next_sequence, true);
+                }
+                _ = notified => {}
+                _ = async {
+                    if let Some(token) = &cancel {
+                        token.cancelled().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    let (_, next_sequence) =
+                        self.events_after(after_sequence, &target_session_ids).await;
+                    return (Vec::new(), next_sequence, true);
+                }
             }
         }
     }
@@ -373,6 +460,76 @@ pub enum SubagentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn output_buffer_accumulates_assistant_deltas_per_turn() {
+        let buffer = SubagentOutputBuffer::new();
+        let child = SessionId::new();
+        let turn_id = devo_protocol::TurnId::new();
+        let base = || AgentOutputEvent {
+            sequence: 0,
+            child_session_id: child,
+            agent_path: "root/worker".into(),
+            turn_id: Some(turn_id),
+            kind: AgentOutputEventKind::AssistantDelta,
+            text: None,
+            status: None,
+            created_at: Utc::now(),
+        };
+
+        let first = buffer
+            .push(AgentOutputEvent {
+                text: Some("alpha ".into()),
+                ..base()
+            })
+            .await;
+        assert_eq!(first.sequence, 1);
+        assert_eq!(first.text.as_deref(), Some("alpha "));
+        // Coalesced deltas no longer return a full snapshot (callers discard it);
+        // accumulated text is observed through wait_after / buffer reads.
+        let _ = buffer
+            .push(AgentOutputEvent {
+                text: Some("beta".into()),
+                ..base()
+            })
+            .await;
+
+        let (events, next_sequence, timed_out) = buffer
+            .wait_after(0, &[child], Duration::from_millis(1), None)
+            .await;
+        assert!(!timed_out);
+        assert_eq!(next_sequence, 2);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].sequence, 1);
+        assert_eq!(events[0].text.as_deref(), Some("alpha beta"));
+        assert_eq!(events[0].kind, AgentOutputEventKind::AssistantMessage);
+    }
+
+    #[tokio::test]
+    async fn wait_after_empty_targets_returns_immediately() {
+        let buffer = SubagentOutputBuffer::new();
+        let child = SessionId::new();
+        buffer
+            .push(AgentOutputEvent {
+                sequence: 0,
+                child_session_id: child,
+                agent_path: "root/worker".into(),
+                turn_id: None,
+                kind: AgentOutputEventKind::Status,
+                text: None,
+                status: Some("running".into()),
+                created_at: Utc::now(),
+            })
+            .await;
+
+        let (events, next_sequence, timed_out) = buffer
+            .wait_after(0, &[], Duration::from_secs(60), None)
+            .await;
+        assert!(timed_out);
+        assert!(events.is_empty());
+        assert_eq!(next_sequence, 2);
+    }
 
     #[test]
     fn agent_registry_register_and_lookup() {

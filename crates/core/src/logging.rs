@@ -83,7 +83,17 @@ impl LoggingBootstrap {
             })?;
         let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
 
-        install_subscriber(file_level, self.config.json, file_writer)?;
+        match install_subscriber(file_level, self.config.json, file_writer) {
+            Err(LoggingInitError::SubscriberAlreadyInstalled) => {
+                // Another subscriber was already installed (e.g. by tokio-console).
+                // This is not a fatal error — the process will run without file logging.
+                tracing::warn!(
+                    "file logging skipped: a global tracing subscriber is already installed"
+                );
+            }
+            Err(other) => return Err(other),
+            Ok(()) => {}
+        }
         install_panic_hook();
 
         tracing::info!(

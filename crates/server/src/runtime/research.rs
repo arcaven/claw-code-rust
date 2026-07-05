@@ -7,7 +7,6 @@ use devo_protocol::RequestUserInputQuestion;
 use devo_protocol::ServerRequestKind;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use super::research_capture::{
     ClarificationQueryCapture, FinalReportWrite, ResearchArtifactQueryCapture,
@@ -163,7 +162,7 @@ impl ServerRuntime {
                 "research question is empty",
             );
         }
-        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
+        let Some(session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -172,26 +171,23 @@ impl ServerRuntime {
         };
 
         let now = Utc::now();
-        let (effective_cwd, runtime_context) = {
-            let session = session_arc.lock().await;
-            let effective_cwd = params
-                .cwd
-                .clone()
-                .unwrap_or_else(|| session.summary.cwd.clone());
-            let runtime_context = if params
-                .cwd
-                .as_ref()
-                .is_some_and(|cwd| cwd != &session.summary.cwd)
-            {
-                None
-            } else {
-                Some(Arc::clone(&session.runtime_context))
-            };
-            (effective_cwd, runtime_context)
+        let Some(reservation) = session_handle.turn_reservation_snapshot().await else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::SessionNotFound,
+                "session does not exist",
+            );
         };
-        let runtime_context = match runtime_context {
-            Some(runtime_context) => runtime_context,
-            None => match self.deps.context_for_workspace(&effective_cwd).await {
+        let effective_cwd = params
+            .cwd
+            .clone()
+            .unwrap_or_else(|| reservation.summary.cwd.clone());
+        let runtime_context = if params
+            .cwd
+            .as_ref()
+            .is_some_and(|cwd| cwd != &reservation.summary.cwd)
+        {
+            match self.deps.context_for_workspace(&effective_cwd).await {
                 Ok(runtime_context) => runtime_context,
                 Err(error) => {
                     return self.error_response(
@@ -200,84 +196,76 @@ impl ServerRuntime {
                         format!("failed to initialize session workspace: {error}"),
                     );
                 }
-            },
+            }
+        } else {
+            reservation.runtime_context
         };
         let mut cwd_change = None;
-        let (turn, turn_config, effective_cwd) = {
-            let mut session = session_arc.lock().await;
-            if session.active_turn.is_some() {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::TurnAlreadyRunning,
-                    "cannot start research while a turn is already running",
-                );
-            }
-            let requested_model = requested_model_selection(
-                params.model_binding_id.as_deref(),
-                params.model.as_deref(),
-                &session.summary,
+        if reservation.active_turn.is_some() {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::TurnAlreadyRunning,
+                "cannot start research while a turn is already running",
             );
-            let requested_reasoning_effort_selection = params
-                .reasoning_effort_selection
-                .clone()
-                .or_else(|| session.summary.reasoning_effort_selection.clone());
-            let turn_config = runtime_context.resolve_turn_config(
-                requested_model,
-                requested_reasoning_effort_selection.clone(),
-            );
-            let effective_cwd = params
-                .cwd
-                .clone()
-                .unwrap_or_else(|| session.summary.cwd.clone());
-            if let Some(cwd) = params.cwd.clone() {
-                let old_cwd = session.summary.cwd.clone();
-                if old_cwd != cwd {
-                    cwd_change = Some((old_cwd, cwd.clone()));
-                    session.runtime_context = Arc::clone(&runtime_context);
-                }
-                session.summary.cwd = cwd.clone();
-                session.core_session.lock().await.cwd = cwd;
+        }
+        if let Some(cwd) = params.cwd.clone() {
+            let old_cwd = reservation.summary.cwd.clone();
+            if old_cwd != cwd {
+                cwd_change = Some((old_cwd, cwd.clone()));
+                session_handle
+                    .update_session_workspace(cwd.clone(), Arc::clone(&runtime_context))
+                    .await;
             }
-            if let Some(permission_mode) = params
-                .approval_policy
-                .as_deref()
-                .and_then(permission_mode_from_approval_policy)
-            {
-                session.core_session.lock().await.config.permission_mode = permission_mode;
-                session.config.permission_mode = permission_mode;
-            }
-            let resolved_request = turn_config.model.resolve_reasoning_effort_selection(
-                turn_config.reasoning_effort_selection.as_deref(),
-            );
-            let request_model = turn_config.provider_request_model(&resolved_request.request_model);
-            apply_turn_config_to_session_summary(&mut session.summary, &turn_config);
-            let turn = TurnMetadata {
-                turn_id: TurnId::new(),
-                session_id: params.session_id,
-                sequence: session
-                    .latest_turn
-                    .as_ref()
-                    .map_or(1, |turn| turn.sequence + 1),
-                status: TurnStatus::Running,
-                kind: devo_core::TurnKind::Research,
-                model: turn_config.model.slug.clone(),
-                model_binding_id: turn_config.model_binding_id.clone(),
-                reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
-                reasoning_effort: resolved_request.effective_reasoning_effort,
-                request_model,
-                request_thinking: resolved_request.request_thinking,
-                started_at: now,
-                completed_at: None,
-                usage: None,
-                stop_reason: None,
-                failure_reason: None,
-            };
-            session.summary.status = SessionRuntimeStatus::ActiveTurn;
-            session.summary.updated_at = now;
-            session.summary.last_activity_at = now;
-            session.active_turn = Some(turn.clone());
-            (turn, turn_config, effective_cwd.display().to_string())
+        }
+        if let Some(permission_mode) = params
+            .approval_policy
+            .as_deref()
+            .and_then(permission_mode_from_approval_policy)
+        {
+            session_handle
+                .update_core_permission_mode(permission_mode)
+                .await;
+        }
+        let requested_model = requested_model_selection(
+            params.model_binding_id.as_deref(),
+            params.model.as_deref(),
+            &reservation.summary,
+        );
+        let requested_reasoning_effort_selection = params
+            .reasoning_effort_selection
+            .clone()
+            .or_else(|| reservation.summary.reasoning_effort_selection.clone());
+        let turn_config = runtime_context
+            .resolve_turn_config(requested_model, requested_reasoning_effort_selection);
+        let resolved_request = turn_config
+            .model
+            .resolve_reasoning_effort_selection(turn_config.reasoning_effort_selection.as_deref());
+        let request_model = turn_config.provider_request_model(&resolved_request.request_model);
+        let turn = TurnMetadata {
+            turn_id: TurnId::new(),
+            session_id: params.session_id,
+            sequence: reservation
+                .latest_turn
+                .as_ref()
+                .map_or(1, |turn| turn.sequence + 1),
+            status: TurnStatus::Running,
+            kind: devo_core::TurnKind::Research,
+            model: turn_config.model.slug.clone(),
+            model_binding_id: turn_config.model_binding_id.clone(),
+            reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
+            reasoning_effort: resolved_request.effective_reasoning_effort,
+            request_model,
+            request_thinking: resolved_request.request_thinking,
+            started_at: now,
+            completed_at: None,
+            usage: None,
+            stop_reason: None,
+            failure_reason: None,
         };
+        session_handle
+            .begin_active_turn(turn.clone(), turn_config.clone())
+            .await;
+        let effective_cwd = effective_cwd.display().to_string();
 
         if let Some((old_cwd, new_cwd)) = cwd_change {
             self.run_session_hook(
@@ -297,73 +285,28 @@ impl ServerRuntime {
             .await;
         }
 
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .insert(params.session_id, CancellationToken::new());
-        if let Some(connection_id) = connection_id {
-            self.active_turn_connections
-                .lock()
-                .await
-                .insert(params.session_id, connection_id);
-        }
         let research_display_input = research_display_input(&display_input);
-        self.maybe_assign_provisional_title(params.session_id, &research_display_input)
-            .await;
-        {
-            let mut session = session_arc.lock().await;
-            if session.first_user_input.is_none() {
-                session.first_user_input = Some(research_display_input.clone());
-            }
-        }
-        let needs_title = {
-            let session = session_arc.lock().await;
-            let first_input = session.first_user_input.clone();
-            let needs = matches!(
-                session.summary.title_state,
-                SessionTitleState::Unset | SessionTitleState::Provisional
-            );
-            (needs, first_input)
-        };
-        if needs_title.0
-            && let Some(first_input) = needs_title.1
-        {
-            let runtime = Arc::clone(self);
-            let sid = params.session_id;
-            tokio::spawn(async move {
-                runtime.maybe_generate_final_title(sid, first_input).await;
-            });
-        }
-        let (record, session_context, turn_context) = {
-            let session = session_arc.lock().await;
-            let core_session = session.core_session.lock().await;
-            (
-                session.record.clone(),
-                core_session.session_context.clone(),
-                core_session.latest_turn_context.clone(),
-            )
-        };
-        if let Some(record) = record
+        self.maybe_prepare_title_generation_from_user_input(
+            params.session_id,
+            &research_display_input,
+        )
+        .await;
+        if let Some(persistence) = session_handle.turn_persistence_snapshot().await
+            && let Some(record) = persistence.record
             && let Err(error) = self.rollout_store.append_turn(
                 &record,
-                build_turn_record(&turn, session_context, turn_context),
+                build_turn_record(
+                    &turn,
+                    persistence.session_context,
+                    persistence.latest_turn_context,
+                ),
             )
         {
             self.clear_active_turn_runtime_handles(params.session_id)
                 .await;
-            {
-                let mut session = session_arc.lock().await;
-                if session
-                    .active_turn
-                    .as_ref()
-                    .is_some_and(|active| active.turn_id == turn.turn_id)
-                {
-                    session.active_turn = None;
-                    session.summary.status = SessionRuntimeStatus::Idle;
-                    session.summary.updated_at = Utc::now();
-                    session.summary.last_activity_at = session.summary.updated_at;
-                }
-            }
+            let _ = session_handle
+                .clear_active_turn_if_matches(turn.turn_id)
+                .await;
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::InternalError,
@@ -396,7 +339,7 @@ impl ServerRuntime {
         let turn_for_task = turn.clone();
         let display_input_for_task = research_display_input.clone();
         let runtime_context_for_task = Arc::clone(&runtime_context);
-        let task = tokio::spawn(async move {
+        self.spawn_active_turn_task(params.session_id, turn.clone(), connection_id, async move {
             runtime
                 .execute_research_turn(ExecuteResearchTurnInput {
                     session_id: params.session_id,
@@ -408,11 +351,8 @@ impl ServerRuntime {
                     cwd: effective_cwd,
                 })
                 .await;
-        });
-        self.active_tasks
-            .lock()
-            .await
-            .insert(params.session_id, task.abort_handle());
+        })
+        .await;
 
         serde_json::to_value(SuccessResponse {
             id: request_id,
@@ -444,6 +384,12 @@ impl ServerRuntime {
             Some(turn_config.model.context_window as u64),
         )
         .await;
+        // Research runs outside the session actor (unlike execute_turn_in_actor).
+        // Register the same TurnInlineState / active_stream path so item persist,
+        // usage, and hooks never flood the actor mailbox (capacity 64). Without
+        // this, every token/tool item does blocking send().await and can stall
+        // client inbound handlers that also need the mailbox.
+        self.begin_research_turn_stream(session_id, &turn).await;
         let result = self
             .run_research_pipeline(
                 session_id,
@@ -465,6 +411,30 @@ impl ServerRuntime {
         } else {
             self.clear_research_child_agents(session_id).await;
         }
+        if let Err(error) = &result {
+            let failure_message = format!("Research failed: {error}");
+            self.emit_turn_item(
+                session_id,
+                turn.turn_id,
+                ItemKind::ResearchArtifact,
+                TurnItem::ResearchArtifact(ResearchArtifactItem {
+                    artifact_type: ResearchArtifactType::Failure,
+                    title: "Research Failure".to_string(),
+                    content: failure_message.clone(),
+                }),
+                serde_json::json!({
+                    "artifact_type": "failure",
+                    "title": "Research Failure",
+                    "content": failure_message
+                }),
+            )
+            .await;
+        }
+        // Merge inline mutations and free the mailbox path before any actor
+        // export/replace or finish work.
+        self.end_research_turn_stream(session_id, turn.turn_id)
+            .await;
+        self.refresh_core_session_prompt_context(session_id).await;
         let final_usage = usage_ledger.lock().await.aggregate();
         self.clear_active_turn_runtime_handles(session_id).await;
 
@@ -473,28 +443,37 @@ impl ServerRuntime {
                 self.finish_research_turn(session_id, turn, TurnStatus::Completed, final_usage)
                     .await;
             }
-            Err(error) => {
-                let failure_message = format!("Research failed: {error}");
-                self.emit_turn_item(
-                    session_id,
-                    turn.turn_id,
-                    ItemKind::ResearchArtifact,
-                    TurnItem::ResearchArtifact(ResearchArtifactItem {
-                        artifact_type: ResearchArtifactType::Failure,
-                        title: "Research Failure".to_string(),
-                        content: failure_message.clone(),
-                    }),
-                    serde_json::json!({
-                        "artifact_type": "failure",
-                        "title": "Research Failure",
-                        "content": failure_message
-                    }),
-                )
-                .await;
-                self.refresh_core_session_prompt_context(session_id).await;
+            Err(_) => {
                 self.finish_research_turn(session_id, turn, TurnStatus::Failed, final_usage)
                     .await;
             }
+        }
+    }
+
+    async fn begin_research_turn_stream(&self, session_id: SessionId, turn: &TurnMetadata) {
+        let Some(session_handle) = self.session(session_id).await else {
+            return;
+        };
+        let Some(stream) = session_handle.begin_inline_turn(turn.clone()).await else {
+            tracing::warn!(
+                session_id = %session_id,
+                turn_id = %turn.turn_id,
+                "failed to begin research inline turn state"
+            );
+            return;
+        };
+        if let Some(spawn_snapshot) = session_handle.spawn_snapshot().await {
+            self.register_turn_spawn_snapshot(session_id, turn.turn_id, Arc::new(spawn_snapshot))
+                .await;
+        }
+        self.register_active_stream(session_id, stream).await;
+    }
+
+    async fn end_research_turn_stream(&self, session_id: SessionId, turn_id: TurnId) {
+        self.clear_turn_spawn_snapshot(session_id, turn_id).await;
+        self.unregister_active_stream(session_id).await;
+        if let Some(session_handle) = self.session(session_id).await {
+            session_handle.end_inline_turn().await;
         }
     }
 
@@ -560,14 +539,6 @@ impl ServerRuntime {
         let clarification_result = self
             .run_clarification_gate(&model_runtime, &mut coordinator_scratch)
             .await?;
-        self.emit_research_artifact(
-            session_id,
-            turn.turn_id,
-            ResearchArtifactType::Clarification,
-            "Research Clarification",
-            clarification_result.artifact_content,
-        )
-        .await;
         research_context
             .clarifications
             .extend(clarification_result.clarifications.clone());
@@ -637,7 +608,6 @@ impl ServerRuntime {
             context_reference,
         )
         .await;
-        self.refresh_core_session_prompt_context(session_id).await;
         Ok(())
     }
 
@@ -649,15 +619,19 @@ impl ServerRuntime {
     ) -> anyhow::Result<String> {
         let request_id = format!("research_clarification_{turn_id}");
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() else {
+        let Some(session_handle) = self.session(session_id).await else {
             anyhow::bail!("session does not exist");
         };
-        {
-            let mut session = session_arc.lock().await;
-            session
-                .pending_user_inputs
-                .insert(request_id.clone(), PendingUserInput { turn_id, tx });
-            session.summary.status = SessionRuntimeStatus::WaitingClient;
+        self.session_interactive
+            .register_pending_user_input(
+                session_id,
+                request_id.clone(),
+                PendingUserInput { turn_id, tx },
+            )
+            .await;
+        if let Some(mut summary) = session_handle.summary().await {
+            summary.status = SessionRuntimeStatus::WaitingClient;
+            session_handle.update_summary(summary).await;
         }
         self.broadcast_event(ServerEvent::SessionStatusChanged(
             SessionStatusChangedPayload {
@@ -685,9 +659,9 @@ impl ServerRuntime {
         }))
         .await;
         let response = rx.await?;
-        if let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() {
-            let mut session = session_arc.lock().await;
-            session.summary.status = SessionRuntimeStatus::ActiveTurn;
+        if let Some(mut summary) = session_handle.summary().await {
+            summary.status = SessionRuntimeStatus::ActiveTurn;
+            session_handle.update_summary(summary).await;
         }
         self.broadcast_event(ServerEvent::SessionStatusChanged(
             SessionStatusChangedPayload {
@@ -798,7 +772,16 @@ impl ServerRuntime {
         let callback: devo_core::EventCallback = Arc::new(move |event: QueryEvent| {
             let tx = tx.clone();
             Box::pin(async move {
-                let _ = tx.send(event).await;
+                match tx.try_send(event) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(event)) => {
+                        let tx = tx.clone();
+                        tokio::spawn(async move {
+                            let _ = tx.send(event).await;
+                        });
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+                }
             })
         });
         let mut stage_turn_config = runtime.turn_config.clone();
@@ -887,17 +870,14 @@ impl ServerRuntime {
     }
 
     async fn refresh_core_session_prompt_context(&self, session_id: SessionId) {
-        let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() else {
+        let Some(session_handle) = self.session(session_id).await else {
             return;
         };
-        let (persisted_turn_items, latest_compaction_snapshot, core_session) = {
-            let session = session_arc.lock().await;
-            (
-                session.persisted_turn_items.clone(),
-                session.latest_compaction_snapshot.clone(),
-                Arc::clone(&session.core_session),
-            )
+        let Some(runtime_session) = session_handle.export_runtime_session().await else {
+            return;
         };
+        let persisted_turn_items = runtime_session.persisted_turn_items.clone();
+        let latest_compaction_snapshot = runtime_session.latest_compaction_snapshot.clone();
 
         let mut rebuilt_messages = Vec::new();
         let mut ignored_history_items = Vec::new();
@@ -915,9 +895,18 @@ impl ServerRuntime {
             crate::persistence::build_prompt_messages_from_snapshot(&persisted_turn_items, snapshot)
         });
 
-        let mut core_session = core_session.lock().await;
-        core_session.messages = rebuilt_messages;
-        core_session.prompt_messages = rebuilt_prompt_messages;
+        {
+            let mut core_session = runtime_session.core_session.lock().await;
+            core_session.messages = rebuilt_messages;
+            core_session.prompt_messages = rebuilt_prompt_messages;
+        }
+        session_handle
+            .replace_state(
+                crate::runtime::session_actor::SessionActorState::from_runtime_session(
+                    runtime_session,
+                ),
+            )
+            .await;
     }
 
     async fn run_clarification_gate(
@@ -936,58 +925,75 @@ impl ServerRuntime {
         self.complete_reasoning_item(runtime.session_id, runtime.turn_id, &mut capture.reasoning)
             .await;
 
-        if !capture.request_user_input_exchanges.is_empty() {
-            return Ok(ClarificationGateResult {
+        let result = if !capture.request_user_input_exchanges.is_empty() {
+            ClarificationGateResult {
                 artifact_content: clarification_artifact_content(
                     &capture.request_user_input_exchanges,
                 ),
                 clarifications: capture.clarifications,
-            });
-        }
-
-        let clarify_text = if capture.text.trim().is_empty() {
-            assistant_text_from_session(scratch)
-        } else {
-            capture.text.clone()
-        };
-        if let Some(decision) = parse_json_object::<ClarifyDecision>(&clarify_text) {
-            if decision.need_clarification && !decision.question.trim().is_empty() {
-                let question = decision.question;
-                let answer = self
-                    .request_research_clarification(runtime.session_id, runtime.turn_id, &question)
-                    .await?;
-                let artifact_content =
-                    format!("Question: {}\n\nAnswer: {}", question, answer.trim());
-                let clarifications = if answer.trim().is_empty() {
-                    Vec::new()
-                } else {
-                    vec![ResearchClarificationContext { question, answer }]
-                };
-                return Ok(ClarificationGateResult {
-                    artifact_content,
-                    clarifications,
-                });
             }
-            let artifact_content = if decision.verification.trim().is_empty() {
-                "No clarification needed.".to_string()
-            } else {
-                decision.verification
-            };
-            return Ok(ClarificationGateResult {
-                artifact_content,
-                clarifications: Vec::new(),
-            });
-        }
-
-        let artifact_content = if clarify_text.trim().is_empty() {
-            "No clarification needed.".to_string()
         } else {
-            clarify_text
+            let clarify_text = if capture.text.trim().is_empty() {
+                assistant_text_from_session(scratch)
+            } else {
+                capture.text.clone()
+            };
+            if let Some(decision) = parse_json_object::<ClarifyDecision>(&clarify_text) {
+                if decision.need_clarification && !decision.question.trim().is_empty() {
+                    let question = decision.question;
+                    let answer = self
+                        .request_research_clarification(
+                            runtime.session_id,
+                            runtime.turn_id,
+                            &question,
+                        )
+                        .await?;
+                    let artifact_content =
+                        format!("Question: {}\n\nAnswer: {}", question, answer.trim());
+                    let clarifications = if answer.trim().is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![ResearchClarificationContext { question, answer }]
+                    };
+                    ClarificationGateResult {
+                        artifact_content,
+                        clarifications,
+                    }
+                } else {
+                    let artifact_content = if decision.verification.trim().is_empty() {
+                        "No clarification needed.".to_string()
+                    } else {
+                        decision.verification
+                    };
+                    ClarificationGateResult {
+                        artifact_content,
+                        clarifications: Vec::new(),
+                    }
+                }
+            } else {
+                let artifact_content = if clarify_text.trim().is_empty() {
+                    "No clarification needed.".to_string()
+                } else {
+                    clarify_text
+                };
+                ClarificationGateResult {
+                    artifact_content,
+                    clarifications: Vec::new(),
+                }
+            }
         };
-        Ok(ClarificationGateResult {
-            artifact_content,
-            clarifications: Vec::new(),
-        })
+        let artifact = ResearchStageKind::Clarify
+            .artifact()
+            .expect("clarify stage should have an artifact");
+        self.complete_research_artifact_item(
+            runtime.session_id,
+            runtime.turn_id,
+            &mut capture.artifact,
+            &artifact,
+            &result.artifact_content,
+        )
+        .await;
+        Ok(result)
     }
 
     async fn stream_final_report(
@@ -1104,44 +1110,36 @@ impl ServerRuntime {
         turn.status = status.clone();
         turn.completed_at = Some(Utc::now());
         let own_usage = final_usage.to_turn_usage();
+        let latest_query = self
+            .parent_usage_snapshot(session_id, turn.turn_id)
+            .await
+            .map(|snapshot| snapshot.latest_query_usage.to_turn_usage())
+            .unwrap_or_else(|| own_usage.clone());
         let usage = self
-            .publish_parent_turn_usage(
+            .publish_parent_turn_totals_and_latest(
                 session_id,
                 turn.turn_id,
                 own_usage.clone(),
+                latest_query,
                 /*context_window*/ None,
             )
             .await
             .map(|snapshot| snapshot.turn_usage.to_turn_usage())
             .unwrap_or(own_usage);
-        {
-            let session_arc = self.sessions.lock().await.get(&session_id).cloned();
-            if let Some(session_arc) = session_arc {
-                let mut session = session_arc.lock().await;
-                turn.usage = Some(usage.clone());
-                session.latest_turn = Some(turn.clone());
-                session.active_turn = None;
-                session.summary.status = SessionRuntimeStatus::Idle;
-                session.summary.updated_at = Utc::now();
-                session.summary.last_activity_at = session.summary.updated_at;
-            }
+        turn.usage = Some(usage.clone());
+        if let Some(session_handle) = self.session(session_id).await {
+            session_handle.set_session_idle(Some(turn.clone())).await;
         }
-        let (record, session_context, turn_context) = {
-            let Some(session_arc) = self.sessions.lock().await.get(&session_id).cloned() else {
-                return;
-            };
-            let session = session_arc.lock().await;
-            let core_session = session.core_session.lock().await;
-            (
-                session.record.clone(),
-                core_session.session_context.clone(),
-                core_session.latest_turn_context.clone(),
-            )
-        };
-        if let Some(record) = record
+        if let Some(session_handle) = self.session(session_id).await
+            && let Some(persistence) = session_handle.turn_persistence_snapshot().await
+            && let Some(record) = persistence.record
             && let Err(error) = self.rollout_store.append_turn(
                 &record,
-                build_turn_record(&turn, session_context, turn_context),
+                build_turn_record(
+                    &turn,
+                    persistence.session_context,
+                    persistence.latest_turn_context,
+                ),
             )
         {
             tracing::warn!(session_id = %session_id, error = %error, "failed to persist research turn finish");
@@ -1193,15 +1191,19 @@ impl ServerRuntime {
         usage: ResearchUsageTotals,
         context_window: Option<u64>,
     ) {
+        let latest_query = usage.to_turn_usage();
         let aggregate = {
             let mut ledger = usage_ledger.lock().await;
             ledger.by_invocation.insert(usage_key, usage);
             ledger.aggregate()
         };
-        self.publish_parent_turn_usage(
+        // Research ledger aggregates all invocations for session/turn totals,
+        // but context-window display must use only the latest invocation.
+        self.publish_parent_turn_totals_and_latest(
             session_id,
             turn_id,
             aggregate.to_turn_usage(),
+            latest_query,
             context_window,
         )
         .await;

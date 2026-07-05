@@ -6,6 +6,7 @@
 use ratatui::text::Line;
 use ratatui::text::Span;
 
+use crate::events::TextItemKind;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::ScrollbackLine;
@@ -30,6 +31,17 @@ pub(crate) struct TranscriptOverlayCell {
     pub(crate) is_stream_continuation: bool,
     pub(crate) user_message: Option<UserMessage>,
     pub(crate) is_selected_user: bool,
+}
+
+enum LiveViewportLineMode {
+    Display,
+    Transcript,
+}
+
+#[allow(clippy::large_enum_variant)]
+enum LiveItem {
+    Text(usize),
+    Tool(String),
 }
 
 impl ChatWidget {
@@ -154,55 +166,19 @@ impl ChatWidget {
     }
 
     pub(super) fn active_viewport_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        if let Some(cell) = &self.active_cell {
-            Self::extend_lines_with_separator(&mut lines, cell.display_lines(width));
-        }
-        for item in &self.active_text_items {
-            if let Some(cell) = &item.cell {
-                Self::extend_lines_with_separator(&mut lines, cell.display_lines(width));
-            }
-        }
-        // Pending tool calls are shown with a pending (cyan) dot until their results arrive.
-        for pending in &self.pending_tool_calls {
-            let pending_lines = if let Some(start_time) = pending.start_time {
-                let mut lines = vec![Line::from(vec![
-                    crate::exec_cell::spinner(Some(start_time), true),
-                    " ".into(),
-                    Span::styled(pending.title.clone(), Self::tool_text_style()),
-                ])];
-                lines.extend(pending.lines.clone());
-                lines
-            } else {
-                pending.lines.clone()
-            };
-            Self::extend_lines_with_separator(
-                &mut lines,
-                history_cell::AgentMessageCell::new_with_prefix(
-                    pending_lines,
-                    Self::pending_dot_prefix(),
-                    "  ",
-                    false,
-                )
-                .display_lines(width),
-            );
-        }
-        Self::trim_trailing_blank_lines(&mut lines);
-        lines
+        self.live_viewport_lines(width, LiveViewportLineMode::Display)
     }
 
-    fn live_transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn live_viewport_lines(&self, width: u16, mode: LiveViewportLineMode) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
+        let cell_lines = |cell: &dyn history_cell::HistoryCell| match mode {
+            LiveViewportLineMode::Display => cell.display_lines(width),
+            LiveViewportLineMode::Transcript => cell.transcript_lines(width),
+        };
         if let Some(cell) = &self.active_cell {
-            Self::extend_lines_with_separator(&mut lines, cell.transcript_lines(width));
+            Self::extend_lines_with_separator(&mut lines, cell_lines(cell.as_ref()));
         }
 
-        // Build a merged list of (seq, LiveItem) sorted by seq
-        #[allow(clippy::large_enum_variant)]
-        enum LiveItem {
-            Text(usize),
-            Tool(String),
-        }
         let mut items: Vec<(u64, LiveItem)> = Vec::new();
         for (idx, item) in self.active_text_items.iter().enumerate() {
             if item.cell.is_some() {
@@ -215,69 +191,184 @@ impl ChatWidget {
             }
             items.push((tool_call.seq, LiveItem::Tool(tool_call.tool_use_id.clone())));
         }
-        items.sort_by(|a, b| a.0.cmp(&b.0));
+        items.sort_by(|(seq_a, item_a), (seq_b, item_b)| {
+            Self::compare_live_viewport_items(
+                &self.active_text_items,
+                *seq_a,
+                item_a,
+                *seq_b,
+                item_b,
+            )
+        });
 
         for (_, item) in items {
             match item {
                 LiveItem::Text(idx) => {
                     if let Some(cell) = &self.active_text_items[idx].cell {
-                        Self::extend_lines_with_separator(&mut lines, cell.transcript_lines(width));
+                        Self::extend_lines_with_separator(&mut lines, cell_lines(cell.as_ref()));
                     }
                 }
                 LiveItem::Tool(tool_use_id) => {
                     if let Some(tool_call) = self.active_tool_calls.get(&tool_use_id) {
-                        let transcript_lines = match (&tool_call.tool_name, &tool_call.input) {
-                            (Some(tool_name), Some(input)) => ToolIoCell::from_text_output(
-                                ToolIoCellOptions {
-                                    title_line: Some(Self::running_tool_line(&tool_call.title)),
-                                    dot_prefix: Self::pending_dot_prefix(),
-                                    subsequent_prefix: "  ".into(),
-                                    output_style: Self::tool_text_style(),
-                                    show_empty_ellipsis: false,
-                                },
-                                tool_name.clone(),
-                                input.clone(),
-                                tool_call.output.clone(),
-                            )
-                            .transcript_lines(width),
-                            _ => history_cell::AgentMessageCell::new_with_prefix(
-                                tool_call.lines.clone(),
-                                Self::pending_dot_prefix(),
-                                "  ",
-                                false,
-                            )
-                            .transcript_lines(width),
+                        let tool_lines = match mode {
+                            LiveViewportLineMode::Display => {
+                                Self::live_tool_display_lines(width, tool_call)
+                            }
+                            LiveViewportLineMode::Transcript => {
+                                Self::live_tool_transcript_lines(width, tool_call)
+                            }
                         };
-                        Self::extend_lines_with_separator(&mut lines, transcript_lines);
+                        Self::extend_lines_with_separator(&mut lines, tool_lines);
                     }
                 }
             }
         }
         for pending in &self.pending_tool_calls {
-            let pending_lines = if let Some(start_time) = pending.start_time {
-                let mut lines = vec![Line::from(vec![
-                    crate::exec_cell::spinner(Some(start_time), true),
-                    " ".into(),
-                    Span::styled(pending.title.clone(), Self::tool_text_style()),
-                ])];
-                lines.extend(pending.lines.clone());
-                lines
-            } else {
-                pending.lines.clone()
-            };
-            Self::extend_lines_with_separator(
-                &mut lines,
-                history_cell::AgentMessageCell::new_with_prefix(
-                    pending_lines,
-                    Self::pending_dot_prefix(),
-                    "  ",
-                    false,
+            if let (Some(tool_name), Some(input)) = (&pending.tool_name, &pending.input) {
+                let tool_lines = ToolIoCell::from_text_output(
+                    ToolIoCellOptions {
+                        title_line: Some(Self::running_tool_line(&pending.title)),
+                        dot_prefix: Self::pending_dot_prefix(),
+                        subsequent_prefix: "  ".into(),
+                        output_style: Self::tool_text_style(),
+                        show_empty_ellipsis: false,
+                    },
+                    tool_name.clone(),
+                    input.clone(),
+                    pending.output.clone(),
                 )
-                .transcript_lines(width),
-            );
+                .transcript_lines(width);
+                Self::extend_lines_with_separator(&mut lines, tool_lines);
+            } else {
+                let pending_lines = if let Some(start_time) = pending.start_time {
+                    let mut pending_lines = vec![Line::from(vec![
+                        crate::exec_cell::spinner(Some(start_time), true),
+                        " ".into(),
+                        Span::styled(pending.title.clone(), Self::tool_text_style()),
+                    ])];
+                    pending_lines.extend(pending.lines.clone());
+                    pending_lines
+                } else {
+                    pending.lines.clone()
+                };
+                Self::extend_lines_with_separator(
+                    &mut lines,
+                    match mode {
+                        LiveViewportLineMode::Display => {
+                            history_cell::AgentMessageCell::new_with_prefix(
+                                pending_lines,
+                                Self::pending_dot_prefix(),
+                                "  ",
+                                false,
+                            )
+                            .display_lines(width)
+                        }
+                        LiveViewportLineMode::Transcript => {
+                            history_cell::AgentMessageCell::new_with_prefix(
+                                pending_lines,
+                                Self::pending_dot_prefix(),
+                                "  ",
+                                false,
+                            )
+                            .transcript_lines(width)
+                        }
+                    },
+                );
+            }
         }
         Self::trim_trailing_blank_lines(&mut lines);
         lines
+    }
+
+    fn live_tool_display_lines(
+        width: u16,
+        tool_call: &super::ActiveToolCall,
+    ) -> Vec<Line<'static>> {
+        match (&tool_call.tool_name, &tool_call.input) {
+            (Some(tool_name), Some(input)) => ToolIoCell::from_text_output(
+                ToolIoCellOptions {
+                    title_line: Some(Self::running_tool_line(&tool_call.title)),
+                    dot_prefix: Self::pending_dot_prefix(),
+                    subsequent_prefix: "  ".into(),
+                    output_style: Self::tool_text_style(),
+                    show_empty_ellipsis: false,
+                },
+                tool_name.clone(),
+                input.clone(),
+                tool_call.output.clone(),
+            )
+            .transcript_lines(width),
+            _ => history_cell::AgentMessageCell::new_with_prefix(
+                tool_call.lines.clone(),
+                Self::pending_dot_prefix(),
+                "  ",
+                false,
+            )
+            .display_lines(width),
+        }
+    }
+
+    fn live_tool_transcript_lines(
+        width: u16,
+        tool_call: &super::ActiveToolCall,
+    ) -> Vec<Line<'static>> {
+        match (&tool_call.tool_name, &tool_call.input) {
+            (Some(tool_name), Some(input)) => ToolIoCell::from_text_output(
+                ToolIoCellOptions {
+                    title_line: Some(Self::running_tool_line(&tool_call.title)),
+                    dot_prefix: Self::pending_dot_prefix(),
+                    subsequent_prefix: "  ".into(),
+                    output_style: Self::tool_text_style(),
+                    show_empty_ellipsis: false,
+                },
+                tool_name.clone(),
+                input.clone(),
+                tool_call.output.clone(),
+            )
+            .transcript_lines(width),
+            _ => history_cell::AgentMessageCell::new_with_prefix(
+                tool_call.lines.clone(),
+                Self::pending_dot_prefix(),
+                "  ",
+                false,
+            )
+            .transcript_lines(width),
+        }
+    }
+
+    fn live_transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.live_viewport_lines(width, LiveViewportLineMode::Transcript)
+    }
+
+    fn text_item_precedes_assistant(kind: TextItemKind) -> bool {
+        matches!(
+            kind,
+            TextItemKind::Reasoning | TextItemKind::ResearchArtifact
+        )
+    }
+
+    fn compare_live_viewport_items(
+        active_text_items: &[super::text_stream::ActiveTextItem],
+        seq_a: u64,
+        item_a: &LiveItem,
+        seq_b: u64,
+        item_b: &LiveItem,
+    ) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        let text_kind = |item: &LiveItem| match item {
+            LiveItem::Text(idx) => active_text_items.get(*idx).map(|item| item.kind),
+            LiveItem::Tool(_) => None,
+        };
+        if let (Some(kind_a), Some(kind_b)) = (text_kind(item_a), text_kind(item_b)) {
+            if Self::text_item_precedes_assistant(kind_a) && kind_b == TextItemKind::Assistant {
+                return Ordering::Less;
+            }
+            if kind_a == TextItemKind::Assistant && Self::text_item_precedes_assistant(kind_b) {
+                return Ordering::Greater;
+            }
+        }
+        seq_a.cmp(&seq_b)
     }
 
     fn extend_lines_with_separator(target: &mut Vec<Line<'static>>, mut next: Vec<Line<'static>>) {

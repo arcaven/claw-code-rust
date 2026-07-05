@@ -968,6 +968,73 @@ fn approval_request_does_not_duplicate_already_committed_assistant_text() {
 }
 
 #[test]
+fn research_clarification_artifact_streams_incremental_deltas_before_completion() {
+    let model = Model {
+        slug: "test-model".to_string(),
+        display_name: "Test Model".to_string(),
+        ..Model::default()
+    };
+    let (mut widget, _app_event_rx) = widget_with_model(model, PathBuf::from("."));
+    let artifact_id = ItemId::new();
+    let research = Some(ResearchArtifactMetadata {
+        artifact_type: "clarification".to_string(),
+        title: "Research Clarification".to_string(),
+    });
+
+    widget.handle_worker_event(crate::events::WorkerEvent::TurnStarted {
+        model: "test-model".to_string(),
+        model_binding_id: None,
+        reasoning_effort_selection: None,
+        reasoning_effort: None,
+        turn_id: Default::default(),
+    });
+    widget.handle_worker_event(crate::events::WorkerEvent::TextItemStarted {
+        item_id: artifact_id,
+        kind: crate::events::TextItemKind::ResearchArtifact,
+        research: research.clone(),
+    });
+    widget.handle_worker_event(crate::events::WorkerEvent::TextItemDelta {
+        item_id: artifact_id,
+        kind: crate::events::TextItemKind::ResearchArtifact,
+        research: research.clone(),
+        delta: "Research ".to_string(),
+    });
+    let partial_rows = rendered_rows(&widget, 80, 16).join("\n");
+    assert!(
+        partial_rows.contains("Research "),
+        "clarification artifact delta should be visible before completion:\n{partial_rows}"
+    );
+
+    widget.handle_worker_event(crate::events::WorkerEvent::TextItemDelta {
+        item_id: artifact_id,
+        kind: crate::events::TextItemKind::ResearchArtifact,
+        research: research.clone(),
+        delta: "DeepSeek official website.".to_string(),
+    });
+    let streamed_rows = rendered_rows(&widget, 80, 16).join("\n");
+    assert!(
+        streamed_rows.contains("DeepSeek official website."),
+        "clarification artifact should grow with later deltas:\n{streamed_rows}"
+    );
+
+    widget.handle_worker_event(crate::events::WorkerEvent::TextItemCompleted {
+        item_id: artifact_id,
+        kind: crate::events::TextItemKind::ResearchArtifact,
+        research,
+        final_text: "### Research Clarification\n\nResearch DeepSeek official website.".to_string(),
+    });
+
+    let committed = scrollback_plain_lines(&trim_trailing_blank_scrollback_lines(
+        widget.drain_scrollback_lines(80),
+    ))
+    .join("\n");
+    assert!(
+        committed.contains("Research DeepSeek official website."),
+        "clarification artifact should commit final content:\n{committed}"
+    );
+}
+
+#[test]
 fn research_artifact_completion_does_not_commit_assistant_turn() {
     let model = Model {
         slug: "test-model".to_string(),
@@ -5581,14 +5648,14 @@ fn subagent_discovery_shows_inline_live_list_without_focusing_it() {
     assert_eq!(widget.selected_subagent_for_test(), Some(child));
     let rows = rendered_rows(&widget, 160, 18).join("\n");
     assert!(rows.contains("ctrl + x agents"), "rows:\n{rows}");
-    assert!(rows.contains("reviewer: running"), "rows:\n{rows}");
+    assert!(rows.contains("reviewer: working"), "rows:\n{rows}");
     assert!(rows.contains("checking files"), "rows:\n{rows}");
     let rendered = rendered_rows(&widget, 160, 18);
     let live_prefix = " ".repeat(usize::from(LIVE_PREFIX_COLS));
     assert!(
         rendered
             .iter()
-            .any(|row| row.starts_with(&format!("{live_prefix}● reviewer: running"))),
+            .any(|row| row.starts_with(&format!("{live_prefix}● reviewer: working"))),
         "live-list title should use the shared live prefix only:\n{}",
         rendered.join("\n")
     );
@@ -5679,7 +5746,7 @@ fn request_user_input_and_subagent_live_list_are_visible_together() {
     });
 
     let rows = rendered_rows(&widget, 120, 28).join("\n");
-    assert!(rows.contains("researcher: running"), "rows:\n{rows}");
+    assert!(rows.contains("researcher: working"), "rows:\n{rows}");
     assert!(rows.contains("Working"), "rows:\n{rows}");
     assert!(
         rows.contains("Which scope should research use?"),
@@ -5711,8 +5778,8 @@ fn ctrl_x_focuses_inline_live_list_and_ctrl_x_esc_or_q_exits() {
     assert_eq!(widget.selected_subagent_for_test(), Some(second));
     let rows = rendered_rows(&widget, 160, 18).join("\n");
     assert!(!rows.contains("Sub-agents"), "rows:\n{rows}");
-    assert!(rows.contains("first: running"), "rows:\n{rows}");
-    assert!(rows.contains("second: running"), "rows:\n{rows}");
+    assert!(rows.contains("first: working"), "rows:\n{rows}");
+    assert!(rows.contains("second: working"), "rows:\n{rows}");
     assert!(rows.contains("run first"), "rows:\n{rows}");
     assert!(!rows.contains("root/second"), "rows:\n{rows}");
 
@@ -5807,6 +5874,10 @@ fn terminal_subagent_status_hides_ctrl_x_hint_when_no_live_children_remain() {
     assert!(!widget.has_live_subagents_for_test());
     assert!(!widget.is_subagent_monitor_open_for_test());
     let rows = rendered_rows(&widget, 100, 18).join("\n");
+    assert!(rows.contains("builder: done"), "rows:\n{rows}");
+    widget.expire_subagent_inactivity_for_test();
+    let rows = rendered_rows(&widget, 100, 18).join("\n");
+    assert!(!rows.contains("builder: done"), "rows:\n{rows}");
     assert!(!rows.contains("ctrl + x agents"), "rows:\n{rows}");
 }
 
@@ -5832,6 +5903,9 @@ fn terminal_cancelled_subagent_disappears_from_live_list() {
     });
 
     assert!(!widget.has_live_subagents_for_test());
+    let rows = rendered_rows(&widget, 100, 18).join("\n");
+    assert!(rows.contains("builder: cancelled"), "rows:\n{rows}");
+    widget.expire_subagent_inactivity_for_test();
     let rows = rendered_rows(&widget, 100, 18).join("\n");
     assert!(!rows.contains("builder: cancelled"), "rows:\n{rows}");
     assert!(!rows.contains("ctrl + x agents"), "rows:\n{rows}");
@@ -6082,6 +6156,33 @@ fn subagent_live_list_preview_updates_from_completed_reasoning_tool_and_plan_tai
     let rows = rendered_rows(&widget, 180, 18).join("\n");
     assert!(rows.contains("[~] latest plan step"), "rows:\n{rows}");
     assert!(!rows.contains("old plan note"), "rows:\n{rows}");
+}
+
+#[test]
+fn subagent_transcript_overlay_includes_spawn_task_message() {
+    let model = Model {
+        slug: "test-model".to_string(),
+        display_name: "Test Model".to_string(),
+        ..Model::default()
+    };
+    let (mut widget, _app_event_rx) = widget_with_model(model, PathBuf::from("."));
+    let parent = SessionId::new();
+    let child = SessionId::new();
+
+    widget.handle_worker_event(crate::events::WorkerEvent::SubagentDiscovered {
+        agent: monitor_agent(child, parent, "builder"),
+    });
+
+    let cells = widget
+        .subagent_transcript_overlay_cells(child, 80)
+        .expect("overlay cells");
+    assert!(
+        cells
+            .first()
+            .and_then(|cell| cell.user_message.as_ref())
+            .is_some_and(|message| { message.text.contains("run builder") }),
+        "expected spawn task message at top of subagent overlay"
+    );
 }
 
 #[test]
@@ -7618,6 +7719,102 @@ fn code_search_tool_call_renders_as_explored_group_in_viewport() {
 }
 
 #[test]
+fn running_code_search_with_details_shows_input_in_live_viewport() {
+    let model = Model {
+        slug: "test-model".to_string(),
+        display_name: "Test Model".to_string(),
+        ..Model::default()
+    };
+    let (mut widget, _app_event_rx) = widget_with_model(model, PathBuf::from("."));
+
+    widget.handle_worker_event(crate::events::WorkerEvent::ToolCall {
+        tool_use_id: "tool-1".to_string(),
+        summary: "code_search live tool feedback in crates".to_string(),
+        preparing: false,
+        parsed_commands: None,
+    });
+    widget.handle_worker_event(crate::events::WorkerEvent::ToolCallDetails {
+        tool_use_id: "tool-1".to_string(),
+        tool_name: "code_search".to_string(),
+        input: serde_json::json!({
+            "operation": "search",
+            "query": "live tool feedback",
+            "path": "crates"
+        }),
+    });
+
+    let rendered = rendered_rows(&widget, 80, 16).join("\n");
+
+    assert!(
+        rendered.contains("operation") && rendered.contains("search"),
+        "live viewport should show 'operation: search' for running code_search:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("query") && rendered.contains("live tool feedback"),
+        "live viewport should show 'query: live tool feedback' for running code_search:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("path") && rendered.contains("crates"),
+        "live viewport should show 'path: crates' for running code_search:\n{rendered}"
+    );
+}
+
+#[test]
+fn exploring_code_search_with_details_shows_input_in_active_cell() {
+    let model = Model {
+        slug: "test-model".to_string(),
+        display_name: "Test Model".to_string(),
+        ..Model::default()
+    };
+    let (mut widget, _app_event_rx) = widget_with_model(model, PathBuf::from("."));
+
+    widget.handle_worker_event(crate::events::WorkerEvent::ToolCall {
+        tool_use_id: "tool-1".to_string(),
+        summary: "code_search live tool feedback in crates".to_string(),
+        preparing: false,
+        parsed_commands: Some(vec![devo_protocol::parse_command::ParsedCommand::Search {
+            cmd: "code_search live tool feedback in crates".to_string(),
+            query: Some("live tool feedback".to_string()),
+            path: Some("crates".to_string()),
+        }]),
+    });
+    widget.handle_worker_event(crate::events::WorkerEvent::ToolCallDetails {
+        tool_use_id: "tool-1".to_string(),
+        tool_name: "code_search".to_string(),
+        input: serde_json::json!({
+            "operation": "search",
+            "query": "live tool feedback",
+            "path": "crates"
+        }),
+    });
+
+    let live_display = widget
+        .active_cell_display_lines_for_test(80)
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        live_display.contains("Exploring"),
+        "expected Exploring header: {live_display}"
+    );
+    assert!(
+        live_display.contains("operation") && live_display.contains("search"),
+        "active ExecCell should show 'operation: search' while exploring:\n{live_display}"
+    );
+    assert!(
+        live_display.contains("query") && live_display.contains("live tool feedback"),
+        "active ExecCell should show 'query: live tool feedback' while exploring:\n{live_display}"
+    );
+}
+
+#[test]
 fn merged_explored_group_becomes_explored_after_all_results_arrive() {
     let model = Model {
         slug: "test-model".to_string(),
@@ -8067,6 +8264,49 @@ async fn successful_write_tool_result_triggers_diff_event() {
     assert!(
         !diff_event.is_empty(),
         "auto diff should send some result text"
+    );
+}
+
+#[tokio::test]
+async fn research_turn_does_not_auto_show_git_diff() {
+    let model = Model {
+        slug: "test-model".to_string(),
+        display_name: "Test Model".to_string(),
+        ..Model::default()
+    };
+    let (mut widget, mut app_event_rx) = widget_with_model(model, PathBuf::from("."));
+
+    widget.handle_slash_command(
+        crate::slash_command::SlashCommand::Research,
+        "DeepSeek official website".to_string(),
+    );
+    assert!(!widget.should_auto_show_git_diff_for_turn("write report.md", false));
+
+    widget.handle_worker_event(crate::events::WorkerEvent::ToolCall {
+        tool_use_id: "tool-1".to_string(),
+        summary: "write report.md".to_string(),
+        preparing: false,
+        parsed_commands: None,
+    });
+    widget.handle_worker_event(crate::events::WorkerEvent::ToolResult {
+        tool_use_id: "tool-1".to_string(),
+        title: "write report.md".to_string(),
+        preview: "updated".to_string(),
+        is_error: false,
+        truncated: false,
+    });
+
+    let auto_diff = tokio::time::timeout(std::time::Duration::from_millis(200), async {
+        loop {
+            if let Some(AppEvent::DiffResult(_)) = app_event_rx.recv().await {
+                break true;
+            }
+        }
+    })
+    .await;
+    assert!(
+        auto_diff.is_err(),
+        "research turns must not emit automatic DiffResult events"
     );
 }
 

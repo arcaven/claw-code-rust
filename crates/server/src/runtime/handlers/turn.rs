@@ -76,33 +76,33 @@ impl ServerRuntime {
                 "turn input is empty",
             );
         };
-        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
+        let Some(session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
                 "session does not exist",
             );
         };
-        let (workspace_root, runtime_context) = {
-            let session = session_arc.lock().await;
-            let workspace_root = params
-                .cwd
-                .clone()
-                .unwrap_or_else(|| session.summary.cwd.clone());
-            let runtime_context = if params
-                .cwd
-                .as_ref()
-                .is_some_and(|cwd| cwd != &session.summary.cwd)
-            {
-                None
-            } else {
-                Some(Arc::clone(&session.runtime_context))
-            };
-            (workspace_root, runtime_context)
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::SessionNotFound,
+                "session does not exist",
+            );
         };
-        let runtime_context = match runtime_context {
-            Some(runtime_context) => runtime_context,
-            None => match self.deps.context_for_workspace(&workspace_root).await {
+        let workspace_root = params
+            .cwd
+            .clone()
+            .unwrap_or_else(|| reservation.summary.cwd.clone());
+        let runtime_context = if params
+            .cwd
+            .as_ref()
+            .is_some_and(|cwd| cwd != &reservation.summary.cwd)
+        {
+            match self.deps.context_for_workspace(&workspace_root).await {
                 Ok(runtime_context) => runtime_context,
                 Err(error) => {
                     return self.error_response(
@@ -111,7 +111,9 @@ impl ServerRuntime {
                         format!("failed to initialize session workspace: {error}"),
                     );
                 }
-            },
+            }
+        } else {
+            reservation.runtime_context
         };
         let Some(resolved_input) = (match runtime_context
             .resolve_input_items(&params.input, Some(workspace_root.as_path()))
@@ -174,143 +176,126 @@ impl ServerRuntime {
 
         let now = Utc::now();
         let mut cwd_change = None;
-        let (turn, turn_config) = {
-            let mut session = session_arc.lock().await;
-            if let Some(active_turn) = session.active_turn.as_ref() {
-                if queue_policy == TurnStartQueuePolicy::RejectActive {
-                    return self.error_response(
-                        request_id,
-                        ProtocolErrorCode::TurnAlreadyRunning,
-                        "session already has an active prompt turn",
-                    );
-                }
-                let pending_turn_queue = Arc::clone(&session.pending_turn_queue);
-                let active_turn_id = active_turn.turn_id;
-                let is_ephemeral = session.summary.ephemeral;
-                let queued_model = params
-                    .model
-                    .clone()
-                    .or_else(|| session.summary.model.clone());
-                let queued_model_binding_id = params
-                    .model_binding_id
-                    .clone()
-                    .or_else(|| session.summary.model_binding_id.clone());
-                drop(session);
-
-                let queued_input_id = {
-                    let collaboration_mode = params.collaboration_mode;
-                    let mut guard = pending_turn_queue
-                        .lock()
-                        .expect("pending turn queue mutex should not be poisoned");
-                    let item = devo_core::PendingInputItem::new(
-                        devo_core::PendingInputKind::UserInput {
-                            input: params.input.clone(),
-                            display_text: display_input.clone(),
-                            prompt_text: resolved_input.prompt_text.clone(),
-                            prompt_messages: resolved_input.prompt_messages.clone(),
-                        },
-                        pending_turn_metadata(
-                            collaboration_mode,
-                            queued_model.clone(),
-                            queued_model_binding_id.clone(),
-                        ),
-                        now,
-                    );
-                    let queued_input_id = item.id;
-                    guard.push_back(item.clone());
-
-                    if !is_ephemeral
-                        && let Err(err) =
-                            self.deps
-                                .db
-                                .push_pending(&params.session_id, QueueType::Turn, &item)
-                    {
-                        tracing::warn!(
-                            session_id = %params.session_id,
-                            error = %err,
-                            "failed to persist pending turn message to database"
-                        );
-                    }
-                    queued_input_id
-                };
-                let sid = params.session_id;
-                let runtime = Arc::clone(self);
-                tokio::spawn(async move {
-                    runtime.broadcast_updated_queue(sid).await;
-                });
-                return serde_json::to_value(SuccessResponse {
-                    id: request_id,
-                    result: TurnStartResult::Queued {
-                        active_turn_id,
-                        queued_input_id,
-                        status: TurnStatus::Pending,
-                        accepted_at: now,
-                    },
-                })
-                .expect("serialize queued turn/start response");
+        if let Some(active_turn) = reservation.active_turn.as_ref() {
+            if queue_policy == TurnStartQueuePolicy::RejectActive {
+                return self.error_response(
+                    request_id,
+                    ProtocolErrorCode::TurnAlreadyRunning,
+                    "session already has an active prompt turn",
+                );
             }
-            if let Some(cwd) = params.cwd.clone() {
-                let old_cwd = session.summary.cwd.clone();
-                if old_cwd != cwd {
-                    cwd_change = Some((old_cwd, cwd.clone()));
-                    session.runtime_context = Arc::clone(&runtime_context);
-                }
-                session.summary.cwd = cwd.clone();
-                session.core_session.lock().await.cwd = cwd;
-            }
-            if let Some(permission_mode) = params
-                .approval_policy
-                .as_deref()
-                .and_then(permission_mode_from_approval_policy)
-            {
-                session.core_session.lock().await.config.permission_mode = permission_mode;
-                session.config.permission_mode = permission_mode;
-            }
-            let requested_model = requested_model_selection(
-                params.model_binding_id.as_deref(),
-                params.model.as_deref(),
-                &session.summary,
-            );
-            let requested_reasoning_effort_selection = params
-                .reasoning_effort_selection
+            let active_turn_id = active_turn.turn_id;
+            let queued_model = params
+                .model
                 .clone()
-                .or_else(|| session.summary.reasoning_effort_selection.clone());
-            let turn_config = session.runtime_context.resolve_turn_config(
-                requested_model,
-                requested_reasoning_effort_selection.clone(),
+                .or_else(|| reservation.summary.model.clone());
+            let queued_model_binding_id = params
+                .model_binding_id
+                .clone()
+                .or_else(|| reservation.summary.model_binding_id.clone());
+            let item = devo_core::PendingInputItem::new(
+                devo_core::PendingInputKind::UserInput {
+                    input: params.input.clone(),
+                    display_text: display_input.clone(),
+                    prompt_text: resolved_input.prompt_text.clone(),
+                    prompt_messages: resolved_input.prompt_messages.clone(),
+                },
+                pending_turn_metadata(
+                    params.collaboration_mode,
+                    queued_model,
+                    queued_model_binding_id,
+                ),
+                now,
             );
-            let resolved_request = turn_config.model.resolve_reasoning_effort_selection(
-                turn_config.reasoning_effort_selection.as_deref(),
-            );
-            let request_model = turn_config.provider_request_model(&resolved_request.request_model);
-            apply_turn_config_to_session_summary(&mut session.summary, &turn_config);
-            let turn = TurnMetadata {
-                turn_id: TurnId::new(),
-                session_id: params.session_id,
-                sequence: session
-                    .latest_turn
-                    .as_ref()
-                    .map_or(1, |turn| turn.sequence + 1),
-                status: TurnStatus::Running,
-                kind: devo_core::TurnKind::Regular,
-                model: turn_config.model.slug.clone(),
-                model_binding_id: turn_config.model_binding_id.clone(),
-                reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
-                reasoning_effort: resolved_request.effective_reasoning_effort,
-                request_model,
-                request_thinking: resolved_request.request_thinking,
-                started_at: now,
-                completed_at: None,
-                usage: None,
-                stop_reason: None,
-                failure_reason: None,
-            };
-            session.summary.status = SessionRuntimeStatus::ActiveTurn;
-            session.summary.updated_at = now;
-            session.summary.last_activity_at = now;
-            session.active_turn = Some(turn.clone());
-            (turn, turn_config)
+            let queued_input_id = item.id;
+            session_handle
+                .enqueue_pending_turn_input(item.clone())
+                .await;
+            if !reservation.ephemeral
+                && let Err(err) =
+                    self.deps
+                        .db
+                        .push_pending(&params.session_id, QueueType::Turn, &item)
+            {
+                tracing::warn!(
+                    session_id = %params.session_id,
+                    error = %err,
+                    "failed to persist pending turn message to database"
+                );
+            }
+            let sid = params.session_id;
+            let runtime = Arc::clone(self);
+            tokio::spawn(async move {
+                runtime.broadcast_updated_queue(sid).await;
+            });
+            return serde_json::to_value(SuccessResponse {
+                id: request_id,
+                result: TurnStartResult::Queued {
+                    active_turn_id,
+                    queued_input_id,
+                    status: TurnStatus::Pending,
+                    accepted_at: now,
+                },
+            })
+            .expect("serialize queued turn/start response");
+        }
+        if let Some(cwd) = params.cwd.clone() {
+            let old_cwd = reservation.summary.cwd.clone();
+            if old_cwd != cwd {
+                cwd_change = Some((old_cwd, cwd.clone()));
+                session_handle
+                    .update_session_workspace(cwd.clone(), Arc::clone(&runtime_context))
+                    .await;
+            }
+        }
+        if let Some(permission_mode) = params
+            .approval_policy
+            .as_deref()
+            .and_then(permission_mode_from_approval_policy)
+        {
+            session_handle
+                .update_core_permission_mode(permission_mode)
+                .await;
+        }
+        let requested_model = requested_model_selection(
+            params.model_binding_id.as_deref(),
+            params.model.as_deref(),
+            &reservation.summary,
+        );
+        let requested_reasoning_effort_selection = params
+            .reasoning_effort_selection
+            .clone()
+            .or_else(|| reservation.summary.reasoning_effort_selection.clone());
+        let turn_config = runtime_context
+            .resolve_turn_config(requested_model, requested_reasoning_effort_selection);
+        let resolved_request = turn_config
+            .model
+            .resolve_reasoning_effort_selection(turn_config.reasoning_effort_selection.as_deref());
+        let request_model = turn_config.provider_request_model(&resolved_request.request_model);
+        let turn = TurnMetadata {
+            turn_id: TurnId::new(),
+            session_id: params.session_id,
+            sequence: reservation
+                .latest_turn
+                .as_ref()
+                .map_or(1, |turn| turn.sequence + 1),
+            status: TurnStatus::Running,
+            kind: devo_core::TurnKind::Regular,
+            model: turn_config.model.slug.clone(),
+            model_binding_id: turn_config.model_binding_id.clone(),
+            reasoning_effort_selection: turn_config.reasoning_effort_selection.clone(),
+            reasoning_effort: resolved_request.effective_reasoning_effort,
+            request_model,
+            request_thinking: resolved_request.request_thinking,
+            started_at: now,
+            completed_at: None,
+            usage: None,
+            stop_reason: None,
+            failure_reason: None,
         };
+        session_handle
+            .begin_active_turn(turn.clone(), turn_config.clone())
+            .await;
         if let Some((old_cwd, new_cwd)) = cwd_change {
             self.run_session_hook(
                 params.session_id,
@@ -328,36 +313,22 @@ impl ServerRuntime {
             )
             .await;
         }
-        self.maybe_start_title_generation_from_user_input(params.session_id, &display_input)
+        self.maybe_prepare_title_generation_from_user_input(params.session_id, &display_input)
             .await;
-        let (record, session_context, turn_context) = {
-            let session = session_arc.lock().await;
-            let core_session = session.core_session.lock().await;
-            (
-                session.record.clone(),
-                core_session.session_context.clone(),
-                core_session.latest_turn_context.clone(),
-            )
-        };
-        if let Some(record) = record
+        if let Some(persistence) = session_handle.turn_persistence_snapshot().await
+            && let Some(record) = persistence.record
             && let Err(error) = self.rollout_store.append_turn(
                 &record,
-                build_turn_record(&turn, session_context, turn_context),
+                build_turn_record(
+                    &turn,
+                    persistence.session_context,
+                    persistence.latest_turn_context,
+                ),
             )
         {
-            {
-                let mut session = session_arc.lock().await;
-                if session
-                    .active_turn
-                    .as_ref()
-                    .is_some_and(|active| active.turn_id == turn.turn_id)
-                {
-                    session.active_turn = None;
-                    session.summary.status = SessionRuntimeStatus::Idle;
-                    session.summary.updated_at = Utc::now();
-                    session.summary.last_activity_at = session.summary.updated_at;
-                }
-            }
+            let _ = session_handle
+                .clear_active_turn_if_matches(turn.turn_id)
+                .await;
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::InternalError,
@@ -373,16 +344,6 @@ impl ServerRuntime {
             },
         ))
         .await;
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .insert(params.session_id, CancellationToken::new());
-        if let Some(connection_id) = connection_id {
-            self.active_turn_connections
-                .lock()
-                .await
-                .insert(params.session_id, connection_id);
-        }
         let runtime = Arc::clone(self);
         let turn_for_task = turn.clone();
         let display_input_for_task = display_input.clone();
@@ -391,7 +352,7 @@ impl ServerRuntime {
         let turn_config_for_task = turn_config.clone();
         let collaboration_mode = params.collaboration_mode;
         let session_id = params.session_id;
-        let task = tokio::spawn(async move {
+        self.spawn_active_turn_task(params.session_id, turn.clone(), connection_id, async move {
             runtime
                 .execute_turn(ExecuteTurnRequest {
                     session_id,
@@ -404,11 +365,8 @@ impl ServerRuntime {
                     input_mode: TurnInputMode::VisibleUserMessage,
                 })
                 .await;
-        });
-        self.active_tasks
-            .lock()
-            .await
-            .insert(params.session_id, task.abort_handle());
+        })
+        .await;
 
         tracing::info!(
             session_id = %params.session_id,
@@ -466,7 +424,7 @@ impl ServerRuntime {
                 "shell command is empty",
             );
         }
-        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
+        let Some(session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -487,60 +445,71 @@ impl ServerRuntime {
             },
             None => None,
         };
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::SessionNotFound,
+                "session does not exist",
+            );
+        };
+        if reservation.active_turn.is_some() {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::TurnAlreadyRunning,
+                "cannot run shell command while a turn is active",
+            );
+        }
         let now = Utc::now();
         let mut cwd_change = None;
-        let (turn, cwd) = {
-            let mut session = session_arc.lock().await;
-            if session.active_turn.is_some() {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::TurnAlreadyRunning,
-                    "cannot run shell command while a turn is active",
-                );
-            }
-            let cwd = params
-                .cwd
-                .clone()
-                .unwrap_or_else(|| session.summary.cwd.clone());
-            if let Some(cwd) = params.cwd.clone() {
-                let old_cwd = session.summary.cwd.clone();
-                if old_cwd != cwd {
-                    cwd_change = Some((old_cwd, cwd.clone()));
-                    if let Some(runtime_context) = requested_runtime_context.as_ref() {
-                        session.runtime_context = Arc::clone(runtime_context);
-                    }
+        let cwd = params
+            .cwd
+            .clone()
+            .unwrap_or_else(|| reservation.summary.cwd.clone());
+        if let Some(cwd) = params.cwd.clone() {
+            let old_cwd = reservation.summary.cwd.clone();
+            if old_cwd != cwd {
+                cwd_change = Some((old_cwd, cwd.clone()));
+                if let Some(runtime_context) = requested_runtime_context.as_ref() {
+                    session_handle
+                        .update_session_workspace(cwd.clone(), Arc::clone(runtime_context))
+                        .await;
                 }
-                session.summary.cwd = cwd.clone();
-                session.core_session.lock().await.cwd = cwd;
             }
-            let model = session.summary.model.clone().unwrap_or_default();
-            let turn = TurnMetadata {
-                turn_id: TurnId::new(),
-                session_id: params.session_id,
-                sequence: session
-                    .latest_turn
-                    .as_ref()
-                    .map_or(1, |turn| turn.sequence + 1),
-                status: TurnStatus::Running,
-                kind: devo_core::TurnKind::Other("shell_command".to_string()),
-                model: model.clone(),
-                model_binding_id: session.summary.model_binding_id.clone(),
-                reasoning_effort_selection: session.summary.reasoning_effort_selection.clone(),
-                reasoning_effort: session.summary.reasoning_effort,
-                request_model: model,
-                request_thinking: session.summary.reasoning_effort_selection.clone(),
-                started_at: now,
-                completed_at: None,
-                usage: None,
-                stop_reason: None,
-                failure_reason: None,
-            };
-            session.summary.status = SessionRuntimeStatus::ActiveTurn;
-            session.summary.updated_at = now;
-            session.summary.last_activity_at = now;
-            session.active_turn = Some(turn.clone());
-            (turn, cwd)
+        }
+        let model = reservation.summary.model.clone().unwrap_or_default();
+        let turn = TurnMetadata {
+            turn_id: TurnId::new(),
+            session_id: params.session_id,
+            sequence: reservation
+                .latest_turn
+                .as_ref()
+                .map_or(1, |turn| turn.sequence + 1),
+            status: TurnStatus::Running,
+            kind: devo_core::TurnKind::Other("shell_command".to_string()),
+            model: model.clone(),
+            model_binding_id: reservation.summary.model_binding_id.clone(),
+            reasoning_effort_selection: reservation.summary.reasoning_effort_selection.clone(),
+            reasoning_effort: reservation.summary.reasoning_effort,
+            request_model: model,
+            request_thinking: reservation.summary.reasoning_effort_selection.clone(),
+            started_at: now,
+            completed_at: None,
+            usage: None,
+            stop_reason: None,
+            failure_reason: None,
         };
+        session_handle
+            .begin_active_turn(
+                turn.clone(),
+                reservation.runtime_context.resolve_turn_config(
+                    session_model_selection(&reservation.summary),
+                    reservation.summary.reasoning_effort_selection.clone(),
+                ),
+            )
+            .await;
         if let Some((old_cwd, new_cwd)) = cwd_change {
             self.run_session_hook(
                 params.session_id,
@@ -559,22 +528,19 @@ impl ServerRuntime {
             .await;
         }
 
+        if let Some(persistence) = session_handle.turn_persistence_snapshot().await
+            && let Some(record) = persistence.record
+            && let Err(error) = self
+                .rollout_store
+                .append_turn(&record, build_turn_record(&turn, None, None))
         {
-            let session = session_arc.lock().await;
-            if let Some(record) = session.record.clone()
-                && let Err(error) = self
-                    .rollout_store
-                    .append_turn(&record, build_turn_record(&turn, None, None))
-            {
-                drop(session);
-                self.clear_active_turn_reservation(&session_arc, turn.turn_id)
-                    .await;
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::InternalError,
-                    format!("failed to persist shell command turn start: {error}"),
-                );
-            }
+            self.clear_active_turn_reservation(&session_handle, turn.turn_id)
+                .await;
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::InternalError,
+                format!("failed to persist shell command turn start: {error}"),
+            );
         }
 
         self.broadcast_event(ServerEvent::SessionStatusChanged(
@@ -593,25 +559,12 @@ impl ServerRuntime {
         let runtime = Arc::clone(self);
         let command_for_task = command.clone();
         let turn_for_task = turn.clone();
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .insert(params.session_id, CancellationToken::new());
-        if let Some(connection_id) = connection_id {
-            self.active_turn_connections
-                .lock()
-                .await
-                .insert(params.session_id, connection_id);
-        }
-        let task = tokio::spawn(async move {
+        self.spawn_active_turn_task(params.session_id, turn.clone(), connection_id, async move {
             runtime
                 .execute_shell_command_turn(params.session_id, turn_for_task, command_for_task, cwd)
                 .await;
-        });
-        self.active_tasks
-            .lock()
-            .await
-            .insert(params.session_id, task.abort_handle());
+        })
+        .await;
 
         serde_json::to_value(SuccessResponse {
             id: request_id,
@@ -622,217 +575,6 @@ impl ServerRuntime {
             },
         })
         .expect("serialize turn/shell_command response")
-    }
-
-    pub(crate) async fn handle_turn_interrupt(
-        self: &Arc<Self>,
-        request_id: serde_json::Value,
-        params: serde_json::Value,
-    ) -> serde_json::Value {
-        let params: TurnInterruptParams = match serde_json::from_value(params) {
-            Ok(params) => params,
-            Err(error) => {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::InvalidParams,
-                    format!("invalid turn/interrupt params: {error}"),
-                );
-            }
-        };
-        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
-            return self.error_response(
-                request_id,
-                ProtocolErrorCode::SessionNotFound,
-                "session does not exist",
-            );
-        };
-
-        let deferred_assistant = {
-            let mut session = session_arc.lock().await;
-            session.deferred_assistant.take()
-        };
-        let deferred_reasoning = {
-            let mut session = session_arc.lock().await;
-            session.deferred_reasoning.take()
-        };
-        if let Some((item_id, item_seq, text)) = deferred_assistant {
-            self.complete_item(
-                params.session_id,
-                params.turn_id,
-                item_id,
-                item_seq,
-                ItemKind::AgentMessage,
-                TurnItem::AgentMessage(TextItem { text: text.clone() }),
-                serde_json::json!({ "title": "Assistant", "text": text }),
-            )
-            .await;
-        }
-        if let Some((item_id, item_seq, text)) = deferred_reasoning {
-            self.complete_item(
-                params.session_id,
-                params.turn_id,
-                item_id,
-                item_seq,
-                ItemKind::Reasoning,
-                TurnItem::Reasoning(TextItem { text: text.clone() }),
-                serde_json::json!({ "title": "Reasoning", "text": text }),
-            )
-            .await;
-        }
-
-        {
-            let mut session = session_arc.lock().await;
-            let previous_len = session.pending_user_inputs.len();
-            session
-                .pending_user_inputs
-                .retain(|_, pending| pending.turn_id != params.turn_id);
-            let removed_len = previous_len.saturating_sub(session.pending_user_inputs.len());
-            if removed_len > 0 {
-                tracing::info!(
-                    session_id = %params.session_id,
-                    turn_id = %params.turn_id,
-                    removed_len,
-                    "cleared pending request_user_input requests for interrupted turn"
-                );
-            }
-        }
-
-        if let Some(cancel_token) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .remove(&params.session_id)
-        {
-            cancel_token.cancel();
-        }
-        if let Some(task) = self.active_tasks.lock().await.remove(&params.session_id) {
-            task.abort();
-        }
-        Arc::clone(self)
-            .close_research_child_agents(params.session_id)
-            .await;
-        let interrupted_turn = {
-            let mut session = session_arc.lock().await;
-            let Some(mut turn) = session.active_turn.take() else {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::TurnNotFound,
-                    "turn is not active",
-                );
-            };
-            if turn.turn_id != params.turn_id {
-                session.active_turn = Some(turn);
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::TurnNotFound,
-                    "turn does not exist",
-                );
-            }
-            turn.status = TurnStatus::Interrupted;
-            turn.completed_at = Some(Utc::now());
-            session.latest_turn = Some(turn.clone());
-            session.summary.status = SessionRuntimeStatus::Idle;
-            session.summary.updated_at = Utc::now();
-            session.summary.last_activity_at = session.summary.updated_at;
-            let totals = session.core_session.try_lock().ok().map(|core_session| {
-                (
-                    core_session.total_input_tokens,
-                    core_session.total_output_tokens,
-                    core_session.total_tokens,
-                    core_session.total_cache_creation_tokens,
-                    core_session.total_cache_read_tokens,
-                    core_session.prompt_token_estimate,
-                )
-            });
-            if let Some((
-                total_input_tokens,
-                total_output_tokens,
-                total_tokens,
-                total_cache_creation_tokens,
-                total_cache_read_tokens,
-                prompt_token_estimate,
-            )) = totals
-            {
-                session.summary.total_input_tokens = total_input_tokens;
-                session.summary.total_output_tokens = total_output_tokens;
-                session.summary.total_tokens = total_tokens;
-                session.summary.total_cache_creation_tokens = total_cache_creation_tokens;
-                session.summary.total_cache_read_tokens = total_cache_read_tokens;
-                session.summary.prompt_token_estimate = prompt_token_estimate;
-            }
-            turn
-        };
-        let (record, session_context, turn_context) = {
-            let session = session_arc.lock().await;
-            let core_session_lock = session.core_session.try_lock();
-            if let Ok(core_session) = core_session_lock {
-                (
-                    session.record.clone(),
-                    core_session.session_context.clone(),
-                    core_session.latest_turn_context.clone(),
-                )
-            } else {
-                (session.record.clone(), None, None)
-            }
-        };
-        if let Some(record) = record
-            && let Err(error) = self.rollout_store.append_turn(
-                &record,
-                build_turn_record(&interrupted_turn, session_context, turn_context),
-            )
-        {
-            return self.error_response(
-                request_id,
-                ProtocolErrorCode::InternalError,
-                format!("failed to persist interrupted turn: {error}"),
-            );
-        }
-
-        tracing::info!(
-            session_id = %params.session_id,
-            turn_id = %interrupted_turn.turn_id,
-            status = ?interrupted_turn.status,
-            "interrupted turn"
-        );
-        self.finalize_turn_workspace_changes(params.session_id, &interrupted_turn)
-            .await;
-        self.broadcast_event(ServerEvent::TurnInterrupted(TurnEventPayload {
-            session_id: params.session_id,
-            turn: interrupted_turn.clone(),
-        }))
-        .await;
-        self.broadcast_event(ServerEvent::TurnCompleted(TurnEventPayload {
-            session_id: params.session_id,
-            turn: interrupted_turn.clone(),
-        }))
-        .await;
-        self.broadcast_event(ServerEvent::SessionStatusChanged(
-            SessionStatusChangedPayload {
-                session_id: params.session_id,
-                status: SessionRuntimeStatus::Idle,
-            },
-        ))
-        .await;
-        self.record_terminal_turn_status(
-            interrupted_turn.turn_id,
-            TerminalTurnSnapshot::from_turn(&interrupted_turn),
-        )
-        .await;
-
-        let runtime = Arc::clone(self);
-        let sid = params.session_id;
-        tokio::spawn(async move {
-            runtime.spawn_next_turn_from_queue(sid).await;
-        });
-
-        serde_json::to_value(SuccessResponse {
-            id: request_id,
-            result: TurnInterruptResult {
-                turn_id: interrupted_turn.turn_id,
-                status: interrupted_turn.status,
-            },
-        })
-        .expect("serialize turn/interrupt response")
     }
 
     pub(crate) async fn handle_turn_steer(
@@ -865,44 +607,47 @@ impl ServerRuntime {
                 "turn steer input is empty",
             );
         };
-        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
+        let Some(_session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
                 "session does not exist",
             );
         };
-        let (turn_id, workspace_root, btw_input_queue, runtime_context) = {
-            let session = session_arc.lock().await;
-            let Some(turn_id) = session.active_turn.as_ref().map(|turn| turn.turn_id) else {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::NoActiveTurn,
-                    "no active turn exists",
-                );
-            };
-            if turn_id != params.expected_turn_id {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::ExpectedTurnMismatch,
-                    "active turn did not match expectedTurnId",
-                );
-            }
-            let active_turn = session.active_turn.as_ref().expect("active turn exists");
-            if active_turn.kind != devo_core::TurnKind::Regular {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::ActiveTurnNotSteerable,
-                    "cannot steer a non-regular turn",
-                );
-            }
-            (
-                turn_id,
-                session.summary.cwd.clone(),
-                Arc::clone(&session.btw_input_queue),
-                Arc::clone(&session.runtime_context),
-            )
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::SessionNotFound,
+                "session does not exist",
+            );
         };
+        let Some(active_turn) = reservation.active_turn.as_ref() else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::NoActiveTurn,
+                "no active turn exists",
+            );
+        };
+        let turn_id = active_turn.turn_id;
+        if turn_id != params.expected_turn_id {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::ExpectedTurnMismatch,
+                "active turn did not match expectedTurnId",
+            );
+        }
+        if active_turn.kind != devo_core::TurnKind::Regular {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::ActiveTurnNotSteerable,
+                "cannot steer a non-regular turn",
+            );
+        }
+        let workspace_root = reservation.summary.cwd.clone();
+        let runtime_context = reservation.runtime_context;
         let resolved_input = match runtime_context
             .resolve_input_items(&params.input, Some(workspace_root.as_path()))
         {
@@ -955,25 +700,23 @@ impl ServerRuntime {
             None,
             chrono::Utc::now(),
         );
-        btw_input_queue
+        reservation
+            .btw_input_queue
             .lock()
             .expect("btw input queue mutex should not be poisoned")
             .push_back(item.clone());
 
+        if !reservation.ephemeral
+            && let Err(err) = self
+                .deps
+                .db
+                .push_pending(&params.session_id, QueueType::Btw, &item)
         {
-            let session = session_arc.lock().await;
-            if !session.summary.ephemeral
-                && let Err(err) =
-                    self.deps
-                        .db
-                        .push_pending(&params.session_id, QueueType::Btw, &item)
-            {
-                tracing::warn!(
-                    session_id = %params.session_id,
-                    error = %err,
-                    "failed to persist btw input to database"
-                );
-            }
+            tracing::warn!(
+                session_id = %params.session_id,
+                error = %err,
+                "failed to persist btw input to database"
+            );
         }
 
         self.emit_to_connection(
@@ -1018,28 +761,28 @@ impl ServerRuntime {
                 );
             }
         };
-        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
+        let Some(session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
                 "session does not exist",
             );
         };
-        let (pending_turn_queue, is_ephemeral) = {
-            let session = session_arc.lock().await;
-            (
-                Arc::clone(&session.pending_turn_queue),
-                session.summary.ephemeral,
-            )
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::SessionNotFound,
+                "session does not exist",
+            );
         };
-        let removed = {
-            let mut queue = pending_turn_queue
-                .lock()
-                .expect("pending turn queue mutex should not be poisoned");
-            let before = queue.len();
-            queue.retain(|item| item.id != params.queued_input_id);
-            queue.len() != before
-        };
+        let is_ephemeral = reservation.ephemeral;
+        let removed = session_handle
+            .remove_queued_turn_input(params.queued_input_id)
+            .await
+            .unwrap_or(false);
         if removed
             && !is_ephemeral
             && let Err(error) = self.deps.db.remove_pending_by_id(
@@ -1081,45 +824,49 @@ impl ServerRuntime {
                 );
             }
         };
-        let Some(session_arc) = self.sessions.lock().await.get(&params.session_id).cloned() else {
+        let Some(_session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
                 "session does not exist",
             );
         };
-        let (turn_id, pending_turn_queue, btw_input_queue, is_ephemeral) = {
-            let session = session_arc.lock().await;
-            let Some(active_turn) = session.active_turn.as_ref() else {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::NoActiveTurn,
-                    "no active turn exists",
-                );
-            };
-            if active_turn.turn_id != params.expected_turn_id {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::ExpectedTurnMismatch,
-                    "active turn did not match expectedTurnId",
-                );
-            }
-            if active_turn.kind != devo_core::TurnKind::Regular {
-                return self.error_response(
-                    request_id,
-                    ProtocolErrorCode::ActiveTurnNotSteerable,
-                    "cannot steer a non-regular turn",
-                );
-            }
-            (
-                active_turn.turn_id,
-                Arc::clone(&session.pending_turn_queue),
-                Arc::clone(&session.btw_input_queue),
-                session.summary.ephemeral,
-            )
+        let Some(reservation) = self
+            .session_turn_reservation_snapshot(params.session_id)
+            .await
+        else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::SessionNotFound,
+                "session does not exist",
+            );
         };
-        let (item, display_input) = {
-            let mut queue = pending_turn_queue
+        let Some(active_turn) = reservation.active_turn.as_ref() else {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::NoActiveTurn,
+                "no active turn exists",
+            );
+        };
+        if active_turn.turn_id != params.expected_turn_id {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::ExpectedTurnMismatch,
+                "active turn did not match expectedTurnId",
+            );
+        }
+        if active_turn.kind != devo_core::TurnKind::Regular {
+            return self.error_response(
+                request_id,
+                ProtocolErrorCode::ActiveTurnNotSteerable,
+                "cannot steer a non-regular turn",
+            );
+        }
+        let turn_id = active_turn.turn_id;
+        let is_ephemeral = reservation.ephemeral;
+        let queued = {
+            let mut queue = reservation
+                .pending_turn_queue
                 .lock()
                 .expect("pending turn queue mutex should not be poisoned");
             let Some(index) = queue
@@ -1129,7 +876,7 @@ impl ServerRuntime {
                 return self.error_response(
                     request_id,
                     ProtocolErrorCode::InvalidParams,
-                    "queued input does not exist",
+                    "queued input does not exist or cannot be steered",
                 );
             };
             let display_input = match &queue[index].kind {
@@ -1139,17 +886,19 @@ impl ServerRuntime {
                     return self.error_response(
                         request_id,
                         ProtocolErrorCode::InvalidParams,
-                        "queued input cannot be steered",
+                        "queued input does not exist or cannot be steered",
                     );
                 }
             };
             let item = queue
                 .remove(index)
                 .expect("queued item index should remain valid");
-            (item, display_input)
+            (display_input, item)
         };
+        let (display_input, item) = queued;
 
-        btw_input_queue
+        reservation
+            .btw_input_queue
             .lock()
             .expect("btw input queue mutex should not be poisoned")
             .push_back(item.clone());
