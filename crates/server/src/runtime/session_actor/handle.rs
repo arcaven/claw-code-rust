@@ -1,7 +1,5 @@
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 
 use devo_protocol::ApprovalScopeValue;
 use devo_protocol::CollaborationMode;
@@ -37,7 +35,6 @@ const SESSION_MAILBOX_CAPACITY: usize = 64;
 pub(crate) struct SessionHandle {
     session_id: SessionId,
     tx: mpsc::Sender<SessionCommand>,
-    pending_turn_queue: Arc<StdMutex<VecDeque<PendingInputItem>>>,
     max_turns: Option<u32>,
 }
 
@@ -46,19 +43,14 @@ impl SessionHandle {
         self.session_id
     }
 
-    pub(crate) fn pending_turn_queue(&self) -> Arc<StdMutex<VecDeque<PendingInputItem>>> {
-        Arc::clone(&self.pending_turn_queue)
-    }
-
     pub(crate) fn max_turns(&self) -> Option<u32> {
         self.max_turns
     }
 
-    pub(crate) fn push_pending_turn_input(&self, item: PendingInputItem) {
-        self.pending_turn_queue
-            .lock()
-            .expect("pending turn queue mutex should not be poisoned")
-            .push_back(item);
+    pub(crate) async fn enqueue_pending_turn_input(&self, item: PendingInputItem) {
+        let _ = self
+            .send(SessionCommand::EnqueuePendingTurnInput { item })
+            .await;
     }
 
     pub(crate) fn spawn(
@@ -66,13 +58,11 @@ impl SessionHandle {
         state: SessionActorState,
         runtime: Arc<crate::runtime::ServerRuntime>,
     ) -> Self {
-        let pending_turn_queue = Arc::clone(&state.pending_turn_queue);
         let max_turns = state.max_turns;
         let (tx, rx) = mpsc::channel(SESSION_MAILBOX_CAPACITY);
         let handle = Self {
             session_id,
             tx,
-            pending_turn_queue,
             max_turns,
         };
         tokio::spawn(super::loop_::run_session_actor(state, rx, runtime));
@@ -158,19 +148,6 @@ impl SessionHandle {
 
     pub(crate) fn try_set_active_goal(&self, goal: Option<ThreadGoal>) -> bool {
         self.try_send(SessionCommand::SetActiveGoal { goal })
-    }
-
-    pub(crate) async fn runtime_context(
-        &self,
-    ) -> Option<Arc<crate::session_context::SessionRuntimeContext>> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        if !self
-            .send(SessionCommand::GetRuntimeContext { reply: reply_tx })
-            .await
-        {
-            return None;
-        }
-        reply_rx.await.ok()
     }
 
     pub(crate) async fn parent_session_id(&self) -> Option<Option<SessionId>> {
@@ -450,8 +427,21 @@ impl SessionHandle {
             .await;
     }
 
-    pub(crate) fn enqueue_pending_turn_input(&self, item: PendingInputItem) {
-        self.push_pending_turn_input(item);
+    pub(crate) async fn remove_queued_turn_input(
+        &self,
+        queued_input_id: devo_core::PendingInputId,
+    ) -> Option<bool> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if !self
+            .send(SessionCommand::RemoveQueuedTurnInput {
+                queued_input_id,
+                reply: reply_tx,
+            })
+            .await
+        {
+            return None;
+        }
+        reply_rx.await.ok()
     }
 
     pub(crate) async fn activate_queued_turn(&self, turn: TurnMetadata, turn_config: TurnConfig) {
@@ -542,10 +532,6 @@ impl SessionHandle {
                 runtime_context,
             })
             .await;
-    }
-
-    pub(crate) async fn enqueue_btw_input(&self, item: devo_protocol::PendingInputItem) {
-        let _ = self.send(SessionCommand::EnqueueBtwInput { item }).await;
     }
 
     pub(crate) async fn update_session_metadata(

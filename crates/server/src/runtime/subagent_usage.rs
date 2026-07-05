@@ -432,6 +432,9 @@ impl ServerRuntime {
     }
 
     pub(super) async fn active_turn_id_for_session(&self, session_id: SessionId) -> Option<TurnId> {
+        if let Some(turn_id) = self.runtime_active_turn_id(session_id).await {
+            return Some(turn_id);
+        }
         let session_handle = self.session(session_id).await?;
         session_handle.active_turn_id().await.flatten()
     }

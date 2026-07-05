@@ -179,8 +179,6 @@ impl ServerRuntime {
                 if !still_reserved {
                     false
                 } else {
-                    let mut cancellations = self.active_turn_cancellations.lock().await;
-                    let mut active_tasks = self.active_tasks.lock().await;
                     let still_active_turn = session_handle
                         .active_turn_id()
                         .await
@@ -188,7 +186,9 @@ impl ServerRuntime {
                     if !still_active_turn {
                         false
                     } else {
-                        cancellations.insert(session_id, cancel_token);
+                        self.active_turns
+                            .insert_cancel_token(session_id, cancel_token.clone())
+                            .await;
                         self.register_runtime_active_turn(session_id, turn.clone())
                             .await;
                         let task = tokio::spawn(async move {
@@ -207,7 +207,9 @@ impl ServerRuntime {
                                 })
                                 .await;
                         });
-                        active_tasks.insert(session_id, task.abort_handle());
+                        self.active_turns
+                            .set_abort_handle(session_id, task.abort_handle())
+                            .await;
                         true
                     }
                 }
@@ -240,11 +242,10 @@ impl ServerRuntime {
         {
             return false;
         }
-        reservation
-            .pending_turn_queue
-            .lock()
-            .expect("pending turn queue mutex should not be poisoned")
-            .is_empty()
+        let Some(snapshot) = session_handle.pending_queue_snapshot().await else {
+            return false;
+        };
+        snapshot.pending_count == 0
     }
 
     async fn goal_continuation_candidate(
@@ -427,11 +428,8 @@ impl ServerRuntime {
             session_id
         };
         if let Some(session_id) = session_id {
-            self.active_turn_cancellations
-                .lock()
-                .await
-                .remove(&session_id);
-            self.active_tasks.lock().await.remove(&session_id);
+            self.active_turns.remove_cancel_token(session_id).await;
+            self.active_turns.remove_abort_handle(session_id).await;
         }
         self.goal_continuation_turn_goals
             .lock()
@@ -489,18 +487,7 @@ impl ServerRuntime {
         // Cancel via a clone rather than `remove`: see the comment in
         // `interrupt_child_runtime_work` for why removing here races with
         // `run_turn_model_query` fetching the same token.
-        if let Some(cancel_token) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .get(&session_id)
-            .cloned()
-        {
-            cancel_token.cancel();
-        }
-        if let Some(task) = self.active_tasks.lock().await.remove(&session_id) {
-            task.abort();
-        }
+        self.signal_active_turn_interrupt(session_id).await;
 
         let completed =
             match tokio::time::timeout(std::time::Duration::from_secs(5), terminal_rx).await {

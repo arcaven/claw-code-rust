@@ -115,11 +115,9 @@ impl ServerRuntime {
         let permission_profile = state.core.config.permission_profile.clone();
         let hook_context = Self::hook_context_from_actor_state(state, session_id);
         let turn_cancel_token = self
-            .active_turn_cancellations
-            .lock()
+            .active_turns
+            .cancel_token(session_id)
             .await
-            .get(&session_id)
-            .cloned()
             .unwrap_or_else(CancellationToken::new);
         let query_cancel_token = turn_cancel_token.clone();
         let provider_http = runtime_context

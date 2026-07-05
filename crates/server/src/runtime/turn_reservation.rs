@@ -52,7 +52,7 @@ impl ServerRuntime {
     }
 
     pub(super) async fn runtime_active_turn_id(&self, session_id: SessionId) -> Option<TurnId> {
-        self.active_turn_ids.lock().await.get(&session_id).copied()
+        self.active_turns.active_turn_id(session_id).await
     }
 
     pub(super) async fn register_runtime_active_turn(
@@ -60,28 +60,17 @@ impl ServerRuntime {
         session_id: SessionId,
         turn: TurnMetadata,
     ) {
-        self.active_turn_ids
-            .lock()
-            .await
-            .insert(session_id, turn.turn_id);
-        self.active_turn_metadata
-            .lock()
-            .await
-            .insert(session_id, turn);
+        self.active_turns
+            .register_turn_metadata(session_id, turn)
+            .await;
+    }
+
+    pub(super) async fn clear_active_turn_interrupt_handles(&self, session_id: SessionId) {
+        self.active_turns.clear_interrupt_handles(session_id).await;
     }
 
     pub(super) async fn clear_active_turn_runtime_handles(&self, session_id: SessionId) {
-        self.active_tasks.lock().await.remove(&session_id);
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .remove(&session_id);
-        self.active_turn_ids.lock().await.remove(&session_id);
-        self.active_turn_metadata.lock().await.remove(&session_id);
-        self.active_turn_connections
-            .lock()
-            .await
-            .remove(&session_id);
+        self.active_turns.clear_runtime_handles(session_id).await;
     }
 
     pub(super) async fn clear_active_turn_reservation(
@@ -281,11 +270,11 @@ mod tests {
             )
             .await;
         let response: ErrorResponse = serde_json::from_value(value).expect("error response");
-        let queued_len = reservation
-            .pending_turn_queue
-            .lock()
-            .expect("pending turn queue mutex should not be poisoned")
-            .len();
+        let queued_len = session_handle
+            .pending_queue_snapshot()
+            .await
+            .map(|snapshot| snapshot.pending_count)
+            .unwrap_or(0);
 
         assert_eq!(response.error.code, ProtocolErrorCode::TurnAlreadyRunning);
         assert_eq!(queued_len, 0);

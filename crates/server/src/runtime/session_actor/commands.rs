@@ -41,9 +41,6 @@ pub(crate) enum SessionCommand {
     GetCollaborationMode {
         reply: oneshot::Sender<CollaborationMode>,
     },
-    GetRuntimeContext {
-        reply: oneshot::Sender<Arc<crate::session_context::SessionRuntimeContext>>,
-    },
     GetParentSessionId {
         reply: oneshot::Sender<Option<devo_protocol::SessionId>>,
     },
@@ -69,6 +66,13 @@ pub(crate) enum SessionCommand {
     PopQueuedTurnInput {
         require_idle_session: bool,
         reply: oneshot::Sender<Option<QueuedTurnInputData>>,
+    },
+    EnqueuePendingTurnInput {
+        item: PendingInputItem,
+    },
+    RemoveQueuedTurnInput {
+        queued_input_id: devo_core::PendingInputId,
+        reply: oneshot::Sender<bool>,
     },
     GetActiveTurnId {
         reply: oneshot::Sender<Option<TurnId>>,
@@ -155,9 +159,6 @@ pub(crate) enum SessionCommand {
     UpdateSessionWorkspace {
         cwd: std::path::PathBuf,
         runtime_context: Arc<crate::session_context::SessionRuntimeContext>,
-    },
-    EnqueueBtwInput {
-        item: devo_protocol::PendingInputItem,
     },
     UpdateSessionMetadata {
         model: Option<String>,

@@ -89,18 +89,10 @@ impl ServerRuntime {
         // the in-flight query) cannot lose the signal by finding the map entry
         // already gone and falling back to a fresh, disconnected token. The
         // entry itself is cleaned up later by `finalize_executed_turn`.
-        if let Some(cancel_token) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .get(&child_session_id)
-            .cloned()
-        {
+        if let Some(cancel_token) = self.active_turns.cancel_token(child_session_id).await {
             cancel_token.cancel();
         }
-        if let Some(task) = self.active_tasks.lock().await.remove(&child_session_id) {
-            task.abort();
-        }
+        self.active_turns.abort_task(child_session_id).await;
         let session_handle = self.sessions.lock().await.get(&child_session_id).cloned()?;
         session_handle.interrupt_active_turn().await?
     }

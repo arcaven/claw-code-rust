@@ -463,11 +463,9 @@ impl ServerRuntime {
                 queued_metadata,
                 Utc::now(),
             );
-            reservation
-                .pending_turn_queue
-                .lock()
-                .expect("pending turn queue mutex should not be poisoned")
-                .push_back(item.clone());
+            session_handle
+                .enqueue_pending_turn_input(item.clone())
+                .await;
             if !reservation.ephemeral
                 && let Err(error) = self
                     .deps
@@ -544,20 +542,12 @@ impl ServerRuntime {
         let runtime = Arc::clone(self);
         let turn_for_task = turn.clone();
         let turn_config_for_task = turn_config.clone();
-        let cancel_token = CancellationToken::new();
         if let Some(parent_session_id) = reservation.parent_session_id {
-            let mut connections = self.active_turn_connections.lock().await;
-            if let Some(connection_id) = connections.get(&parent_session_id).copied() {
-                connections.insert(session_id, connection_id);
-            }
+            self.active_turns
+                .copy_connection_from_parent(session_id, parent_session_id)
+                .await;
         }
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .insert(session_id, cancel_token);
-        self.register_runtime_active_turn(session_id, turn.clone())
-            .await;
-        let task = tokio::spawn(async move {
+        self.spawn_active_turn_task(session_id, turn.clone(), None, async move {
             runtime
                 .execute_turn(ExecuteTurnRequest {
                     session_id,
@@ -570,11 +560,8 @@ impl ServerRuntime {
                     input_mode: TurnInputMode::VisibleUserMessage,
                 })
                 .await;
-        });
-        self.active_tasks
-            .lock()
-            .await
-            .insert(session_id, task.abort_handle());
+        })
+        .await;
         Ok(turn)
     }
 
@@ -635,7 +622,26 @@ impl ServerRuntime {
         Ok(route)
     }
 
-    async fn drain_child_mailbox_into_user_turns(
+    pub(in crate::runtime) async fn child_can_accept_next_turn(
+        &self,
+        session_id: SessionId,
+    ) -> bool {
+        let Some(reservation) = self.session_turn_reservation_snapshot(session_id).await else {
+            return false;
+        };
+        !reservation.max_turns.is_some_and(|max_turns| {
+            max_turns == 0
+                || reservation
+                    .active_turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.sequence >= max_turns)
+                || reservation
+                    .latest_turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.sequence >= max_turns)
+        })
+    }
+    pub(in crate::runtime) async fn drain_child_mailbox_into_user_turns(
         self: &Arc<Self>,
         child_session_id: SessionId,
     ) -> Result<(), ToolCallError> {
@@ -1061,11 +1067,7 @@ impl ServerRuntime {
         // which independently resolves and records the terminal "closed" status
         // once it sees `close_requested`. Track whether a turn was actually in
         // flight so we don't also send a duplicate closed notification below.
-        let had_active_turn = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .contains_key(&child_session_id);
+        let had_active_turn = self.active_turns.has_session(child_session_id).await;
         let interrupted_turn = self.interrupt_child_runtime_work(child_session_id).await;
         if already_terminal && interrupted_turn.is_none() {
             let status = self

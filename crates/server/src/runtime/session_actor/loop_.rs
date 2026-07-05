@@ -52,6 +52,17 @@ pub(super) async fn run_session_actor(
                     if turn_runtime.spawn_next_turn_from_queue(session_id).await {
                         return;
                     }
+                    if turn_runtime
+                        .child_parent_and_path(session_id)
+                        .await
+                        .is_some()
+                        && turn_runtime.child_can_accept_next_turn(session_id).await
+                    {
+                        let _ = turn_runtime
+                            .drain_child_mailbox_into_user_turns(session_id)
+                            .await;
+                        return;
+                    }
                     if should_auto_continue_goal {
                         turn_runtime
                             .maybe_start_goal_continuation_turn(session_id)
@@ -72,9 +83,6 @@ pub(super) async fn run_session_actor(
             SessionCommand::GetCollaborationMode { reply } => {
                 let _ = reply.send(state.core.collaboration_mode);
             }
-            SessionCommand::GetRuntimeContext { reply } => {
-                let _ = reply.send(Arc::clone(&state.runtime_context));
-            }
             SessionCommand::GetParentSessionId { reply } => {
                 let _ = reply.send(state.parent_session_id());
             }
@@ -83,11 +91,12 @@ pub(super) async fn run_session_actor(
                     max_turns: state.max_turns,
                     active_turn: state.active_turn.clone(),
                     latest_turn: state.latest_turn.clone(),
-                    pending_turn_queue: Arc::clone(&state.pending_turn_queue),
                     ephemeral: state.summary.ephemeral,
                     parent_session_id: state.parent_session_id(),
                     summary: state.summary.clone(),
                     runtime_context: Arc::clone(&state.runtime_context),
+                    pending_turn_queue: Arc::clone(&state.pending_turn_queue),
+                    btw_input_queue: Arc::clone(&state.btw_input_queue),
                 });
             }
             SessionCommand::GetHookContextSnapshot { reply } => {
@@ -161,6 +170,25 @@ pub(super) async fn run_session_actor(
                     .expect("pending turn queue mutex should not be poisoned");
                 let popped = queue.pop_front().and_then(pop_queued_turn_input_data);
                 let _ = reply.send(popped);
+            }
+            SessionCommand::EnqueuePendingTurnInput { item } => {
+                state
+                    .pending_turn_queue
+                    .lock()
+                    .expect("pending turn queue mutex should not be poisoned")
+                    .push_back(item);
+            }
+            SessionCommand::RemoveQueuedTurnInput {
+                queued_input_id,
+                reply,
+            } => {
+                let mut queue = state
+                    .pending_turn_queue
+                    .lock()
+                    .expect("pending turn queue mutex should not be poisoned");
+                let before = queue.len();
+                queue.retain(|item| item.id != queued_input_id);
+                let _ = reply.send(queue.len() != before);
             }
             SessionCommand::GetActiveTurnId { reply } => {
                 let _ = reply.send(state.active_turn.as_ref().map(|turn| turn.turn_id));
@@ -352,13 +380,6 @@ pub(super) async fn run_session_actor(
                 state.runtime_context = runtime_context;
                 state.core.cwd = cwd.clone();
                 state.summary.cwd = cwd;
-            }
-            SessionCommand::EnqueueBtwInput { item } => {
-                state
-                    .btw_input_queue
-                    .lock()
-                    .expect("btw input queue mutex should not be poisoned")
-                    .push_back(item);
             }
             SessionCommand::UpdateSessionMetadata {
                 model,

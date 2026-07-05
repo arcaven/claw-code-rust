@@ -23,11 +23,12 @@ pub(crate) struct TurnReservationSnapshot {
     pub(crate) max_turns: Option<u32>,
     pub(crate) active_turn: Option<TurnMetadata>,
     pub(crate) latest_turn: Option<TurnMetadata>,
-    pub(crate) pending_turn_queue: Arc<StdMutex<VecDeque<PendingInputItem>>>,
     pub(crate) ephemeral: bool,
     pub(crate) parent_session_id: Option<SessionId>,
     pub(crate) summary: SessionMetadata,
     pub(crate) runtime_context: Arc<SessionRuntimeContext>,
+    pub(crate) pending_turn_queue: Arc<StdMutex<VecDeque<PendingInputItem>>>,
+    pub(crate) btw_input_queue: Arc<StdMutex<VecDeque<PendingInputItem>>>,
 }
 
 /// Hook runner inputs derived from session actor state.

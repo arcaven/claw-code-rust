@@ -485,43 +485,13 @@ impl ServerRuntime {
         if self.recent_terminal_turn_status(turn_id).await.is_some() {
             return;
         }
-        if let Some(cancel_token) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .get(&session_id)
-            .cloned()
-        {
-            cancel_token.cancel();
-        }
-        if let Some(task) = self.active_tasks.lock().await.remove(&session_id) {
-            task.abort();
-        }
+        self.signal_active_turn_interrupt(session_id).await;
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), receiver).await;
     }
 
     async fn clear_deleted_session_runtime_state(&self, session_id: SessionId) {
-        if let Some(task) = self.active_tasks.lock().await.remove(&session_id) {
-            task.abort();
-        }
-        // Cancel via a clone rather than `remove`: see the comment in
-        // `interrupt_child_runtime_work` for why removing here races with
-        // `run_turn_model_query` fetching the same token.
-        if let Some(cancellation) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .get(&session_id)
-            .cloned()
-        {
-            cancellation.cancel();
-        }
-        self.active_turn_ids.lock().await.remove(&session_id);
-        self.active_turn_metadata.lock().await.remove(&session_id);
-        self.active_turn_connections
-            .lock()
-            .await
-            .remove(&session_id);
+        self.signal_active_turn_interrupt(session_id).await;
+        self.active_turns.clear_runtime_handles(session_id).await;
         if let Some(turn_id) = self
             .active_goal_continuation_turns
             .lock()

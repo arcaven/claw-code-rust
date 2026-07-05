@@ -7,7 +7,6 @@ use devo_protocol::RequestUserInputQuestion;
 use devo_protocol::ServerRequestKind;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use super::research_capture::{
     ClarificationQueryCapture, FinalReportWrite, ResearchArtifactQueryCapture,
@@ -286,18 +285,6 @@ impl ServerRuntime {
             .await;
         }
 
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .insert(params.session_id, CancellationToken::new());
-        self.register_runtime_active_turn(params.session_id, turn.clone())
-            .await;
-        if let Some(connection_id) = connection_id {
-            self.active_turn_connections
-                .lock()
-                .await
-                .insert(params.session_id, connection_id);
-        }
         let research_display_input = research_display_input(&display_input);
         self.maybe_prepare_title_generation_from_user_input(
             params.session_id,
@@ -352,7 +339,7 @@ impl ServerRuntime {
         let turn_for_task = turn.clone();
         let display_input_for_task = research_display_input.clone();
         let runtime_context_for_task = Arc::clone(&runtime_context);
-        let task = tokio::spawn(async move {
+        self.spawn_active_turn_task(params.session_id, turn.clone(), connection_id, async move {
             runtime
                 .execute_research_turn(ExecuteResearchTurnInput {
                     session_id: params.session_id,
@@ -364,11 +351,8 @@ impl ServerRuntime {
                     cwd: effective_cwd,
                 })
                 .await;
-        });
-        self.active_tasks
-            .lock()
-            .await
-            .insert(params.session_id, task.abort_handle());
+        })
+        .await;
 
         serde_json::to_value(SuccessResponse {
             id: request_id,

@@ -141,18 +141,13 @@ impl ServerRuntime {
         request: &ToolPermissionRequest,
     ) -> AutoReviewOutcome {
         let (model, runtime_context) = {
-            let Some(session_handle) = self.session(session_id).await else {
+            let Some(reservation) = self.session_turn_reservation_snapshot(session_id).await else {
                 return AutoReviewOutcome::AskUser;
             };
-            let Some(summary) = session_handle.summary().await else {
-                return AutoReviewOutcome::AskUser;
-            };
-            let Some(runtime_context) = session_handle.runtime_context().await else {
-                return AutoReviewOutcome::AskUser;
-            };
-
+            let runtime_context = reservation.runtime_context;
             (
-                summary
+                reservation
+                    .summary
                     .model
                     .clone()
                     .unwrap_or_else(|| runtime_context.default_model.clone()),
@@ -319,8 +314,12 @@ impl ServerRuntime {
         let Some(parent_session_id) = self.parent_session_id(session_id).await else {
             return session_id;
         };
-        let connections = self.active_turn_connections.lock().await;
-        if connections.contains_key(&parent_session_id) {
+        if self
+            .active_turns
+            .active_connection_id(parent_session_id)
+            .await
+            .is_some()
+        {
             parent_session_id
         } else {
             session_id
@@ -334,13 +333,11 @@ impl ServerRuntime {
     ) -> Result<(), String> {
         let host_session_id = self.permission_host_session_id(session_id).await;
         let available_scopes = approval_scopes_for_request(&request);
-        let connection_id = {
-            let connections = self.active_turn_connections.lock().await;
-            connections
-                .get(&host_session_id)
-                .or_else(|| connections.get(&session_id))
-                .copied()
-        };
+        let connection_id = self
+            .active_turns
+            .active_connection_id(host_session_id)
+            .await
+            .or(self.active_turns.active_connection_id(session_id).await);
         let Some(connection_id) = connection_id else {
             return Err("no ACP client connection is available for permission request".to_string());
         };
@@ -369,14 +366,10 @@ impl ServerRuntime {
 
         let request_params =
             acp_request_permission_params(host_session_id, &request, &available_scopes);
-        let cancel_token = {
-            let cancellations = self.active_turn_cancellations.lock().await;
-            cancellations
-                .get(&host_session_id)
-                .or_else(|| cancellations.get(&session_id))
-                .cloned()
-                .unwrap_or_else(CancellationToken::new)
-        };
+        let cancel_token = self
+            .active_turns
+            .cancel_token_for_host_or_session(host_session_id, session_id)
+            .await;
         let response = match self
             .send_request_to_connection_cancellable(
                 connection_id,

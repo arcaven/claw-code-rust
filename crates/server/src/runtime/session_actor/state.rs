@@ -28,6 +28,8 @@ pub(crate) struct SpawnSnapshot {
     pub(crate) parent_active_turn_id: Option<TurnId>,
     pub(crate) parent_tool_registry: Option<Arc<ToolRegistry>>,
     pub(crate) runtime_context: Arc<SessionRuntimeContext>,
+    pub(crate) pending_turn_queue: Arc<StdMutex<VecDeque<devo_protocol::PendingInputItem>>>,
+    pub(crate) btw_input_queue: Arc<StdMutex<VecDeque<devo_protocol::PendingInputItem>>>,
 }
 
 /// Approval caches cloned at turn start for permission checks while the actor
@@ -128,6 +130,8 @@ impl SessionActorState {
                 .or_else(|| self.latest_turn.as_ref().map(|turn| turn.turn_id)),
             parent_tool_registry: self.tool_registry.clone(),
             runtime_context: Arc::clone(&self.runtime_context),
+            pending_turn_queue: Arc::clone(&self.pending_turn_queue),
+            btw_input_queue: Arc::clone(&self.btw_input_queue),
         }
     }
 

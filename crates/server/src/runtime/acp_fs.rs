@@ -109,7 +109,7 @@ impl ServerRuntime {
         session_id: SessionId,
         capability: AcpFsCapability,
     ) -> Option<u64> {
-        let connection_id = *self.active_turn_connections.lock().await.get(&session_id)?;
+        let connection_id = self.active_turns.active_connection_id(session_id).await?;
         let connections = self.connections.lock().await;
         let connection = connections.get(&connection_id)?;
         client_capabilities_support_fs(&connection.acp_client_capabilities, capability)

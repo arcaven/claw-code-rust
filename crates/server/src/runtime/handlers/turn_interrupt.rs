@@ -58,18 +58,7 @@ impl ServerRuntime {
         // Cancel via a clone rather than `remove`: see the comment in
         // `interrupt_child_runtime_work` for why removing here races with
         // `run_turn_model_query` fetching the same token.
-        if let Some(cancel_token) = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .get(&params.session_id)
-            .cloned()
-        {
-            cancel_token.cancel();
-        }
-        if let Some(task) = self.active_tasks.lock().await.remove(&params.session_id) {
-            task.abort();
-        }
+        self.signal_active_turn_interrupt(params.session_id).await;
 
         let removed_len = self
             .session_interactive

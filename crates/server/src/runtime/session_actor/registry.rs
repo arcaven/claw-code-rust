@@ -37,7 +37,7 @@ impl ServerRuntime {
     ) -> Option<super::SessionHandle> {
         let handle = self.sessions.lock().await.remove(&session_id)?;
         self.session_interactive.clear_session(session_id).await;
-        self.active_spawn_snapshots.lock().await.remove(&session_id);
+        self.active_turns.remove_session(session_id).await;
         Some(handle)
     }
 
@@ -75,21 +75,17 @@ impl ServerRuntime {
         {
             let handle = self.session(session_id).await?;
             let spawn = self.active_spawn_snapshot_for_session(session_id).await?;
-            let active_turn = self
-                .active_turn_metadata
-                .lock()
-                .await
-                .get(&session_id)
-                .cloned()?;
+            let active_turn = self.active_turns.active_turn_metadata(session_id).await?;
             return Some(super::snapshots::TurnReservationSnapshot {
                 max_turns: handle.max_turns(),
                 active_turn: Some(active_turn),
                 latest_turn: spawn.parent_latest_turn,
-                pending_turn_queue: handle.pending_turn_queue(),
                 ephemeral: spawn.parent_summary.ephemeral,
                 parent_session_id: spawn.parent_summary.parent_session_id,
                 summary: spawn.parent_summary,
                 runtime_context: spawn.runtime_context,
+                pending_turn_queue: spawn.pending_turn_queue,
+                btw_input_queue: spawn.btw_input_queue,
             });
         }
         let handle = self.session(session_id).await?;
@@ -102,22 +98,15 @@ impl ServerRuntime {
         turn_id: TurnId,
         snapshot: Arc<SpawnSnapshot>,
     ) {
-        self.active_spawn_snapshots
-            .lock()
-            .await
-            .entry(session_id)
-            .or_default()
-            .insert(turn_id, snapshot);
+        self.active_turns
+            .register_spawn_snapshot(session_id, turn_id, snapshot)
+            .await;
     }
 
     pub(crate) async fn clear_turn_spawn_snapshot(&self, session_id: SessionId, turn_id: TurnId) {
-        let mut snapshots = self.active_spawn_snapshots.lock().await;
-        if let Some(turns) = snapshots.get_mut(&session_id) {
-            turns.remove(&turn_id);
-            if turns.is_empty() {
-                snapshots.remove(&session_id);
-            }
-        }
+        self.active_turns
+            .clear_spawn_snapshot(session_id, turn_id)
+            .await;
     }
 
     /// Snapshot registered at turn start while the session actor is busy executing.
@@ -125,9 +114,9 @@ impl ServerRuntime {
         &self,
         session_id: SessionId,
     ) -> Option<SpawnSnapshot> {
-        let snapshots = self.active_spawn_snapshots.lock().await;
-        let turns = snapshots.get(&session_id)?;
-        turns.values().next().map(|snapshot| (**snapshot).clone())
+        self.active_turns
+            .spawn_snapshot_for_session(session_id)
+            .await
     }
 
     pub(crate) async fn register_active_stream(
@@ -135,25 +124,18 @@ impl ServerRuntime {
         session_id: SessionId,
         stream: Arc<tokio::sync::Mutex<super::state::SessionStreamState>>,
     ) {
-        self.active_stream_states
-            .lock()
-            .await
-            .insert(session_id, stream);
+        self.active_turns.register_stream(session_id, stream).await;
     }
 
     pub(crate) async fn unregister_active_stream(&self, session_id: SessionId) {
-        self.active_stream_states.lock().await.remove(&session_id);
+        self.active_turns.unregister_stream(session_id).await;
     }
 
     pub(crate) async fn active_stream_state(
         &self,
         session_id: SessionId,
     ) -> Option<Arc<tokio::sync::Mutex<super::state::SessionStreamState>>> {
-        self.active_stream_states
-            .lock()
-            .await
-            .get(&session_id)
-            .cloned()
+        self.active_turns.stream_state(session_id).await
     }
 
     pub(crate) async fn session_record_snapshot(

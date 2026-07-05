@@ -208,7 +208,9 @@ impl ServerRuntime {
                 now,
             );
             let queued_input_id = item.id;
-            session_handle.push_pending_turn_input(item.clone());
+            session_handle
+                .enqueue_pending_turn_input(item.clone())
+                .await;
             if !reservation.ephemeral
                 && let Err(err) =
                     self.deps
@@ -342,18 +344,6 @@ impl ServerRuntime {
             },
         ))
         .await;
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .insert(params.session_id, CancellationToken::new());
-        self.register_runtime_active_turn(params.session_id, turn.clone())
-            .await;
-        if let Some(connection_id) = connection_id {
-            self.active_turn_connections
-                .lock()
-                .await
-                .insert(params.session_id, connection_id);
-        }
         let runtime = Arc::clone(self);
         let turn_for_task = turn.clone();
         let display_input_for_task = display_input.clone();
@@ -362,7 +352,7 @@ impl ServerRuntime {
         let turn_config_for_task = turn_config.clone();
         let collaboration_mode = params.collaboration_mode;
         let session_id = params.session_id;
-        let task = tokio::spawn(async move {
+        self.spawn_active_turn_task(params.session_id, turn.clone(), connection_id, async move {
             runtime
                 .execute_turn(ExecuteTurnRequest {
                     session_id,
@@ -375,11 +365,8 @@ impl ServerRuntime {
                     input_mode: TurnInputMode::VisibleUserMessage,
                 })
                 .await;
-        });
-        self.active_tasks
-            .lock()
-            .await
-            .insert(params.session_id, task.abort_handle());
+        })
+        .await;
 
         tracing::info!(
             session_id = %params.session_id,
@@ -572,27 +559,12 @@ impl ServerRuntime {
         let runtime = Arc::clone(self);
         let command_for_task = command.clone();
         let turn_for_task = turn.clone();
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .insert(params.session_id, CancellationToken::new());
-        self.register_runtime_active_turn(params.session_id, turn.clone())
-            .await;
-        if let Some(connection_id) = connection_id {
-            self.active_turn_connections
-                .lock()
-                .await
-                .insert(params.session_id, connection_id);
-        }
-        let task = tokio::spawn(async move {
+        self.spawn_active_turn_task(params.session_id, turn.clone(), connection_id, async move {
             runtime
                 .execute_shell_command_turn(params.session_id, turn_for_task, command_for_task, cwd)
                 .await;
-        });
-        self.active_tasks
-            .lock()
-            .await
-            .insert(params.session_id, task.abort_handle());
+        })
+        .await;
 
         serde_json::to_value(SuccessResponse {
             id: request_id,
@@ -635,7 +607,7 @@ impl ServerRuntime {
                 "turn steer input is empty",
             );
         };
-        let Some(session_handle) = self.session(params.session_id).await else {
+        let Some(_session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -728,7 +700,11 @@ impl ServerRuntime {
             None,
             chrono::Utc::now(),
         );
-        session_handle.enqueue_btw_input(item.clone()).await;
+        reservation
+            .btw_input_queue
+            .lock()
+            .expect("btw input queue mutex should not be poisoned")
+            .push_back(item.clone());
 
         if !reservation.ephemeral
             && let Err(err) = self
@@ -785,7 +761,7 @@ impl ServerRuntime {
                 );
             }
         };
-        let Some(_session_handle) = self.session(params.session_id).await else {
+        let Some(session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -802,16 +778,11 @@ impl ServerRuntime {
                 "session does not exist",
             );
         };
-        let pending_turn_queue = reservation.pending_turn_queue;
         let is_ephemeral = reservation.ephemeral;
-        let removed = {
-            let mut queue = pending_turn_queue
-                .lock()
-                .expect("pending turn queue mutex should not be poisoned");
-            let before = queue.len();
-            queue.retain(|item| item.id != params.queued_input_id);
-            queue.len() != before
-        };
+        let removed = session_handle
+            .remove_queued_turn_input(params.queued_input_id)
+            .await
+            .unwrap_or(false);
         if removed
             && !is_ephemeral
             && let Err(error) = self.deps.db.remove_pending_by_id(
@@ -853,7 +824,7 @@ impl ServerRuntime {
                 );
             }
         };
-        let Some(session_handle) = self.session(params.session_id).await else {
+        let Some(_session_handle) = self.session(params.session_id).await else {
             return self.error_response(
                 request_id,
                 ProtocolErrorCode::SessionNotFound,
@@ -892,10 +863,10 @@ impl ServerRuntime {
             );
         }
         let turn_id = active_turn.turn_id;
-        let pending_turn_queue = reservation.pending_turn_queue;
         let is_ephemeral = reservation.ephemeral;
-        let (item, display_input) = {
-            let mut queue = pending_turn_queue
+        let queued = {
+            let mut queue = reservation
+                .pending_turn_queue
                 .lock()
                 .expect("pending turn queue mutex should not be poisoned");
             let Some(index) = queue
@@ -905,7 +876,7 @@ impl ServerRuntime {
                 return self.error_response(
                     request_id,
                     ProtocolErrorCode::InvalidParams,
-                    "queued input does not exist",
+                    "queued input does not exist or cannot be steered",
                 );
             };
             let display_input = match &queue[index].kind {
@@ -915,17 +886,22 @@ impl ServerRuntime {
                     return self.error_response(
                         request_id,
                         ProtocolErrorCode::InvalidParams,
-                        "queued input cannot be steered",
+                        "queued input does not exist or cannot be steered",
                     );
                 }
             };
             let item = queue
                 .remove(index)
                 .expect("queued item index should remain valid");
-            (item, display_input)
+            (display_input, item)
         };
+        let (display_input, item) = queued;
 
-        session_handle.enqueue_btw_input(item.clone()).await;
+        reservation
+            .btw_input_queue
+            .lock()
+            .expect("btw input queue mutex should not be poisoned")
+            .push_back(item.clone());
 
         if !is_ephemeral {
             if let Err(error) = self.deps.db.remove_pending_by_id(

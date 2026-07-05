@@ -38,8 +38,14 @@ impl ServerRuntime {
         let route = self
             .queue_agent_message(params.session_id, &params.target, params.message)
             .await?;
-        self.drain_child_mailbox_into_user_turns(route.to_session_id)
-            .await?;
+        if self
+            .active_turn_id_for_session(route.to_session_id)
+            .await
+            .is_none()
+        {
+            self.drain_child_mailbox_into_user_turns(route.to_session_id)
+                .await?;
+        }
         Ok(devo_protocol::AgentMessageResult { delivered: true })
     }
 
@@ -59,12 +65,7 @@ impl ServerRuntime {
             None => self.wait_agent_cursor(params.session_id, &cursor_key).await,
         };
         let output_buffer = self.output_buffer(params.session_id).await;
-        let cancel = self
-            .active_turn_cancellations
-            .lock()
-            .await
-            .get(&params.session_id)
-            .cloned();
+        let cancel = self.active_turns.cancel_token(params.session_id).await;
         let (events, next_sequence, timed_out) = output_buffer
             .wait_after(
                 effective_after_sequence,

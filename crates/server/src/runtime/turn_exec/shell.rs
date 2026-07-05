@@ -68,11 +68,9 @@ impl ServerRuntime {
             .provider_http
             .clone();
         let turn_cancel_token = self
-            .active_turn_cancellations
-            .lock()
+            .active_turns
+            .cancel_token(session_id)
             .await
-            .get(&session_id)
-            .cloned()
             .unwrap_or_else(CancellationToken::new);
         let tool_execution_start_runtime = Arc::clone(&self);
         let tool_execution_start_session_id = session_id;

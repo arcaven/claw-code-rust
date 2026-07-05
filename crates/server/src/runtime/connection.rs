@@ -170,10 +170,7 @@ impl ServerRuntime {
                 let _ = pending.send(Err("client connection closed".to_string()));
             }
         }
-        self.active_turn_connections
-            .lock()
-            .await
-            .retain(|_, active_connection_id| *active_connection_id != connection_id);
+        self.active_turns.drop_connection_id(connection_id).await;
         self.reference_searches
             .lock()
             .await
@@ -615,11 +612,7 @@ impl ServerRuntime {
             return;
         };
         let session_id = payload.context.session_id;
-        let connection_id = {
-            let active_turn_connections = self.active_turn_connections.lock().await;
-            active_turn_connections.get(&session_id).copied()
-        };
-        let Some(connection_id) = connection_id else {
+        let Some(connection_id) = self.active_turns.active_connection_id(session_id).await else {
             self.broadcast_event(event.clone()).await;
             return;
         };
@@ -689,7 +682,7 @@ impl ServerRuntime {
         let method = event.method_name();
         let session_id = event.session_id();
         let child_parent_by_session = self.child_parent_by_session().await;
-        let active_turn_connections = self.active_turn_connections.lock().await.clone();
+        let active_turn_connections = self.active_turns.connection_map().await;
         let notifications = {
             let mut connections = self.connections.lock().await;
             connections
@@ -1529,10 +1522,9 @@ mod tests {
             .subscribe_connection_to_session(observer_connection_id, session_id, None)
             .await;
         runtime
-            .active_turn_connections
-            .lock()
-            .await
-            .insert(session_id, owner_connection_id);
+            .active_turns
+            .set_connection_id(session_id, owner_connection_id)
+            .await;
 
         runtime
             .broadcast_event(ServerEvent::ItemDelta {
@@ -1588,10 +1580,9 @@ mod tests {
             .subscribe_connection_to_session(watcher_connection_id, session_id, None)
             .await;
         runtime
-            .active_turn_connections
-            .lock()
-            .await
-            .insert(session_id, owner_connection_id);
+            .active_turns
+            .set_connection_id(session_id, owner_connection_id)
+            .await;
 
         runtime
             .broadcast_event(ServerEvent::ItemDelta {

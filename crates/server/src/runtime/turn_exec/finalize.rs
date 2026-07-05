@@ -61,17 +61,7 @@ impl ServerRuntime {
                 snapshot.session_totals.cache_creation_input_tokens;
             session_total_cache_read_tokens = snapshot.session_totals.cache_read_input_tokens;
         }
-        self.active_tasks.lock().await.remove(&session_id);
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .remove(&session_id);
-        self.active_turn_ids.lock().await.remove(&session_id);
-        self.active_turn_metadata.lock().await.remove(&session_id);
-        self.active_turn_connections
-            .lock()
-            .await
-            .remove(&session_id);
+        self.clear_active_turn_interrupt_handles(session_id).await;
         match &result {
             Ok(()) => {
                 self.run_session_hook_for_actor_state(

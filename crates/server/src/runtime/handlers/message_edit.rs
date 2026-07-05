@@ -462,12 +462,6 @@ impl ServerRuntime {
             )
             .await;
 
-        self.active_turn_cancellations
-            .lock()
-            .await
-            .insert(params.session_id, CancellationToken::new());
-        self.register_runtime_active_turn(params.session_id, replacement_turn.clone())
-            .await;
         let runtime = Arc::clone(self);
         let replacement_turn_for_task = replacement_turn.clone();
         let turn_config_for_task = turn_config.clone();
@@ -492,26 +486,28 @@ impl ServerRuntime {
                     updated_at: now.timestamp(),
                 })
         };
-        let task = tokio::spawn(async move {
-            runtime
-                .execute_turn(ExecuteTurnRequest {
-                    session_id,
-                    turn: replacement_turn_for_task,
-                    turn_config: turn_config_for_task,
-                    display_input: display_input_for_task,
-                    input: input_for_task,
-                    input_messages: input_messages_for_task,
-                    collaboration_mode,
-                    input_mode: TurnInputMode::HiddenGoalContinuation {
-                        goal: replacement_goal,
-                    },
-                })
-                .await;
-        });
-        self.active_tasks
-            .lock()
-            .await
-            .insert(params.session_id, task.abort_handle());
+        self.spawn_active_turn_task(
+            params.session_id,
+            replacement_turn.clone(),
+            None,
+            async move {
+                runtime
+                    .execute_turn(ExecuteTurnRequest {
+                        session_id,
+                        turn: replacement_turn_for_task,
+                        turn_config: turn_config_for_task,
+                        display_input: display_input_for_task,
+                        input: input_for_task,
+                        input_messages: input_messages_for_task,
+                        collaboration_mode,
+                        input_mode: TurnInputMode::HiddenGoalContinuation {
+                            goal: replacement_goal,
+                        },
+                    })
+                    .await;
+            },
+        )
+        .await;
         self.broadcast_event(ServerEvent::MessageEditRecorded(
             crate::MessageEditRecordedPayload {
                 session_id: params.session_id,

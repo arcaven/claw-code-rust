@@ -148,6 +148,7 @@ use crate::workspace_changes::ActiveWorkspaceBaseline;
 
 mod acp_fs;
 mod acp_terminal;
+mod active_turn;
 mod agents;
 mod approval;
 mod command_exec;
@@ -182,6 +183,7 @@ mod session_interactive;
 mod skills;
 mod subagent_usage;
 mod turn_exec;
+mod turn_lifecycle;
 mod turn_reservation;
 mod user_input;
 mod workspace_baseline;
@@ -215,21 +217,9 @@ pub struct ServerRuntime {
     sessions: Mutex<HashMap<SessionId, SessionHandle>>,
     /// Interactive approval and user-input waits outside session actors.
     session_interactive: SessionInteractiveLanes,
-    /// Spawn snapshots for in-flight parent turns keyed by session and turn id.
-    active_spawn_snapshots:
-        Mutex<HashMap<SessionId, HashMap<TurnId, Arc<session_actor::SpawnSnapshot>>>>,
-    /// Stream state shared with the turn event task while a session actor turn runs.
-    active_stream_states: Mutex<
-        HashMap<SessionId, Arc<tokio::sync::Mutex<session_actor::state::SessionStreamState>>>,
-    >,
+    /// In-flight turn execution handles keyed by session id.
+    active_turns: active_turn::ActiveTurnRegistry,
     connections: Arc<Mutex<HashMap<u64, ConnectionRuntime>>>,
-    active_tasks: Mutex<HashMap<SessionId, tokio::task::AbortHandle>>,
-    active_turn_cancellations: Mutex<HashMap<SessionId, CancellationToken>>,
-    /// Active turn ids tracked at runtime level so cancel/interrupt can avoid session-actor mailbox round-trips while a turn is blocked in permission wait.
-    active_turn_ids: Mutex<HashMap<SessionId, TurnId>>,
-    /// Full active-turn metadata for reservation snapshots while the session actor is busy in `ExecuteTurn`.
-    active_turn_metadata: Mutex<HashMap<SessionId, TurnMetadata>>,
-    active_turn_connections: Mutex<HashMap<SessionId, u64>>,
     terminal_turn_statuses: Mutex<VecDeque<(TurnId, TerminalTurnSnapshot)>>,
     acp_prompt_waiters: Mutex<HashMap<TurnId, Vec<oneshot::Sender<TerminalTurnSnapshot>>>>,
     active_goal_continuation_turns: Mutex<HashMap<SessionId, TurnId>>,
@@ -344,14 +334,8 @@ impl ServerRuntime {
             goal_durable_store,
             sessions: Mutex::new(HashMap::new()),
             session_interactive: SessionInteractiveLanes::default(),
-            active_spawn_snapshots: Mutex::new(HashMap::new()),
-            active_stream_states: Mutex::new(HashMap::new()),
+            active_turns: active_turn::ActiveTurnRegistry::default(),
             connections: Arc::new(Mutex::new(HashMap::new())),
-            active_tasks: Mutex::new(HashMap::new()),
-            active_turn_cancellations: Mutex::new(HashMap::new()),
-            active_turn_ids: Mutex::new(HashMap::new()),
-            active_turn_metadata: Mutex::new(HashMap::new()),
-            active_turn_connections: Mutex::new(HashMap::new()),
             terminal_turn_statuses: Mutex::new(VecDeque::new()),
             acp_prompt_waiters: Mutex::new(HashMap::new()),
             active_goal_continuation_turns: Mutex::new(HashMap::new()),

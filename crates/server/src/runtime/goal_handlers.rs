@@ -57,12 +57,8 @@ impl ServerRuntime {
                         .await;
                 }
                 self.sync_core_session_goal(session_id, session_goal).await;
-                self.schedule_goal_followup_work(
-                    session_id,
-                    Some(title_input),
-                    should_continue,
-                )
-                .await;
+                self.schedule_goal_followup_work(session_id, Some(title_input), should_continue)
+                    .await;
                 result
             }
             Err(e) => self.error_response(
@@ -559,10 +555,7 @@ impl ServerRuntime {
                 let runtime = Arc::clone(self);
                 tokio::spawn(async move {
                     runtime
-                        .maybe_prepare_title_generation_from_user_input(
-                            session_id,
-                            &title_input,
-                        )
+                        .maybe_prepare_title_generation_from_user_input(session_id, &title_input)
                         .await;
                 });
             } else {
