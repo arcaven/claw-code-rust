@@ -378,18 +378,25 @@ impl ServerRuntime {
         self.capture_turn_workspace_baseline(session_id, turn.turn_id, PathBuf::from(cwd.clone()))
             .await;
         let usage_ledger = self.research_usage_ledger(session_id).await;
-        self.begin_parent_usage_turn(
-            session_id,
-            turn.turn_id,
-            Some(turn_config.model.context_window as u64),
-        )
-        .await;
         // Research runs outside the session actor (unlike execute_turn_in_actor).
         // Register the same TurnInlineState / active_stream path so item persist,
         // usage, and hooks never flood the actor mailbox (capacity 64). Without
         // this, every token/tool item does blocking send().await and can stall
         // client inbound handlers that also need the mailbox.
         self.begin_research_turn_stream(session_id, &turn).await;
+        let usage_context_window = Some(turn_config.model.context_window as u64);
+        if let Some(summary) = self.session_summary_snapshot(session_id).await {
+            self.begin_parent_usage_turn_with_base(
+                session_id,
+                turn.turn_id,
+                crate::runtime::subagent_usage::UsageTotals::from_session_summary(&summary),
+                usage_context_window,
+            )
+            .await;
+        } else {
+            self.begin_parent_usage_turn(session_id, turn.turn_id, usage_context_window)
+                .await;
+        }
         let result = self
             .run_research_pipeline(
                 session_id,

@@ -4,6 +4,7 @@ use tokio::sync::mpsc;
 
 use crate::runtime::ServerRuntime;
 use crate::runtime::session_actor::state::SessionActorState;
+use crate::runtime::subagent_usage::UsageTotals;
 use crate::runtime::turn_exec::{
     ExecuteTurnRequest, FinalizeTurnParams, QUERY_EVENT_CHANNEL_CAPACITY, TurnModelQueryParams,
     spawn_turn_event_stream,
@@ -57,7 +58,12 @@ pub(super) async fn execute_turn_in_actor(
     // updates on the wrong session.
     if usage_parent_session_id.is_none() {
         runtime
-            .begin_parent_usage_turn(session_id, turn.turn_id, usage_context_window)
+            .begin_parent_usage_turn_with_base(
+                session_id,
+                turn.turn_id,
+                UsageTotals::from_session_summary(&state.summary),
+                usage_context_window,
+            )
             .await;
     }
 
