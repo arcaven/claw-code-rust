@@ -172,20 +172,35 @@ impl SubagentUsageState {
         base_session_totals: UsageTotals,
         context_window: Option<u64>,
     ) {
+        let key = ParentTurnKey {
+            session_id,
+            turn_id,
+        };
+        if let Some(turn) = self.parent_turns.get_mut(&key) {
+            if turn.base_session_totals == UsageTotals::default()
+                && turn.parent_turn_usage == UsageTotals::default()
+                && turn.inflight_usage == UsageTotals::default()
+                && base_session_totals != UsageTotals::default()
+            {
+                turn.base_session_totals = base_session_totals;
+            }
+            if context_window.is_some() {
+                turn.context_window = context_window;
+            }
+            return;
+        }
         let base_child_totals = self.child_totals_for_parent_session(session_id);
-        self.parent_turns
-            .entry(ParentTurnKey {
-                session_id,
-                turn_id,
-            })
-            .or_insert(ParentTurnUsage {
+        self.parent_turns.insert(
+            key,
+            ParentTurnUsage {
                 base_session_totals,
                 base_child_totals,
                 parent_turn_usage: UsageTotals::default(),
                 inflight_usage: UsageTotals::default(),
                 latest_query_usage: UsageTotals::default(),
                 context_window,
-            });
+            },
+        );
     }
 
     pub(super) fn register_child_owner(
@@ -409,7 +424,30 @@ impl ServerRuntime {
             .session_summary_snapshot(session_id)
             .await
             .map(|summary| UsageTotals::from_session_summary(&summary))
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    session_id = %session_id,
+                    turn_id = %turn_id,
+                    "starting usage ledger with zero base because session summary snapshot was unavailable"
+                );
+                UsageTotals::default()
+            });
+        self.begin_parent_usage_turn_with_base(
+            session_id,
+            turn_id,
+            base_session_totals,
+            context_window,
+        )
+        .await;
+    }
+
+    pub(super) async fn begin_parent_usage_turn_with_base(
+        &self,
+        session_id: SessionId,
+        turn_id: TurnId,
+        base_session_totals: UsageTotals,
+        context_window: Option<u64>,
+    ) {
         self.subagent_usage.lock().await.begin_parent_turn(
             session_id,
             turn_id,
@@ -656,6 +694,68 @@ mod tests {
             cache_read_input_tokens: 0,
             reasoning_output_tokens: 0,
         }
+    }
+
+    #[test]
+    fn parent_turn_zero_base_can_be_corrected_before_usage_records() {
+        let mut state = SubagentUsageState::default();
+        let parent_session_id = SessionId::new();
+        let parent_turn_id = TurnId::new();
+
+        state.begin_parent_turn(
+            parent_session_id,
+            parent_turn_id,
+            UsageTotals::default(),
+            None,
+        );
+        state.begin_parent_turn(parent_session_id, parent_turn_id, totals(100, 10), None);
+
+        let snapshot = state
+            .record_parent_turn_usage(
+                parent_session_id,
+                parent_turn_id,
+                totals(5, 1),
+                None,
+                UsageUpdateKind::InFlight,
+            )
+            .expect("parent snapshot");
+        assert_eq!(snapshot.session_totals, totals(105, 11));
+    }
+
+    #[test]
+    fn parent_turn_base_is_not_changed_after_usage_records() {
+        let mut state = SubagentUsageState::default();
+        let parent_session_id = SessionId::new();
+        let parent_turn_id = TurnId::new();
+
+        state.begin_parent_turn(
+            parent_session_id,
+            parent_turn_id,
+            UsageTotals::default(),
+            None,
+        );
+        let first_snapshot = state
+            .record_parent_turn_usage(
+                parent_session_id,
+                parent_turn_id,
+                totals(5, 1),
+                None,
+                UsageUpdateKind::InFlight,
+            )
+            .expect("first parent snapshot");
+        assert_eq!(first_snapshot.session_totals, totals(5, 1));
+
+        state.begin_parent_turn(parent_session_id, parent_turn_id, totals(100, 10), None);
+        let second_snapshot = state
+            .record_parent_turn_usage(
+                parent_session_id,
+                parent_turn_id,
+                totals(6, 2),
+                None,
+                UsageUpdateKind::InFlight,
+            )
+            .expect("second parent snapshot");
+        assert_eq!(second_snapshot.session_totals, totals(6, 2));
     }
 
     #[test]
