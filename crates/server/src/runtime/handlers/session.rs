@@ -131,6 +131,7 @@ impl ServerRuntime {
             tool_registry,
             session_approval_cache: crate::execution::ApprovalGrantCache::default(),
             turn_approval_cache: crate::execution::ApprovalGrantCache::default(),
+            session_context_recorded: false,
         };
         self.insert_session_actor(actor_state).await;
         self.subscribe_connection_to_session(connection_id, session_id, None)
@@ -945,6 +946,7 @@ impl ServerRuntime {
             tool_registry: source.tool_registry.clone(),
             session_approval_cache: crate::execution::ApprovalGrantCache::default(),
             turn_approval_cache: crate::execution::ApprovalGrantCache::default(),
+            session_context_recorded: source.session_context_recorded,
         })
     }
 }
