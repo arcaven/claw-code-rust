@@ -173,6 +173,9 @@ impl ServerRuntime {
         state.summary.total_cache_read_tokens = session_total_cache_read_tokens;
         state.summary.prompt_token_estimate = session_prompt_token_estimate;
         if let Some(usage) = &final_turn.usage {
+            // Context length uses latest-query display total, not session
+            // cumulative total_input/output/tokens.
+            state.summary.last_query_usage = Some(usage.clone());
             state.summary.last_query_total_tokens = usage.display_total_tokens();
         }
         state.core.total_input_tokens = session_total_input_tokens;
