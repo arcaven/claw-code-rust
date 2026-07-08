@@ -2693,6 +2693,19 @@ async fn run_worker_inner(
                                     latest_completed_agent_message = None;
                                 }
                             }
+                            "turn/provider_retry_status" => {
+                                if let ServerEvent::TurnProviderRetryStatus(payload) = event {
+                                    let _ = event_tx.send(WorkerEvent::ProviderRetryStatus {
+                                        turn_id: payload.turn_id,
+                                        attempt: payload.attempt,
+                                        backoff_ms: payload.backoff_ms,
+                                        provider: payload.provider,
+                                        model: payload.model,
+                                        phase: payload.phase,
+                                        message: payload.message,
+                                    });
+                                }
+                            }
                             "turn/usage/updated" => {
                                 if let ServerEvent::TurnUsageUpdated(payload) = event {
                                     saw_usage_update_for_turn = true;

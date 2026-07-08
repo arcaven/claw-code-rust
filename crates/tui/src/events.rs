@@ -10,6 +10,7 @@ use devo_protocol::AcpAvailableCommand;
 use devo_protocol::AcpCost;
 use devo_protocol::AcpSessionConfigOption;
 use devo_protocol::ProviderModelBinding;
+use devo_protocol::ProviderRetryPhase;
 use devo_protocol::ProviderVendor;
 use devo_protocol::ProviderWireApi;
 use devo_protocol::ReasoningEffort;
@@ -181,6 +182,16 @@ pub(crate) enum WorkerEvent {
     },
     /// A steer (/btw) was accepted by the server.
     SteerAccepted { turn_id: TurnId },
+    /// Provider retry status for the active turn.
+    ProviderRetryStatus {
+        turn_id: TurnId,
+        attempt: usize,
+        backoff_ms: u64,
+        provider: String,
+        model: String,
+        phase: ProviderRetryPhase,
+        message: String,
+    },
     /// A streamed assistant, reasoning, or research artifact text item started.
     TextItemStarted {
         item_id: ItemId,

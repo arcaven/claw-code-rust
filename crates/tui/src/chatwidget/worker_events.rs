@@ -5,6 +5,7 @@
 
 use std::time::Instant;
 
+use devo_protocol::ProviderRetryPhase;
 use devo_protocol::parse_command::ParsedCommand;
 use devo_protocol::protocol::ExecCommandSource;
 use ratatui::text::Line;
@@ -31,6 +32,11 @@ use super::PendingApprovalRequest;
 use super::SKILLS_TRANSCRIPT_TITLE;
 use super::session_header::is_web_search_title;
 use super::text_stream::ActiveTextItemId;
+
+fn format_retry_status_message(attempt: usize, backoff_ms: u64) -> String {
+    let seconds = (backoff_ms as f64 / 1000.0).max(0.1);
+    format!("Retrying provider request in {seconds:.1}s (attempt {attempt})")
+}
 
 impl ChatWidget {
     fn start_command_execution_cell(
@@ -139,6 +145,40 @@ impl ChatWidget {
                 self.active_proposed_plan = None;
                 self.stream_chunking_policy.reset();
                 self.bottom_pane.set_task_running(true);
+            }
+            WorkerEvent::ProviderRetryStatus {
+                turn_id,
+                attempt,
+                backoff_ms,
+                provider: _,
+                model: _,
+                phase,
+                message,
+            } => {
+                if self.active_turn_id != Some(turn_id) {
+                    return;
+                }
+                match phase {
+                    ProviderRetryPhase::Scheduled => {
+                        let retry_message = if message.trim().is_empty() {
+                            format_retry_status_message(attempt, backoff_ms)
+                        } else {
+                            message
+                        };
+                        self.bottom_pane.ensure_status_indicator();
+                        if let Some(status) = self.bottom_pane.status_widget_mut() {
+                            status.update_inline_message(Some(retry_message.clone()));
+                        }
+                        self.set_status_message(&retry_message);
+                    }
+                    ProviderRetryPhase::Resumed => {
+                        if let Some(status) = self.bottom_pane.status_widget_mut() {
+                            status.update_inline_message(None);
+                        }
+                        self.set_status_message("Retrying provider request");
+                    }
+                }
+                self.frame_requester.schedule_frame();
             }
             WorkerEvent::TextItemStarted {
                 item_id,

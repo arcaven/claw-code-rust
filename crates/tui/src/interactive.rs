@@ -969,6 +969,7 @@ fn handle_worker_event(
         | WorkerEvent::RequestUserInput { .. }
         | WorkerEvent::ApprovalDecision { .. }
         | WorkerEvent::SteerAccepted { .. }
+        | WorkerEvent::ProviderRetryStatus { .. }
         | WorkerEvent::GoalStatusLoaded { .. }
         | WorkerEvent::GoalUpdated { .. }
         | WorkerEvent::GoalReplaceConfirmationRequested { .. }
