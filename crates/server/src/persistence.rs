@@ -28,6 +28,8 @@ use devo_core::ResearchArtifactItem;
 use devo_core::ResearchArtifactType;
 use devo_core::Role;
 use devo_core::RolloutLine;
+use devo_core::SessionContext;
+use devo_core::SessionContextUpdatedLine;
 use devo_core::SessionId;
 use devo_core::SessionMetaLine;
 use devo_core::SessionRecord;
@@ -204,6 +206,40 @@ impl RolloutStore {
                 previous_title,
             }),
         )
+    }
+
+    /// Appends the locked session context once to the durable rollout journal.
+    pub(crate) fn append_session_context_updated(
+        &self,
+        record: &SessionRecord,
+        session_context: SessionContext,
+    ) -> Result<()> {
+        self.append_line(
+            &record.rollout_path,
+            &RolloutLine::SessionContextUpdated(Box::new(SessionContextUpdatedLine {
+                timestamp: Utc::now(),
+                session_id: record.id,
+                session_context,
+                schema_version: 1,
+            })),
+        )
+    }
+
+    /// Appends one turn line, recording session context separately when needed.
+    pub(crate) fn append_turn_deduped(
+        &self,
+        record: &SessionRecord,
+        session_context_recorded: &mut bool,
+        turn: TurnRecord,
+        session_context: Option<SessionContext>,
+    ) -> Result<()> {
+        if let Some(session_context) = session_context
+            && !*session_context_recorded
+        {
+            self.append_session_context_updated(record, session_context)?;
+            *session_context_recorded = true;
+        }
+        self.append_turn(record, turn)
     }
 
     /// Appends one compaction snapshot line to the durable rollout journal.
@@ -594,7 +630,11 @@ struct ReplayState {
     last_input_tokens: usize,
     last_turn_tokens: usize,
     session_context: Option<devo_core::SessionContext>,
+    /// Session context loaded from a dedicated `SessionContextUpdated` rollout line.
+    /// Preserved across rollback because that line is session-scoped, not turn-scoped.
+    recorded_session_context: Option<devo_core::SessionContext>,
     latest_turn_context: Option<devo_core::TurnContext>,
+    session_context_recorded: bool,
     turn_kinds_by_id: HashMap<TurnId, TurnKind>,
     messages: Vec<Message>,
     history_items: Vec<crate::SessionHistoryItem>,
@@ -679,6 +719,7 @@ impl ReplayState {
                 self.turn_kinds_by_id.insert(turn.id, turn.kind.clone());
                 if let Some(session_context) = turn.session_context.clone() {
                     self.session_context = Some(session_context);
+                    self.session_context_recorded = true;
                 }
                 if let Some(turn_context) = turn.turn_context.clone() {
                     self.latest_turn_context = Some(turn_context);
@@ -706,6 +747,20 @@ impl ReplayState {
                 session.title = Some(line.title);
                 session.title_state = line.title_state;
                 session.updated_at = line.timestamp;
+            }
+            RolloutLine::SessionContextUpdated(line) => {
+                let line = *line;
+                if let Some(session) = self.session.as_mut() {
+                    if session.id != line.session_id {
+                        anyhow::bail!(
+                            "session context update session id does not match session header"
+                        );
+                    }
+                    session.updated_at = line.timestamp;
+                }
+                self.recorded_session_context = Some(line.session_context.clone());
+                self.session_context = Some(line.session_context);
+                self.session_context_recorded = true;
             }
             RolloutLine::CompactionSnapshot(line) => {
                 self.latest_compaction_snapshot = Some(*line);
@@ -1006,6 +1061,7 @@ impl ReplayState {
             tool_registry: None,
             session_approval_cache: crate::execution::ApprovalGrantCache::default(),
             turn_approval_cache: crate::execution::ApprovalGrantCache::default(),
+            session_context_recorded: self.session_context_recorded,
         })
     }
 
@@ -1128,15 +1184,31 @@ impl ReplayState {
             .latest_turn_id
             .and_then(|turn_id| self.turn_records_by_id.get(&turn_id).cloned());
         self.latest_turn_metadata = self.latest_turn.as_ref().map(turn_metadata_from_record);
+        // Prefer the dedicated SessionContextUpdated side-channel. Rollback prunes
+        // turn records but must not drop locked session context that was recorded
+        // once for the rollout file.
         self.session_context = self
-            .latest_turn
-            .as_ref()
-            .and_then(|turn| turn.session_context.clone())
+            .recorded_session_context
+            .clone()
+            .or_else(|| {
+                self.latest_turn
+                    .as_ref()
+                    .and_then(|turn| turn.session_context.clone())
+            })
             .or_else(|| {
                 self.session
                     .as_ref()
                     .and_then(|session| session.session_context.clone())
             });
+        self.session_context_recorded = self.recorded_session_context.is_some()
+            || self
+                .latest_turn
+                .as_ref()
+                .is_some_and(|turn| turn.session_context.is_some())
+            || self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.session_context.is_some());
         self.latest_turn_context = None;
         self.loaded_item_count = u64::try_from(retained_item_ids.len()).unwrap_or(u64::MAX);
         self.next_item_seq = self
@@ -1451,6 +1523,7 @@ fn apply_prompt_turn_item(
         TurnItem::UserMessage(TextItem { text }) | TurnItem::SteerInput(TextItem { text }) => {
             messages.push(Message::user(text));
         }
+        TurnItem::AgentMessage(TextItem { text }) if text.trim().is_empty() => {}
         TurnItem::AgentMessage(TextItem { text })
         | TurnItem::Plan(TextItem { text })
         | TurnItem::WebSearch(TextItem { text })
@@ -1794,6 +1867,7 @@ mod tests {
     use devo_core::SessionId;
     use devo_core::SessionMetaLine;
     use devo_core::SessionRecord;
+    use devo_core::SessionRollbackLine;
     use devo_core::SessionTitleState;
     use devo_core::TextItem;
     use devo_core::ToolCallItem;
@@ -2246,6 +2320,57 @@ mod tests {
     }
 
     #[test]
+    fn replay_omits_empty_agent_messages_from_history_and_prompt() {
+        let mut messages = Vec::new();
+        let mut history_items = Vec::new();
+        let mut tool_names_by_id = HashMap::new();
+
+        for item in [
+            TurnItem::UserMessage(TextItem {
+                text: "hello".to_string(),
+            }),
+            TurnItem::AgentMessage(TextItem {
+                text: String::new(),
+            }),
+            TurnItem::AgentMessage(TextItem {
+                text: "  \n\t".to_string(),
+            }),
+            TurnItem::AgentMessage(TextItem {
+                text: "visible answer".to_string(),
+            }),
+        ] {
+            apply_turn_item(
+                &mut messages,
+                &mut history_items,
+                &mut tool_names_by_id,
+                &TurnKind::Regular,
+                item,
+            );
+        }
+
+        assert_eq!(
+            history_items
+                .iter()
+                .map(|item| (item.kind.clone(), item.body.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (crate::SessionHistoryItemKind::User, "hello".to_string()),
+                (
+                    crate::SessionHistoryItemKind::Assistant,
+                    "visible answer".to_string(),
+                ),
+            ]
+        );
+        assert_eq!(
+            messages,
+            vec![
+                Message::user("hello"),
+                Message::assistant_text("visible answer"),
+            ]
+        );
+    }
+
+    #[test]
     fn replay_backfills_tool_result_name_from_prior_tool_call() {
         let mut messages = Vec::new();
         let mut history_items = Vec::new();
@@ -2600,5 +2725,315 @@ mod tests {
 
         assert_eq!(replay.session_context, Some(session_context));
         assert_eq!(replay.latest_turn_context, Some(turn_context));
+        assert!(replay.session_context_recorded);
+    }
+
+    fn sample_session_context(base_instructions: &str) -> SessionContext {
+        SessionContext {
+            base_instructions: base_instructions.into(),
+            available_skills: None,
+            workspace_instructions: Some("workspace".into()),
+            locked_agents_snapshot: None,
+            environment: EnvironmentContext {
+                cwd: PathBuf::from("/tmp/root"),
+                shell: "bash".into(),
+                current_date: "2026-04-27".into(),
+                timezone: "UTC".into(),
+            },
+            language: LanguageContext::default(),
+            persona: Persona::Default,
+            model: Model {
+                slug: "model-a".into(),
+                ..Model::default()
+            },
+            reasoning_effort_selection: None,
+            reasoning_effort: None,
+            system_prompt_mode: devo_core::SystemPromptMode::CodingAgent,
+        }
+    }
+
+    #[test]
+    fn replay_restores_context_from_session_context_updated_line() {
+        let session_id = SessionId::new();
+        let turn_id = TurnId::new();
+        let now = Utc.with_ymd_and_hms(2026, 4, 27, 8, 0, 0).unwrap();
+        let session_context = sample_session_context("base");
+        let turn_context = TurnContext {
+            environment: EnvironmentContext {
+                cwd: PathBuf::from("/tmp/next"),
+                shell: "bash".into(),
+                current_date: "2026-04-28".into(),
+                timezone: "UTC".into(),
+            },
+            persona: Persona::Default,
+            model: Model {
+                slug: "model-b".into(),
+                ..Model::default()
+            },
+            reasoning_effort_selection: Some("enabled".into()),
+            reasoning_effort: None,
+            observed_agents_snapshot: None,
+            collaboration_mode: devo_core::CollaborationMode::Build,
+        };
+        let mut replay = ReplayState::default();
+
+        replay
+            .apply_line(RolloutLine::SessionMeta(Box::new(SessionMetaLine {
+                timestamp: now,
+                session: SessionRecord {
+                    id: session_id,
+                    rollout_path: PathBuf::from("rollout.jsonl"),
+                    created_at: now,
+                    updated_at: now,
+                    last_activity_at: Some(now),
+                    source: "cli".into(),
+                    agent_nickname: None,
+                    agent_role: None,
+                    agent_path: None,
+                    model_provider: "test".into(),
+                    model: Some("model-a".into()),
+                    model_binding_id: None,
+                    reasoning_effort_selection: None,
+                    cwd: PathBuf::from("/tmp/root"),
+                    additional_directories: Vec::new(),
+                    cli_version: "0.1.0".into(),
+                    title: None,
+                    title_state: SessionTitleState::Unset,
+                    sandbox_policy: "workspace-write".into(),
+                    approval_mode: "on-request".into(),
+                    tokens_used: 0,
+                    first_user_message: None,
+                    archived_at: None,
+                    git_sha: None,
+                    git_branch: None,
+                    git_origin_url: None,
+                    parent_session_id: None,
+                    session_context: None,
+                    latest_turn_context: None,
+                    schema_version: 2,
+                },
+            })))
+            .expect("apply session meta");
+        replay
+            .apply_line(RolloutLine::SessionContextUpdated(Box::new(
+                devo_core::SessionContextUpdatedLine {
+                    timestamp: now,
+                    session_id,
+                    session_context: session_context.clone(),
+                    schema_version: 1,
+                },
+            )))
+            .expect("apply session context");
+        replay
+            .apply_line(RolloutLine::Turn(Box::new(TurnLine {
+                timestamp: now,
+                turn: TurnRecord {
+                    id: turn_id,
+                    session_id,
+                    sequence: 1,
+                    started_at: now,
+                    completed_at: Some(now),
+                    status: TurnStatus::Completed,
+                    kind: devo_core::TurnKind::Regular,
+                    model: "model-b".into(),
+                    model_binding_id: None,
+                    reasoning_effort_selection: Some("enabled".into()),
+                    request_model: "model-b".into(),
+                    request_thinking: Some("enabled".into()),
+                    input_token_estimate: None,
+                    usage: None,
+                    stop_reason: None,
+                    failure_reason: None,
+                    session_context: None,
+                    turn_context: Some(turn_context.clone()),
+                    schema_version: 2,
+                },
+            })))
+            .expect("apply turn line");
+
+        assert_eq!(replay.session_context, Some(session_context));
+        assert_eq!(replay.latest_turn_context, Some(turn_context));
+        assert!(replay.session_context_recorded);
+    }
+
+    #[test]
+    fn replay_preserves_session_context_updated_across_rollback() {
+        let session_id = SessionId::new();
+        let turn_id = TurnId::new();
+        let now = Utc.with_ymd_and_hms(2026, 4, 27, 8, 0, 0).unwrap();
+        let session_context = sample_session_context("base");
+        let turn_context = TurnContext {
+            environment: EnvironmentContext {
+                cwd: PathBuf::from("/tmp/next"),
+                shell: "bash".into(),
+                current_date: "2026-04-28".into(),
+                timezone: "UTC".into(),
+            },
+            persona: Persona::Default,
+            model: Model {
+                slug: "model-b".into(),
+                ..Model::default()
+            },
+            reasoning_effort_selection: Some("enabled".into()),
+            reasoning_effort: None,
+            observed_agents_snapshot: None,
+            collaboration_mode: devo_core::CollaborationMode::Build,
+        };
+        let mut replay = ReplayState::default();
+
+        replay
+            .apply_line(RolloutLine::SessionMeta(Box::new(SessionMetaLine {
+                timestamp: now,
+                session: SessionRecord {
+                    id: session_id,
+                    rollout_path: PathBuf::from("rollout.jsonl"),
+                    created_at: now,
+                    updated_at: now,
+                    last_activity_at: Some(now),
+                    source: "cli".into(),
+                    agent_nickname: None,
+                    agent_role: None,
+                    agent_path: None,
+                    model_provider: "test".into(),
+                    model: Some("model-a".into()),
+                    model_binding_id: None,
+                    reasoning_effort_selection: None,
+                    cwd: PathBuf::from("/tmp/root"),
+                    additional_directories: Vec::new(),
+                    cli_version: "0.1.0".into(),
+                    title: None,
+                    title_state: SessionTitleState::Unset,
+                    sandbox_policy: "workspace-write".into(),
+                    approval_mode: "on-request".into(),
+                    tokens_used: 0,
+                    first_user_message: None,
+                    archived_at: None,
+                    git_sha: None,
+                    git_branch: None,
+                    git_origin_url: None,
+                    parent_session_id: None,
+                    session_context: None,
+                    latest_turn_context: None,
+                    schema_version: 2,
+                },
+            })))
+            .expect("apply session meta");
+        replay
+            .apply_line(RolloutLine::SessionContextUpdated(Box::new(
+                devo_core::SessionContextUpdatedLine {
+                    timestamp: now,
+                    session_id,
+                    session_context: session_context.clone(),
+                    schema_version: 1,
+                },
+            )))
+            .expect("apply session context");
+        replay
+            .apply_line(RolloutLine::Turn(Box::new(TurnLine {
+                timestamp: now,
+                turn: TurnRecord {
+                    id: turn_id,
+                    session_id,
+                    sequence: 1,
+                    started_at: now,
+                    completed_at: Some(now),
+                    status: TurnStatus::Completed,
+                    kind: TurnKind::Regular,
+                    model: "model-b".into(),
+                    model_binding_id: None,
+                    reasoning_effort_selection: Some("enabled".into()),
+                    request_model: "model-b".into(),
+                    request_thinking: Some("enabled".into()),
+                    input_token_estimate: None,
+                    usage: None,
+                    stop_reason: None,
+                    failure_reason: None,
+                    session_context: None,
+                    turn_context: Some(turn_context),
+                    schema_version: 2,
+                },
+            })))
+            .expect("apply turn line");
+        replay
+            .apply_line(RolloutLine::SessionRollback(Box::new(
+                SessionRollbackLine {
+                    timestamp: now,
+                    session_id,
+                    retained_turn_ids: Vec::new(),
+                    retained_item_ids: Vec::new(),
+                    latest_turn_id: None,
+                    schema_version: 1,
+                },
+            )))
+            .expect("apply rollback");
+
+        assert_eq!(replay.session_context, Some(session_context));
+        assert!(replay.session_context_recorded);
+        assert!(replay.latest_turn.is_none());
+    }
+
+    #[test]
+    fn append_turn_deduped_writes_session_context_once() {
+        use crate::turn::TurnMetadata;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("temp dir");
+        let data_root = dir.path().to_path_buf();
+        let session_id = SessionId::new();
+        let now = Utc::now();
+        let rollout_store = super::RolloutStore::new(data_root.clone());
+        let record = rollout_store.create_session_record(
+            session_id,
+            now,
+            data_root.clone(),
+            Vec::new(),
+            Some("dedupe test".into()),
+            Some("test-model".into()),
+            None,
+            None,
+            "test-provider".into(),
+            None,
+        );
+        rollout_store
+            .append_session_meta(&record)
+            .expect("append session meta");
+
+        let session_context = sample_session_context("unique-base-instruction-marker");
+        let mut session_context_recorded = false;
+        let turn_metadata = |sequence: u32| TurnMetadata {
+            turn_id: TurnId::new(),
+            session_id,
+            sequence,
+            status: TurnStatus::Completed,
+            kind: TurnKind::Regular,
+            model: "test-model".into(),
+            model_binding_id: None,
+            reasoning_effort_selection: None,
+            reasoning_effort: None,
+            request_model: "test-model".into(),
+            request_thinking: None,
+            started_at: now,
+            completed_at: Some(now),
+            usage: None,
+            stop_reason: None,
+            failure_reason: None,
+        };
+
+        for sequence in 1..=2 {
+            let metadata = turn_metadata(sequence);
+            rollout_store
+                .append_turn_deduped(
+                    &record,
+                    &mut session_context_recorded,
+                    super::build_turn_record(&metadata, None, None),
+                    Some(session_context.clone()),
+                )
+                .expect("append deduped turn");
+        }
+
+        assert!(session_context_recorded);
+        let rollout = std::fs::read_to_string(&record.rollout_path).expect("read rollout");
+        assert_eq!(rollout.matches("unique-base-instruction-marker").count(), 1);
+        assert!(rollout.contains("SessionContextUpdated"));
     }
 }

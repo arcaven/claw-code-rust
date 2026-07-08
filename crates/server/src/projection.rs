@@ -156,6 +156,7 @@ pub(crate) fn history_item_from_turn_item(item: &TurnItem) -> Option<SessionHist
                 text.clone(),
             ))
         }
+        TurnItem::AgentMessage(TextItem { text }) if text.trim().is_empty() => None,
         TurnItem::AgentMessage(TextItem { text })
         | TurnItem::WebSearch(TextItem { text })
         | TurnItem::ImageGeneration(TextItem { text })
@@ -597,6 +598,24 @@ mod tests {
         SessionHistoryMetadata, SessionHistoryResearchArtifactType, SessionHistoryToolIo,
         SessionPlanStepStatus,
     };
+
+    #[test]
+    fn history_projection_omits_empty_agent_message() {
+        let item = TurnItem::AgentMessage(TextItem {
+            text: String::new(),
+        });
+
+        assert_eq!(history_item_from_turn_item(&item), None);
+    }
+
+    #[test]
+    fn history_projection_omits_whitespace_only_agent_message() {
+        let item = TurnItem::AgentMessage(TextItem {
+            text: "  \n\t".to_string(),
+        });
+
+        assert_eq!(history_item_from_turn_item(&item), None);
+    }
 
     #[test]
     fn history_projection_prefers_tool_result_display_content() {
