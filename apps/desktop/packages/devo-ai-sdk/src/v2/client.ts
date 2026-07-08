@@ -343,6 +343,14 @@ function sessionStatusChangedFromOriginalEvent(
 	return typeof sessionId === "string" && typeof status === "string" ? { sessionId, status } : null
 }
 
+function sessionIdFromCompactionPayload(payload: Record<string, unknown>): string | null {
+	const direct = payload.session_id ?? payload.sessionId
+	if (typeof direct === "string" && direct) return direct
+	const session = objectRecord(payload.session)
+	const nested = session?.session_id ?? session?.sessionId
+	return typeof nested === "string" && nested ? nested : null
+}
+
 function sessionCompactionFromOriginalEvent(
 	original: unknown,
 	originalMethod?: string,
@@ -392,8 +400,8 @@ function sessionCompactionFromOriginalEvent(
 	}
 
 	if (!status || !payload) return null
-	const sessionId = payload.session_id ?? payload.sessionId
-	if (typeof sessionId !== "string" || !sessionId) return null
+	const sessionId = sessionIdFromCompactionPayload(payload)
+	if (!sessionId) return null
 	const message = payload.message
 	return {
 		sessionId,
